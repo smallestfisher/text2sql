@@ -53,28 +53,45 @@ common_dimensions:
 
 entities:
   Demand.V:
+    # 业务域。用于意图识别和候选实体筛选，表示这是“需求”类问题。
     domain: demand
+    # 实体说明。告诉系统这个节点代表 Vendor/Customer Demand，即 V 版生产需求。
     description: Vendor/Customer Demand，V版生产需求。
     source:
+      # 数据来源类型。semantic_view 表示先做语义加工，再作为查询对象使用。
       type: semantic_view
+      # 语义视图名称。是系统内部对这层展开结果的逻辑命名。
       name: semantic_demand_v
+      # 底层物理来源表。说明该实体最终来自 v_demand。
       base_tables: ["v_demand"]
       unpivot:
+        # 展开规则说明。解释为什么要把横向宽表转成长表。
         description: >
           v_demand 是横向宽表，MONTH 列为起始月份，后续列为相对偏移月份。
           语义视图需将宽表展开为长表，每行一个月份一个需求量。
+        # 起始月份列。后续所有需求月份都以 MONTH 为基准做偏移。
         base_month_column: MONTH
         column_to_offset:
+          # 起始月份的需求数量，对应偏移 0 个月。
           REQUIREMENT_QTY: 0
+          # 第 2 个月需求数量，对应偏移 1 个月。
           NEXT_REQUIREMENT: 1
+          # 第 3 个月需求数量，对应偏移 2 个月。
           LAST_REQUIREMENT: 2
+          # 第 4 个月需求数量，对应偏移 3 个月。
           MONTH4: 3
+          # 第 5 个月需求数量，对应偏移 4 个月。
           MONTH5: 4
+          # 第 6 个月需求数量，对应偏移 5 个月。
           MONTH6: 5
+          # 第 7 个月需求数量，对应偏移 6 个月。
           MONTH7: 6
         output_columns:
+          # 展开后的需求月份字段。由 MONTH 加偏移量计算得到。
           demand_month: "DATE_ADD(MONTH, INTERVAL offset MONTH)"
+          # 展开后的需求量字段。值来自对应偏移列。
           demand_qty: "对应偏移列的值"
+        # 示例 SQL。说明宽表展开成长表的大致实现方式，供编译器/维护者参考。
         example_sql: >
           SELECT pm_version, fg_code, sbu, customer,
                  DATE_ADD(MONTH, INTERVAL 0 MONTH) AS demand_month,
@@ -86,53 +103,65 @@ entities:
                  NEXT_REQUIREMENT AS demand_qty
           FROM v_demand
           -- ... repeat for each offset column
+    # 业务粒度。表示一条语义记录大致唯一对应 型号+客户+月份+版本。
     grain: fg_code_customer_month_version
+    # 主时间字段。用户说“上月/未来三个月”时默认过滤这个字段。
     time_field: demand_month
+    # 版本字段。用户提到“最新版本/某个版本”时默认映射到这里。
     version_field: pm_version
+    # 识别字段集合。用于表达记录标识、去重和上下文继承。
     id_fields: ["pm_version", "fg_code", "sbu", "customer", "demand_month"]
     metrics:
       demand_qty:
+        # 指标表达式。引用展开后的 demand_qty 字段。
         expr: demand_qty
+        # 默认聚合方式。查询“需求是多少”时默认做 SUM。
         agg: sum
+        # 指标类型。说明该字段可做数值聚合。
         type: number
+        # 指标同义词。把用户自然语言里的“需求/预测需求”等映射到这个指标。
         synonyms: ["需求", "需求量", "V版需求", "预测需求"]
     dimensions:
       fg_code:
+        # 成品型号维度。用于按型号过滤或分组。
         field: fg_code
       sbu:
+        # SBU 维度。用于按事业部过滤或分组。
         field: sbu
       customer:
+        # 客户维度。用于按客户过滤或分组。
         field: customer
       demand_month:
+        # 需求月份维度。既可作为时间过滤字段，也可用于按月分组。
         field: demand_month
       pm_version:
+        # 版本维度。用于按 PM 版本过滤或分组。
         field: pm_version
-      application:
-        field: application
-        via_entity: Product.Attributes
-      common_categories:
-        field: common_categories
-        via_entity: Product.Attributes
     required_slots:
+      # 必填槽位。查询该实体时必须限定时间范围，避免无边界全表查询。
       - time_range
     optional_slots:
+      # 可选过滤槽位。用户提供时可加入查询条件，不提供也能查。
       - version
       - customer
       - sbu
       - fg_code
-      - application
     defaults:
+      # 默认版本。用户未指定版本时，默认取最新版本。
       version: latest
+      # 默认时间粒度。该实体默认按月查询。
       time_grain: month
     unsupported:
+      # 不支持的查询类型。禁止直接整表明细导出。
       - direct_detail_row_dump
     followup_inheritance:
       keep:
+        # 追问时保留的上下文条件。
         - time_range
         - customer
         - sbu
-        - application
       drop_on_entity_change:
+        # 切换到其他实体时应丢弃的上下文条件，避免错误继承。
         - pm_version
 
   Demand.P:
@@ -181,9 +210,6 @@ entities:
         field: demand_month
       pm_version:
         field: pm_version
-      application:
-        field: application
-        via_entity: Product.Attributes
     required_slots:
       - time_range
     optional_slots:
@@ -192,7 +218,6 @@ entities:
       - sbu
       - bu
       - fg_code
-      - application
     defaults:
       version: latest
       time_grain: month
@@ -561,15 +586,11 @@ entities:
         field: CUSTOMER
       fg_code:
         field: FGCODE
-      application:
-        field: application
-        via_entity: Product.Attributes
     required_slots: []
     optional_slots:
       - month
       - customer
       - fg_code
-      - application
     defaults:
       month: latest
       time_grain: month
@@ -609,29 +630,6 @@ entities:
     optional_slots:
       - product_id
       - application
-
-  Product.Mapping:
-    domain: product
-    description: 成品编码与各工厂投入料号映射。
-    source:
-      type: table
-      name: product_mapping
-      base_tables: ["product_mapping"]
-    grain: fg_code
-    id_fields: ["FGCODE"]
-    metrics: {}
-    dimensions:
-      fg_code:
-        field: FGCODE
-      cell_no:
-        field: "Cell No"
-      array_no:
-        field: "Array No"
-      cf_no:
-        field: "CF No"
-    required_slots: []
-    optional_slots:
-      - fg_code
 
 entity_families:
   Demand:

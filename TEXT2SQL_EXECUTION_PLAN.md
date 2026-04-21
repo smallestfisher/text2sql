@@ -43,7 +43,6 @@
 - `Production.Actual`
 - `Sales.Financial`
 - `Product.Attributes`
-- `Product.Mapping`
 
 #### 3.2.2 产出核心配置
 
@@ -63,7 +62,7 @@
 - 用户说“需求”时默认是否允许使用最新版本
 - 用户说“库存”时默认查日库存还是月库存
 - 用户说“计划”时是否必须指定计划类型
-- `FGCODE` 与 `product_ID` 的跨域映射规则
+- `FGCODE` 与 `product_ID` 当前无可靠跨域映射
 - 需求宽表的月份展开口径
 
 #### 3.2.4 输出评测样本初版

@@ -25,7 +25,7 @@
 - 计划：`daily_PLAN`、`weekly_rolling_plan`、`monthly_plan_approved`
 - 生产实绩：`production_actuals`
 - 销售财务：`sales_financial_perf`
-- 产品维度：`product_attributes`、`product_mapping`
+- 产品维度：`product_attributes`
 
 ### 2.2 数据结构特点
 
@@ -118,7 +118,6 @@
 - `Production.Actual`
 - `Sales.Financial`
 - `Product.Attributes`
-- `Product.Mapping`
 
 ### 5.3 语义对象定义内容
 
@@ -164,7 +163,8 @@
 
 - 需求/销售财务优先以 `FGCODE` 为主键
 - 库存/计划/生产优先以 `product_ID` 为主键
-- 跨域联动必须通过 `product_mapping` 或明确映射关系完成
+- 当前 schema 未提供可靠的 `FGCODE -> product_ID` 映射表
+- 因此需求/销售默认不直接联动到 `application` 等产品属性维度
 
 ### 5.5 建议产物
 
@@ -205,19 +205,9 @@
 
 ```yaml
 relations:
-  - left: Demand.V.fg_code
-    right: ProductMapping.fg_code
-    relation_type: bridge
-    cardinality: many_to_one
-
   - left: Inventory.Daily.product_id
     right: Product.Attributes.product_id
     relation_type: direct
-    cardinality: many_to_one
-
-  - left: Sales.Financial.fg_code
-    right: ProductMapping.fg_code
-    relation_type: bridge
     cardinality: many_to_one
 ```
 
@@ -225,7 +215,7 @@ relations:
 
 在部分语义组合下，仅定义关系还不够，还需要模板化约束，例如：
 
-- 需求与产品属性联动时，先按 `FGCODE` 聚合，再映射到产品属性
+- 需求与销售若缺少可靠映射，不应直接联动到产品属性
 - 库存明细与产品属性联动时，可直接按 `product_ID` 关联
 - 多事实表之间原则上不直接 join，优先各自聚合后再按共享维度对齐
 

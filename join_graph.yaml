@@ -10,28 +10,6 @@ policies:
   default_join_type: left
 
 relations:
-  - id: demand_v_to_product_mapping
-    left_entity: Demand.V
-    left_field: fg_code
-    right_entity: Product.Mapping
-    right_field: fg_code
-    relation_type: bridge
-    cardinality: many_to_one
-    join_type: left
-    condition_template: "d.fg_code = pm.FGCODE"
-    notes:
-      - Demand.V uses FGCODE domain.
-
-  - id: demand_p_to_product_mapping
-    left_entity: Demand.P
-    left_field: fg_code
-    right_entity: Product.Mapping
-    right_field: fg_code
-    relation_type: bridge
-    cardinality: many_to_one
-    join_type: left
-    condition_template: "d.fg_code = pm.FGCODE"
-
   - id: inventory_daily_to_product_attributes
     left_entity: Inventory.Daily
     left_field: product_id
@@ -92,43 +70,7 @@ relations:
     join_type: left
     condition_template: "a.product_ID = pa.product_ID"
 
-  - id: sales_financial_to_product_mapping
-    left_entity: Sales.Financial
-    left_field: fg_code
-    right_entity: Product.Mapping
-    right_field: fg_code
-    relation_type: bridge
-    cardinality: many_to_one
-    join_type: left
-    condition_template: "s.FGCODE = pm.FGCODE"
-
 templates:
-  - id: demand_v_with_product_attributes
-    description: >
-      Demand.V must first bridge through Product.Mapping before applying
-      product attribute filters. Do not directly join Demand to Product.Attributes.
-    entities: ["Demand.V", "Product.Mapping", "Product.Attributes"]
-    steps:
-      - join: demand_v_to_product_mapping
-      - note: "Map FGCODE domain first."
-      - join: mapping_to_product_attributes
-    constraints:
-      - aggregate_before_join_if_metric_grain_is_fg_code
-      - forbid_direct_join_demand_to_product_attributes
-
-  - id: demand_p_with_product_attributes
-    description: >
-      Demand.P must first bridge through Product.Mapping before applying
-      product attribute filters. Do not directly join Demand to Product.Attributes.
-    entities: ["Demand.P", "Product.Mapping", "Product.Attributes"]
-    steps:
-      - join: demand_p_to_product_mapping
-      - note: "Map FGCODE domain first."
-      - join: mapping_to_product_attributes
-    constraints:
-      - aggregate_before_join_if_metric_grain_is_fg_code
-      - forbid_direct_join_demand_to_product_attributes
-
   - id: inventory_daily_with_product_attributes
     description: Inventory.Daily can directly join Product.Attributes using product_ID.
     entities: ["Inventory.Daily", "Product.Attributes"]
@@ -164,56 +106,6 @@ templates:
     entities: ["Production.Actual", "Product.Attributes"]
     steps:
       - join: production_actual_to_product_attributes
-
-  - id: sales_with_product_attributes
-    description: >
-      Sales.Financial must bridge via Product.Mapping before applying product
-      attributes or cross-domain product filters.
-    entities: ["Sales.Financial", "Product.Mapping", "Product.Attributes"]
-    steps:
-      - join: sales_financial_to_product_mapping
-      - join: mapping_to_product_attributes
-    constraints:
-      - forbid_direct_join_sales_to_product_attributes
-
-bridges:
-  - id: mapping_to_product_attributes
-    left_entity: Product.Mapping
-    left_field: fg_code
-    right_entity: Product.Attributes
-    right_field: product_id
-    strategy: configurable
-    status: pending_business_confirmation
-    issue: >
-      product_mapping 表的主键为 FGCODE，列包含 Cell No / Array No / CF No。
-      tables.json 中 relationship 声明 FGCODE -> product_attributes.product_ID，
-      但 product_mapping 表本身不包含 product_ID 列。
-      存在两种可能的映射方式，必须由业务方确认：
-    candidate_strategies:
-      - id: direct_fgcode_is_product_id
-        description: >
-          FGCODE 本身即可作为 product_ID 使用（两者是同一编码体系或存在确定性映射）。
-          如果成立，join 条件为 product_mapping.FGCODE = product_attributes.product_ID。
-        condition_template: "pm.FGCODE = pa.product_ID"
-        cardinality: one_to_one_or_many_to_one
-        risk: 如果 FGCODE 和 product_ID 不是同一体系，会导致所有跨域 join 结果为空
-      - id: indirect_via_cell_array_cf
-        description: >
-          FGCODE 通过 Cell No / Array No / CF No 间接关联到 product_attributes.product_ID。
-          例如 product_attributes.product_ID 可能是 Cell No、Array No 或 CF No 中的一个。
-          如果成立，需要确认具体使用哪个字段，且可能是一对多关系。
-        condition_template: "pm.`Cell No` = pa.product_ID OR pm.`Array No` = pa.product_ID OR pm.`CF No` = pa.product_ID"
-        cardinality: one_to_many
-        risk: 一对多展开会导致指标膨胀，必须在 join 前先聚合
-      - id: external_lookup_table
-        description: >
-          如果以上两种方式都不成立，则需要一张额外的 FGCODE->product_ID 映射表，
-          当前 schema 中不存在这张表。
-        action_required: 由数据工程团队提供映射表
-    notes:
-      - tables.json 中多处声明 FGCODE -> product_attributes.product_ID，暗示方案一（direct）可能性最大
-      - 建议在阶段一验收前用实际数据做交叉验证：SELECT COUNT(*) FROM product_mapping pm JOIN product_attributes pa ON pm.FGCODE = pa.product_ID
-      - 此桥接关系是 Demand 和 Sales 实体获取产品属性（application 等）的唯一路径，属于关键路径
 
 cross_fact_rules:
   - id: no_direct_fact_join
