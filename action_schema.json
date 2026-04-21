@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "action_schema.json",
+  "title": "Text2SQL Action Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action", "confidence"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "NEW_QUERY",
+        "PATCH_QUERY",
+        "ANSWER_CLARIFICATION",
+        "CONTINUE_RESULT",
+        "ASK_CLARIFICATION",
+        "NON_DATA_REQUEST",
+        "UNSUPPORTED_REQUEST"
+      ],
+      "description": "ASK_CLARIFICATION 由编译器缺槽位检查驱动：编译器输出 missing_slots，LLM 将其翻译为自然语言补问。LLM 不应在无编译器信号时自行发起 ASK_CLARIFICATION。"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reasoning_summary": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "uses_context": {
+      "type": "boolean",
+      "default": false
+    },
+    "query_draft": {
+      "$ref": "query_draft.schema.json"
+    },
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entity": { "type": "string" },
+        "entity_family": { "type": "string" },
+        "metrics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/metric" }
+        },
+        "dimensions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "filters": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/filterCondition" }
+        },
+        "version": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ]
+        },
+        "sort": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sortItem" }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "drop_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "clarification_answer": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "clarification_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "missing_slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["slot", "reason"],
+            "properties": {
+              "slot": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "question": {
+          "type": "string"
+        }
+      }
+    },
+    "unsupported_reason": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "agg": {
+          "type": "string",
+          "enum": ["sum", "avg", "count", "count_distinct", "max", "min"]
+        }
+      }
+    },
+    "sortItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "direction"],
+      "properties": {
+        "field": { "type": "string" },
+        "direction": {
+          "type": "string",
+          "enum": ["asc", "desc"]
+        }
+      }
+    },
+    "filterCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "eq": {},
+        "in": {
+          "type": "array",
+          "items": {}
+        },
+        "between": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {}
+        },
+        "gte": {},
+        "lte": {},
+        "like": { "type": "string" }
+      }
+    }
+  }
+}

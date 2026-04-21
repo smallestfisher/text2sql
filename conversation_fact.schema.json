@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "conversation_fact.schema.json",
+  "title": "Text2SQL Conversation Fact Schema",
+  "description": "Per-turn fact record for session context reconstruction. Each turn produces one fact, stored for retrieval-based context rebuilding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fact_id", "session_id", "turn_index", "timestamp", "user_input", "action"],
+  "properties": {
+    "fact_id": {
+      "type": "string",
+      "description": "Unique identifier for this fact record"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Session this fact belongs to"
+    },
+    "turn_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based turn number within the session"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "user_input": {
+      "type": "string",
+      "description": "Original user input text"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "NEW_QUERY",
+        "PATCH_QUERY",
+        "ANSWER_CLARIFICATION",
+        "CONTINUE_RESULT",
+        "ASK_CLARIFICATION",
+        "NON_DATA_REQUEST",
+        "UNSUPPORTED_REQUEST"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "query_draft": {
+      "$ref": "query_draft.schema.json",
+      "description": "LLM output query draft for this turn, null if non-query action"
+    },
+    "query_plan": {
+      "$ref": "query_plan.schema.json",
+      "description": "Compiled query plan, null if compilation did not succeed"
+    },
+    "slot_check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "missing_required", "ambiguous"]
+        },
+        "missing_slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["slot", "reason"],
+            "properties": {
+              "slot": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "clarification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "Clarification question presented to user"
+        },
+        "answer": {
+          "type": "string",
+          "description": "User's answer to the clarification question"
+        }
+      }
+    },
+    "defaults_applied": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "source"],
+        "properties": {
+          "value": {},
+          "source": {
+            "type": "string",
+            "enum": ["user_explicit", "clarification_confirmed", "system_default", "planner_inferred", "context_inherited"]
+          }
+        }
+      },
+      "description": "Map of field name to applied default value and its source"
+    },
+    "sql_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sql_hash": {
+          "type": "string",
+          "description": "Hash of the executed SQL for dedup and audit"
+        },
+        "tables_used": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "row_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_hit": {
+          "type": "boolean"
+        }
+      }
+    },
+    "result_summary": {
+      "type": "string",
+      "description": "Brief natural-language summary of the result for retrieval context"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "clarification_needed", "unsupported", "compilation_error", "execution_error", "non_data"],
+      "description": "Final outcome of this turn"
+    },
+    "failure_reason": {
+      "type": "string",
+      "description": "Error or rejection reason if outcome is not success"
+    },
+    "context_inherited_from": {
+      "type": "string",
+      "description": "fact_id of the previous turn whose context was inherited, null if new query"
+    },
+    "patched_fields": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of field names that were modified in a PATCH_QUERY action"
+    }
+  }
+}

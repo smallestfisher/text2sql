@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "query_draft.schema.json",
+  "title": "Text2SQL Query Draft Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["entity"],
+  "properties": {
+    "entity": {
+      "type": "string",
+      "description": "Semantic entity name, for example Demand.V or Inventory.Daily"
+    },
+    "entity_family": {
+      "type": "string",
+      "description": "Optional family name before final disambiguation, for example Demand or Plan"
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/metric"
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "filters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/filterCondition"
+      }
+    },
+    "time_range": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["absolute", "relative", "latest"]
+            },
+            "start": { "type": "string" },
+            "end": { "type": "string" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "time_grain": {
+      "type": "string",
+      "enum": ["day", "week", "month"],
+      "description": "Time aggregation granularity"
+    },
+    "group_by_grain": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["customer", "product", "factory", "fg_code", "sbu", "bu", "application", "grade"]
+      },
+      "description": "Additional non-time dimensions to group by beyond what dimensions specifies"
+    },
+    "sort": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sortItem"
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "agg": {
+          "type": "string",
+          "enum": ["sum", "avg", "count", "count_distinct", "max", "min"]
+        }
+      }
+    },
+    "sortItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "direction"],
+      "properties": {
+        "field": { "type": "string" },
+        "direction": {
+          "type": "string",
+          "enum": ["asc", "desc"]
+        }
+      }
+    },
+    "filterCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "eq": {},
+        "in": {
+          "type": "array",
+          "items": {}
+        },
+        "between": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {}
+        },
+        "gte": {},
+        "lte": {},
+        "like": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
