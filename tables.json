@@ -19,7 +19,9 @@
     "MAIN_KEY": "PM_VERSION,FGCODE,SBU_DESC,CUSTOMER",
     "month_col": "MONTH",
     "version_col": "PM_VERSION",
-    "relationships": {}
+    "relationships": {
+      "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
+    }
   },
   "p_demand": {
     "description": "P版生产需求表(Production Demand)，对应工厂端的需求产出数量。时间粒度为月、每周一版。横向表。",
@@ -42,7 +44,9 @@
     "MAIN_KEY": "PM_VERSION,FGCODE,SBU_DESC,BU_DESC,CUSTOMER",
     "month_col": "MONTH",
     "version_col": "PM_VERSION",
-    "relationships": {}
+    "relationships": {
+      "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
+    }
   },
   "daily_inventory": {
     "description": "每日库存快照表，记录各仓库各产品的可用库存、Hold库存。时间粒度为日。",
@@ -72,12 +76,12 @@
       "PLAN_date (排产日期)",
       "factory_code (工厂代码)",
       "product_ID (产品编码)",
-      "target_qty (计划产出量)"
+      "target_qty (计划投入量)"
     ],
     "MAIN_KEY": "PLAN_date,factory_code,product_ID",
     "date_col": "PLAN_date",
     "relationships": {
-      "product_ID": "product_attributes.product_ID"
+      "product_ID": "product_attributes.product_ID, product_mapping.FGCODE"
     }
   },
   "monthly_plan_approved": {
@@ -149,6 +153,20 @@
     ],
     "MAIN_KEY": "product_ID"
   },
+  "product_mapping": {
+    "description": "产品生产关系映射表，记录产品与玻璃基板尺寸、产品转换关系。",
+    "columns": [
+      "id",
+      "FGCODE (成品型号)",
+      "Cell No (Cell工厂投入料号)",
+      "Array No (Array工厂投入料号)",
+      "CF No (CF工厂投入料号)"
+    ],
+    "MAIN_KEY": "FGCODE",
+    "relationships": {
+      "FGCODE": "product_attributes.product_ID"
+    }
+  },
   "production_actuals": {
     "description": "生产实绩表，记录产线实际产出、投入、报废。时间粒度为日。",
     "columns": [
@@ -164,7 +182,7 @@
     "MAIN_KEY": "work_date,FACTORY,product_ID,act_type",
     "date_col": "work_date",
     "relationships": {
-      "product_ID": "product_attributes.product_ID"
+      "product_ID": "product_attributes.product_ID, product_mapping.FGCODE"
     }
   },
   "sales_financial_perf": {
@@ -181,7 +199,9 @@
     ],
     "MAIN_KEY": "report_month,SBU_DESC,BU_DESC,CUSTOMER,FGCODE",
     "month_col": "report_month",
-    "relationships": {}
+    "relationships": {
+      "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
+    }
   },
   "weekly_rolling_plan": {
     "description": "周滚动计划表，介于月计划与日排产之间。时间粒度为日、每周一版。",
@@ -201,3 +221,4 @@
     }
   }
 }
+

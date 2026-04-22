@@ -1,0 +1,11 @@
+说明：
+1. p表和v表通过fgcode和product_mapping中进行关联，mapping中的Cell、Array、CF分别是不同阶段的product_ID
+并且当存在关联关系时通常与sales_financial_perf表进行关联
+
+2. daily_inventory表，通常是通过型号去查询库存数量
+
+3. daily_PLAN表，通常是做投入量的查询，并且当存在关联关系时通常与production_actuals表，进行计划和实际产出的对比
+
+4. monthly_plan_approved表，实际投入量查询，并且当存在关联关系时通常与production_actuals，进行实际投产和产出对比
+
+5. oms_inventory表，查询库存，当存在关联关系时通常与product_attributes关联
