@@ -11,11 +11,13 @@ class PolicyDecision:
         self,
         allow_execute: bool,
         allow_view_sql: bool,
+        allow_download_results: bool,
         filters: list[FilterItem] | None = None,
         reasons: list[str] | None = None,
     ) -> None:
         self.allow_execute = allow_execute
         self.allow_view_sql = allow_view_sql
+        self.allow_download_results = allow_download_results
         self.filters = filters or []
         self.reasons = reasons or []
 
@@ -30,7 +32,7 @@ class PolicyEngine:
         query_plan: QueryPlan | None = None,
     ) -> PolicyDecision:
         if user_context is None:
-            return PolicyDecision(allow_execute=True, allow_view_sql=True)
+            return PolicyDecision(allow_execute=True, allow_view_sql=True, allow_download_results=True)
 
         filters: list[FilterItem] = []
         for scope_name, fallback_field in self._scope_definitions().items():
@@ -46,10 +48,13 @@ class PolicyEngine:
             reasons.append("execution is disabled by policy")
         if not user_context.can_view_sql:
             reasons.append("sql visibility is disabled by policy")
+        if not user_context.can_download_results:
+            reasons.append("result download is disabled by policy")
 
         return PolicyDecision(
             allow_execute=user_context.can_execute_sql,
             allow_view_sql=user_context.can_view_sql,
+            allow_download_results=user_context.can_download_results,
             filters=filters,
             reasons=reasons,
         )

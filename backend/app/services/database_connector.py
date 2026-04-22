@@ -144,13 +144,33 @@ class DatabaseConnector:
 
     def test_connection(self) -> dict:
         if not self.connected:
-            return {"connected": False, "error": "database connector is not configured"}
+            return {
+                "connected": False,
+                "error": "database connector is not configured",
+                "database_url_configured": False,
+                "timeout_seconds": self.timeout_seconds,
+                "max_result_rows": self.max_result_rows,
+                "slow_query_threshold_ms": self.slow_query_threshold_ms,
+            }
         try:
             with self.engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
-            return {"connected": True}
+            return {
+                "connected": True,
+                "database_url_configured": True,
+                "timeout_seconds": self.timeout_seconds,
+                "max_result_rows": self.max_result_rows,
+                "slow_query_threshold_ms": self.slow_query_threshold_ms,
+            }
         except SQLAlchemyError as exc:
-            return {"connected": False, "error": str(exc)}
+            return {
+                "connected": False,
+                "error": str(exc),
+                "database_url_configured": True,
+                "timeout_seconds": self.timeout_seconds,
+                "max_result_rows": self.max_result_rows,
+                "slow_query_threshold_ms": self.slow_query_threshold_ms,
+            }
 
     def execute_script(self, sql_script: str) -> dict:
         if not self.connected:

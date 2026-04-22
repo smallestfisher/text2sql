@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .api import ChatResponse
 from .auth import UserContext
 
 
@@ -66,3 +68,21 @@ class EvaluationSummary(BaseModel):
     by_domain: list[EvaluationDimensionSummary] = Field(default_factory=list)
     by_question_type: list[EvaluationDimensionSummary] = Field(default_factory=list)
     by_answer_status: list[EvaluationDimensionSummary] = Field(default_factory=list)
+
+
+class EvaluationReplayRequest(BaseModel):
+    user_id: str | None = None
+    reuse_original_user: bool = True
+    include_prior_context: bool = True
+
+
+class EvaluationReplayResult(BaseModel):
+    source_type: Literal["evaluation_case", "runtime_query_log"]
+    source_id: str
+    question: str
+    session_questions: list[str] = Field(default_factory=list)
+    replay_user: UserContext | None = None
+    original_trace_id: str | None = None
+    original_session_id: str | None = None
+    original_user_id: str | None = None
+    response: ChatResponse

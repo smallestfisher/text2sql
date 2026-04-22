@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   can_view_sql BOOLEAN NOT NULL,
   can_execute_sql BOOLEAN NOT NULL,
+  can_download_results BOOLEAN NOT NULL,
   is_active BOOLEAN NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL

@@ -73,6 +73,7 @@ ExecutionStatus = Literal[
     "permission_denied",
     "sql_missing",
     "not_configured",
+    "blocked",
 ]
 
 

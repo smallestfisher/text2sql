@@ -17,7 +17,7 @@ class DbAuthRepository:
     def list_users(self) -> list[AuthUserRecord]:
         rows = self.database_connector.fetch_all(
             """
-            SELECT user_id, username, password_hash, can_view_sql, can_execute_sql, is_active, created_at, updated_at
+            SELECT user_id, username, password_hash, can_view_sql, can_execute_sql, can_download_results, is_active, created_at, updated_at
             FROM users
             ORDER BY username
             """
@@ -59,7 +59,7 @@ class DbAuthRepository:
     def get_by_user_id(self, user_id: str) -> AuthUserRecord | None:
         row = self.database_connector.fetch_one(
             """
-            SELECT user_id, username, password_hash, can_view_sql, can_execute_sql, is_active, created_at, updated_at
+            SELECT user_id, username, password_hash, can_view_sql, can_execute_sql, can_download_results, is_active, created_at, updated_at
             FROM users
             WHERE user_id = :user_id
             """,
@@ -70,7 +70,7 @@ class DbAuthRepository:
     def get_by_username(self, username: str) -> AuthUserRecord | None:
         row = self.database_connector.fetch_one(
             """
-            SELECT user_id, username, password_hash, can_view_sql, can_execute_sql, is_active, created_at, updated_at
+            SELECT user_id, username, password_hash, can_view_sql, can_execute_sql, can_download_results, is_active, created_at, updated_at
             FROM users
             WHERE username = :username
             """,
@@ -101,10 +101,10 @@ class DbAuthRepository:
                     """
                     INSERT INTO users (
                         user_id, username, password_hash, can_view_sql, can_execute_sql,
-                        is_active, created_at, updated_at
+                        can_download_results, is_active, created_at, updated_at
                     ) VALUES (
                         :user_id, :username, :password_hash, :can_view_sql, :can_execute_sql,
-                        :is_active, :created_at, :updated_at
+                        :can_download_results, :is_active, :created_at, :updated_at
                     )
                     """
                 ),
@@ -114,6 +114,7 @@ class DbAuthRepository:
                     "password_hash": user.password_hash,
                     "can_view_sql": user.can_view_sql,
                     "can_execute_sql": user.can_execute_sql,
+                    "can_download_results": user.can_download_results,
                     "is_active": user.is_active,
                     "created_at": user.created_at,
                     "updated_at": user.updated_at,
@@ -196,6 +197,32 @@ class DbAuthRepository:
 
         return user
 
+    def delete_user(self, user_id: str) -> bool:
+        with self.database_connector.begin() as connection:
+            existing = connection.execute(
+                text("SELECT user_id FROM users WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            ).mappings().first()
+            if existing is None:
+                return False
+            connection.execute(
+                text("DELETE FROM user_roles WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text("DELETE FROM data_permissions WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text("DELETE FROM field_visibility_policies WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text("DELETE FROM users WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+        return True
+
     def has_users(self) -> bool:
         row = self.database_connector.fetch_one("SELECT COUNT(*) AS total FROM users")
         return bool(row and row["total"])
@@ -238,6 +265,7 @@ class DbAuthRepository:
             field_visibility=self._build_field_visibility(field_visibility_rows),
             can_view_sql=bool(row["can_view_sql"]),
             can_execute_sql=bool(row["can_execute_sql"]),
+            can_download_results=bool(row.get("can_download_results", True)),
             is_active=bool(row["is_active"]),
             created_at=as_datetime(row["created_at"]),
             updated_at=as_datetime(row["updated_at"]),

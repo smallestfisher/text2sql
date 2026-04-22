@@ -45,6 +45,9 @@ class PermissionService:
     def can_view_sql(self, user_context: UserContext | None) -> bool:
         return self.policy_engine.evaluate(user_context).allow_view_sql
 
+    def can_download_results(self, user_context: UserContext | None) -> bool:
+        return self.policy_engine.evaluate(user_context).allow_download_results
+
     def required_filter_fields(
         self,
         query_plan: QueryPlan,

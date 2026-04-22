@@ -10,6 +10,7 @@ import uuid
 
 from backend.app.core.exceptions import PermissionDeniedError
 from backend.app.models.auth import (
+    AdminPasswordResetRequest,
     AuthUserRecord,
     BootstrapAdminRequest,
     DataScopeUpdateRequest,
@@ -62,6 +63,7 @@ class AuthService:
                 roles=["admin"],
                 can_view_sql=True,
                 can_execute_sql=True,
+                can_download_results=True,
                 is_active=True,
             ),
             existing=None,
@@ -118,6 +120,12 @@ class AuthService:
 
     def upsert_user(self, user_id: str, request: UserUpsertRequest) -> UserContext:
         existing = self.repository.get_by_user_id(user_id)
+        if existing is not None and "admin" in existing.roles:
+            self._ensure_not_last_active_admin(
+                existing.user_id,
+                replacing_roles=request.roles,
+                replacing_active=request.is_active,
+            )
         record = self._build_user_record(
             user_id=user_id,
             request=request,
@@ -125,6 +133,30 @@ class AuthService:
         )
         self.repository.upsert(record)
         return self._to_user_context(record)
+
+    def admin_reset_password(self, user_id: str, request: AdminPasswordResetRequest) -> None:
+        existing = self.repository.get_by_user_id(user_id)
+        if existing is None:
+            raise KeyError(user_id)
+        updated = existing.model_copy(
+            update={
+                "password_hash": self._hash_password(request.new_password),
+                "updated_at": datetime.utcnow(),
+            }
+        )
+        self.repository.upsert(updated)
+
+    def delete_user(self, actor: UserContext, user_id: str) -> None:
+        if actor.user_id == user_id:
+            raise PermissionDeniedError("cannot delete current user")
+        existing = self.repository.get_by_user_id(user_id)
+        if existing is None:
+            raise KeyError(user_id)
+        if "admin" in existing.roles:
+            self._ensure_not_last_active_admin(existing.user_id)
+        deleted = self.repository.delete_user(user_id)
+        if not deleted:
+            raise KeyError(user_id)
 
     def update_data_scope(self, user_id: str, request: DataScopeUpdateRequest) -> UserContext:
         existing = self.repository.get_by_user_id(user_id)
@@ -191,6 +223,7 @@ class AuthService:
             field_visibility=self._normalize_field_visibility(request.field_visibility),
             can_view_sql=request.can_view_sql,
             can_execute_sql=request.can_execute_sql,
+            can_download_results=request.can_download_results,
             is_active=request.is_active,
             created_at=created_at,
             updated_at=datetime.utcnow(),
@@ -205,6 +238,8 @@ class AuthService:
             field_visibility=user.field_visibility,
             can_view_sql=user.can_view_sql,
             can_execute_sql=user.can_execute_sql,
+            can_download_results=user.can_download_results,
+            is_active=user.is_active,
         )
 
     def _normalize_field_visibility(
@@ -220,6 +255,24 @@ class AuthService:
                 mode=item.mode,
             )
         return [deduplicated[key] for key in sorted(deduplicated)]
+
+    def _ensure_not_last_active_admin(
+        self,
+        target_user_id: str,
+        replacing_roles: list[str] | None = None,
+        replacing_active: bool | None = None,
+    ) -> None:
+        users = self.repository.list_users()
+        active_admins = [item for item in users if item.is_active and "admin" in item.roles]
+        if len(active_admins) != 1:
+            return
+        last_admin = active_admins[0]
+        if last_admin.user_id != target_user_id:
+            return
+        next_roles = replacing_roles if replacing_roles is not None else last_admin.roles
+        next_active = replacing_active if replacing_active is not None else last_admin.is_active
+        if not next_active or "admin" not in next_roles:
+            raise PermissionDeniedError("cannot disable or remove the last active admin")
 
     def _hash_password(self, password: str) -> str:
         salt = secrets.token_hex(16)

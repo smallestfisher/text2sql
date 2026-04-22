@@ -85,6 +85,23 @@ def update_session_status(
     return SessionCreateResponse(session=updated)
 
 
+@router.delete("/sessions/{session_id}")
+def delete_session(
+    session_id: str,
+    http_request: Request,
+    container: AppContainer = Depends(get_container),
+) -> dict:
+    session = container.session_service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    container.session_service.ensure_access(
+        session,
+        resolve_request_user_context(http_request, container),
+    )
+    container.session_service.delete_session(session_id)
+    return {"deleted": True}
+
+
 @router.get("/history/{session_id}", response_model=SessionHistoryResponse)
 def get_history(
     session_id: str,

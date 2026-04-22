@@ -27,6 +27,8 @@ class SqlInspection:
     joins: list[JoinInspection] = field(default_factory=list)
     functions: list[str] = field(default_factory=list)
     referenced_fields: list[str] = field(default_factory=list)
+    group_by_fields: list[str] = field(default_factory=list)
+    order_by_fields: list[str] = field(default_factory=list)
     has_select: bool = False
     has_where: bool = False
     where_clause: str = ""
@@ -141,6 +143,8 @@ class SqlAstValidator:
             joins=self._extract_joins(normalized),
             functions=functions,
             referenced_fields=self._extract_referenced_fields(normalized, sources, functions),
+            group_by_fields=self._extract_group_by_fields(normalized),
+            order_by_fields=self._extract_order_by_fields(normalized),
             has_select=re.search(r"\bSELECT\b", normalized, re.IGNORECASE) is not None,
             has_where=bool(where_clause),
             where_clause=where_clause,
@@ -201,6 +205,8 @@ class SqlAstValidator:
             joins=self._extract_sqlglot_joins(root),
             functions=functions,
             referenced_fields=referenced_fields,
+            group_by_fields=self._extract_sqlglot_group_by_fields(root),
+            order_by_fields=self._extract_sqlglot_order_by_fields(root),
             has_select=root.find(exp.Select) is not None or isinstance(root, exp.Select),
             has_where=bool(where_clause),
             where_clause=where_clause,
@@ -238,6 +244,37 @@ class SqlAstValidator:
                 )
             )
         return joins
+
+    def _extract_group_by_fields(self, sql: str) -> list[str]:
+        match = re.search(
+            r"\bGROUP\s+BY\b(.*?)(?:\bORDER\s+BY\b|\bLIMIT\b|\bHAVING\b|$)",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        return self._extract_fields_from_clause(match.group(1))
+
+    def _extract_order_by_fields(self, sql: str) -> list[str]:
+        match = re.search(
+            r"\bORDER\s+BY\b(.*?)(?:\bLIMIT\b|$)",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        return self._extract_fields_from_clause(match.group(1))
+
+    def _extract_fields_from_clause(self, clause: str) -> list[str]:
+        fields = re.findall(r"\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\b", clause)
+        ignored = set(self.SQL_KEYWORDS)
+        result: list[str] = []
+        for field in fields:
+            if field.upper() in ignored:
+                continue
+            if field not in result:
+                result.append(field)
+        return result
 
     def _extract_referenced_fields(
         self,
@@ -286,6 +323,26 @@ class SqlAstValidator:
                 )
             )
         return joins
+
+    def _extract_sqlglot_group_by_fields(self, root: Any) -> list[str]:
+        group = root.args.get("group") if hasattr(root, "args") else None
+        if group is None:
+            return []
+        return self._unique_strings([
+            item.name
+            for item in group.find_all(exp.Column)
+            if getattr(item, "name", None)
+        ])
+
+    def _extract_sqlglot_order_by_fields(self, root: Any) -> list[str]:
+        order = root.args.get("order") if hasattr(root, "args") else None
+        if order is None:
+            return []
+        return self._unique_strings([
+            item.name
+            for item in order.find_all(exp.Column)
+            if getattr(item, "name", None)
+        ])
 
     def _extract_limit_value(self, limit_node: Any) -> int | None:
         if limit_node is None:

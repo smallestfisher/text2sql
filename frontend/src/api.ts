@@ -1,26 +1,25 @@
 import type {
   BootstrapStatus,
   ChatResponse,
-  FeedbackCollectionResponse,
-  FeedbackRecord,
-  FeedbackSummary,
+  EvaluationReplayRequest,
+  EvaluationReplayResult,
+  EvaluationSummary,
   LoginResponse,
   MetadataOverview,
-  QueryLogListParams,
   RoleRecord,
   RuntimeQueryLogCollectionResponse,
-  RuntimeRetrievalLogRecord,
+  RuntimeSessionCollectionResponse,
   RuntimeSqlAuditRecord,
   RuntimeStatus,
+  SemanticSummary,
   SessionCollectionResponse,
   SessionCreateResponse,
   SessionHistoryResponse,
-  SessionSnapshotRecord,
   SessionStateResponse,
   TraceRecord,
   UserContext,
   UserUpsertPayload,
-  EvaluationSummary,
+  FeedbackSummary,
 } from "./types";
 
 type RequestOptions = {
@@ -29,12 +28,9 @@ type RequestOptions = {
   body?: unknown;
 };
 
-const jsonHeaders = {
-  "Content-Type": "application/json",
-};
-
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers = new Headers(jsonHeaders);
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
   if (options.token) {
     headers.set("Authorization", `Bearer ${options.token}`);
   }
@@ -51,8 +47,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       const payload = (await response.json()) as { detail?: unknown };
       if (typeof payload.detail === "string") {
         detail = payload.detail;
-      } else if (Array.isArray(payload.detail)) {
-        detail = payload.detail.map((item) => JSON.stringify(item)).join("; ");
       }
     } catch {
       detail = response.statusText;
@@ -60,14 +54,41 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new Error(detail);
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
   return (await response.json()) as T;
 }
 
+
+async function requestText(path: string, options: RequestOptions = {}): Promise<string> {
+  const headers = new Headers();
+  if (options.token) {
+    headers.set("Authorization", `Bearer ${options.token}`);
+  }
+
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers,
+  });
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        detail = payload.detail;
+      }
+    } catch {
+      detail = response.statusText;
+    }
+    throw new Error(detail);
+  }
+
+  return await response.text();
+}
+
 export const api = {
+  semanticSummary(): Promise<SemanticSummary> {
+    return request("/api/semantic/summary");
+  },
   bootstrapStatus(): Promise<BootstrapStatus> {
     return request("/api/auth/bootstrap-status");
   },
@@ -86,16 +107,6 @@ export const api = {
   me(token: string): Promise<UserContext> {
     return request("/api/auth/me", { token });
   },
-  changePassword(token: string, currentPassword: string, newPassword: string): Promise<{ updated: boolean }> {
-    return request("/api/auth/change-password", {
-      method: "POST",
-      token,
-      body: {
-        current_password: currentPassword,
-        new_password: newPassword,
-      },
-    });
-  },
   createSession(token: string, title?: string): Promise<SessionCreateResponse> {
     return request("/api/chat/sessions", {
       method: "POST",
@@ -106,11 +117,10 @@ export const api = {
   listSessions(token: string): Promise<SessionCollectionResponse> {
     return request("/api/chat/sessions", { token });
   },
-  updateSessionStatus(token: string, sessionId: string, status: "active" | "archived"): Promise<SessionCreateResponse> {
-    return request(`/api/chat/sessions/${sessionId}/status`, {
-      method: "PUT",
+  deleteSession(token: string, sessionId: string): Promise<{ deleted: boolean }> {
+    return request(`/api/chat/sessions/${sessionId}`, {
+      method: "DELETE",
       token,
-      body: { status },
     });
   },
   getSessionHistory(token: string, sessionId: string): Promise<SessionHistoryResponse> {
@@ -119,8 +129,17 @@ export const api = {
   getSessionState(token: string, sessionId: string): Promise<SessionStateResponse> {
     return request(`/api/chat/state/${sessionId}`, { token });
   },
-  getSessionSnapshots(token: string, sessionId: string): Promise<SessionSnapshotRecord[]> {
-    return request(`/api/chat/snapshots/${sessionId}`, { token });
+  listQueryLogs(token: string, sessionId: string): Promise<RuntimeQueryLogCollectionResponse> {
+    return request(`/api/chat/query-logs?session_id=${encodeURIComponent(sessionId)}&limit=5`, { token });
+  },
+  getTrace(token: string, traceId: string): Promise<TraceRecord> {
+    return request(`/api/chat/traces/${traceId}`, { token });
+  },
+  getTraceSqlAudit(token: string, traceId: string): Promise<RuntimeSqlAuditRecord> {
+    return request(`/api/chat/traces/${traceId}/sql-audit`, { token });
+  },
+  downloadTraceResult(token: string, traceId: string): Promise<string> {
+    return requestText(`/api/chat/traces/${traceId}/export`, { token });
   },
   chatQuery(token: string, question: string, sessionId?: string): Promise<ChatResponse> {
     return request("/api/chat/query", {
@@ -132,53 +151,11 @@ export const api = {
       },
     });
   },
-  submitFeedback(
-    token: string,
-    payload: {
-      sessionId?: string;
-      traceId?: string;
-      feedbackType: "correct" | "incorrect" | "clarification" | "other";
-      comment?: string;
-    },
-  ): Promise<FeedbackRecord> {
-    return request("/api/chat/feedback", {
-      method: "POST",
-      token,
-      body: {
-        session_id: payload.sessionId,
-        trace_id: payload.traceId,
-        feedback_type: payload.feedbackType,
-        comment: payload.comment,
-      },
-    });
-  },
-  listMyFeedbacks(token: string): Promise<FeedbackCollectionResponse> {
-    return request("/api/chat/feedbacks", { token });
-  },
-  summarizeMyFeedbacks(token: string): Promise<FeedbackSummary> {
-    return request("/api/chat/feedbacks/summary", { token });
-  },
-  listMyQueryLogs(token: string, params: QueryLogListParams = {}): Promise<RuntimeQueryLogCollectionResponse> {
-    const search = new URLSearchParams();
-    if (params.sessionId) {
-      search.set("session_id", params.sessionId);
-    }
-    if (params.limit) {
-      search.set("limit", String(params.limit));
-    }
-    return request(`/api/chat/query-logs${search.size ? `?${search.toString()}` : ""}`, { token });
-  },
-  getTrace(token: string, traceId: string): Promise<TraceRecord> {
-    return request(`/api/chat/traces/${traceId}`, { token });
-  },
-  getTraceRetrieval(token: string, traceId: string): Promise<RuntimeRetrievalLogRecord[]> {
-    return request(`/api/chat/traces/${traceId}/retrieval`, { token });
-  },
-  getTraceSqlAudit(token: string, traceId: string): Promise<RuntimeSqlAuditRecord> {
-    return request(`/api/chat/traces/${traceId}/sql-audit`, { token });
-  },
   adminRuntimeStatus(token: string): Promise<RuntimeStatus> {
     return request("/api/admin/runtime/status", { token });
+  },
+  adminRuntimeSessions(token: string): Promise<RuntimeSessionCollectionResponse> {
+    return request("/api/admin/runtime/sessions?limit=20", { token });
   },
   adminMetadataOverview(token: string): Promise<MetadataOverview> {
     return request("/api/admin/metadata/overview", { token });
@@ -196,20 +173,45 @@ export const api = {
         roles: payload.roles,
         can_view_sql: payload.can_view_sql,
         can_execute_sql: payload.can_execute_sql,
+        can_download_results: payload.can_download_results,
         is_active: payload.is_active,
       },
+    });
+  },
+  adminResetUserPassword(token: string, userId: string, newPassword: string): Promise<{ updated: boolean }> {
+    return request(`/api/admin/users/${userId}/reset-password`, {
+      method: "POST",
+      token,
+      body: { new_password: newPassword },
+    });
+  },
+  adminDeleteUser(token: string, userId: string): Promise<{ deleted: boolean }> {
+    return request(`/api/admin/users/${userId}`, {
+      method: "DELETE",
+      token,
     });
   },
   adminRoles(token: string): Promise<RoleRecord[]> {
     return request("/api/admin/roles", { token });
   },
   adminQueryLogs(token: string): Promise<RuntimeQueryLogCollectionResponse> {
-    return request("/api/admin/runtime/query-logs", { token });
+    return request("/api/admin/runtime/query-logs?limit=20", { token });
   },
   adminFeedbackSummary(token: string): Promise<FeedbackSummary> {
     return request("/api/admin/feedbacks/summary", { token });
   },
   adminEvaluationSummary(token: string): Promise<EvaluationSummary> {
     return request("/api/admin/eval/summary", { token });
+  },
+  adminReplayQueryLog(
+    token: string,
+    traceId: string,
+    payload: EvaluationReplayRequest,
+  ): Promise<EvaluationReplayResult> {
+    return request(`/api/admin/runtime/query-logs/${traceId}/replay`, {
+      method: "POST",
+      token,
+      body: payload,
+    });
   },
 };

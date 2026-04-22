@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
 from backend.app.api.dependencies import get_container, get_current_user, resolve_request_user_context
 from backend.app.core.container import AppContainer
@@ -132,6 +133,41 @@ def get_my_trace_sql_audit(
     return record
 
 
+@router.get("/traces/{trace_id}/export")
+def export_my_trace_result(
+    trace_id: str,
+    current_user: UserContext = Depends(get_current_user),
+    container: AppContainer = Depends(get_container),
+) -> PlainTextResponse:
+    _ensure_trace_access(trace_id, current_user, container)
+    if not container.permission_service.can_download_results(current_user):
+        raise HTTPException(status_code=403, detail="current user cannot download results")
+    record = container.runtime_log_repository.get_sql_audit(trace_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="sql audit not found")
+    trace = container.audit_service.get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    query_log = container.runtime_log_repository.get_query_log(trace_id)
+    if query_log is None or not record.sql_text:
+        raise HTTPException(status_code=404, detail="query result export is not available")
+    execution = container.sql_executor.execute(record.sql_text, user_context=current_user)
+    execution = container.permission_service.apply_to_execution(execution=execution, user_context=current_user)
+    if execution is None or not execution.executed:
+        raise HTTPException(status_code=400, detail="query result export is not available")
+    columns = execution.columns
+    rows = execution.rows
+    lines = [",".join(_csv_escape(column) for column in columns)]
+    for row in rows:
+        lines.append(",".join(_csv_escape(row.get(column)) for column in columns))
+    filename = f"trace_{trace_id}.csv"
+    return PlainTextResponse(
+        "\n".join(lines),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _ensure_trace_access(
     trace_id: str,
     current_user: UserContext,
@@ -147,3 +183,9 @@ def _ensure_trace_access(
             return
     if query_log.user_id and query_log.user_id != current_user.user_id and "admin" not in current_user.roles:
         raise HTTPException(status_code=403, detail="current user cannot access this trace")
+
+
+def _csv_escape(value: object) -> str:
+    text = "" if value is None else str(value)
+    text = text.replace('"', '""')
+    return f'"{text}"'

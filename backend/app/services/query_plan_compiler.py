@@ -26,9 +26,11 @@ class QueryPlanCompiler:
             return query_plan
 
         compiled = query_plan.model_copy(deep=True)
+        base_subject_domain = compiled.subject_domain
         subject_domain = llm_hint.get("subject_domain")
         if isinstance(subject_domain, str) and self.semantic_runtime.is_known_domain(subject_domain):
-            compiled.subject_domain = subject_domain
+            if base_subject_domain == "unknown" or subject_domain == base_subject_domain:
+                compiled.subject_domain = subject_domain
 
         tables = llm_hint.get("tables")
         if isinstance(tables, list):
@@ -55,14 +57,21 @@ class QueryPlanCompiler:
 
         metrics = llm_hint.get("metrics")
         if isinstance(metrics, list):
+            allowed_metrics = set(query_plan.metrics)
             compiled.metrics = [
                 metric
                 for metric in metrics
-                if isinstance(metric, str) and self.semantic_runtime.is_known_metric(metric)
-            ]
+                if isinstance(metric, str)
+                and self.semantic_runtime.is_known_metric(metric)
+                and (not allowed_metrics or metric in allowed_metrics)
+            ] or compiled.metrics
         dimensions = llm_hint.get("dimensions")
         if isinstance(dimensions, list):
-            compiled.dimensions = [item for item in dimensions if isinstance(item, str)]
+            allowed_fields = self.semantic_runtime.allowed_fields_for_plan(compiled)
+            compiled.dimensions = [
+                item for item in dimensions
+                if isinstance(item, str) and (not allowed_fields or item in allowed_fields)
+            ]
 
         join_path = llm_hint.get("join_path")
         if isinstance(join_path, list):
@@ -84,11 +93,19 @@ class QueryPlanCompiler:
 
         llm_filters = llm_hint.get("filters")
         if isinstance(llm_filters, list) and llm_filters:
-            compiled.filters = self._coerce_filters(llm_filters)
+            allowed_fields = self.semantic_runtime.allowed_fields_for_plan(compiled)
+            compiled.filters = [
+                item for item in self._coerce_filters(llm_filters)
+                if not allowed_fields or item.field in allowed_fields
+            ]
 
         llm_sort = llm_hint.get("sort")
         if isinstance(llm_sort, list):
-            compiled.sort = self._coerce_sort(llm_sort)
+            allowed_fields = self.semantic_runtime.allowed_fields_for_plan(compiled)
+            compiled.sort = [
+                item for item in self._coerce_sort(llm_sort)
+                if not allowed_fields or item.field in allowed_fields
+            ]
 
         llm_limit = llm_hint.get("limit")
         if isinstance(llm_limit, int):

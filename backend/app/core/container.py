@@ -152,4 +152,7 @@ class AppContainer:
         self.evaluation_service = EvaluationService(
             orchestrator=self.orchestrator,
             evaluation_run_repository=self.evaluation_run_repository,
+            session_repository=self.session_repository,
+            runtime_log_repository=self.runtime_log_repository,
+            auth_service=self.auth_service,
         )

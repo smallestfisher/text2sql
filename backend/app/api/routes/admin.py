@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ValidationError
 
-from backend.app.api.dependencies import get_container, require_admin_user
+from backend.app.api.dependencies import get_container, get_current_user, require_admin_user
 from backend.app.core.container import AppContainer
 from backend.app.models.admin import (
     ExampleCollectionResponse,
@@ -18,6 +18,7 @@ from backend.app.models.admin import (
     SessionSnapshotRecord,
 )
 from backend.app.models.auth import (
+    AdminPasswordResetRequest,
     DataScopeUpdateRequest,
     FieldVisibilityUpdateRequest,
     RoleRecord,
@@ -29,6 +30,8 @@ from backend.app.models.conversation import SessionHistoryResponse
 from backend.app.models.evaluation import (
     EvaluationCase,
     EvaluationCaseCollection,
+    EvaluationReplayRequest,
+    EvaluationReplayResult,
     EvaluationRunRecord,
     EvaluationRunRequest,
     EvaluationSummary,
@@ -289,6 +292,20 @@ def get_runtime_sql_audit(
     return record
 
 
+@router.post("/runtime/query-logs/{trace_id}/replay", response_model=EvaluationReplayResult)
+def replay_runtime_query_log(
+    trace_id: str,
+    request: EvaluationReplayRequest,
+    container: AppContainer = Depends(get_container),
+) -> EvaluationReplayResult:
+    try:
+        return container.evaluation_service.replay_trace(trace_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="query log not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/database/bootstrap-semantic-views")
 def bootstrap_semantic_views(container: AppContainer = Depends(get_container)) -> dict:
     sql_script = SEMANTIC_VIEW_DRAFTS_PATH.read_text(encoding="utf-8")
@@ -318,6 +335,34 @@ def upsert_user(
     container: AppContainer = Depends(get_container),
 ) -> UserContext:
     return container.auth_service.upsert_user(user_id, request)
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: str,
+    request: AdminPasswordResetRequest,
+    container: AppContainer = Depends(get_container),
+) -> dict:
+    try:
+        container.auth_service.admin_reset_password(user_id, request)
+        return {"updated": True}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="user not found") from exc
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: str,
+    current_user: UserContext = Depends(get_current_user),
+    container: AppContainer = Depends(get_container),
+) -> dict:
+    try:
+        container.auth_service.delete_user(current_user, user_id)
+        return {"deleted": True}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="user not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/users/{user_id}/data-scope", response_model=UserContext)
@@ -369,6 +414,18 @@ def create_evaluation_case(
     container: AppContainer = Depends(get_container),
 ) -> EvaluationCase:
     return container.evaluation_service.create_case(request.case)
+
+
+@router.post("/eval/cases/{case_id}/replay", response_model=EvaluationReplayResult)
+def replay_evaluation_case(
+    case_id: str,
+    request: EvaluationReplayRequest,
+    container: AppContainer = Depends(get_container),
+) -> EvaluationReplayResult:
+    try:
+        return container.evaluation_service.replay_case(case_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="evaluation case not found") from exc
 
 
 @router.get("/eval/runs", response_model=list[EvaluationRunRecord])

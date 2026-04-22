@@ -19,6 +19,7 @@ class PromptBuilder:
         base_plan: QueryPlan | None = None,
         session_state: SessionState | None = None,
     ) -> dict:
+        profile = self._query_profile(semantic_parse.subject_domain)
         return {
             "task": "query_plan_generation",
             "question": question,
@@ -29,16 +30,20 @@ class PromptBuilder:
             "retrieval_terms": retrieval.retrieval_terms,
             "retrieval_semantic_views": retrieval.semantic_views,
             "retrieval_hits": [hit.model_dump() for hit in retrieval.hits],
-            "query_profile": self._query_profile(semantic_parse.subject_domain),
+            "query_profile": profile,
             "domain_tables": self._domain_tables(semantic_parse.subject_domain),
+            "allowed_semantic_views": self._allowed_semantic_views(semantic_parse.subject_domain),
             "semantic_view_schemas": self._semantic_view_schemas(retrieval.semantic_views),
             "base_plan": base_plan.model_dump() if base_plan is not None else None,
+            "allowed_fields": sorted(self._allowed_fields(base_plan)) if base_plan is not None else [],
             "session_state": session_state.model_dump() if session_state is not None else None,
             "instructions": {
                 "return_format": "json",
                 "constraints": [
                     "prefer selected semantic views over raw tables",
                     "only use registered domains, tables, semantic views, metrics and fields",
+                    "respect base_plan and only refine filters, dimensions, sort, version_context and limit when needed",
+                    "do not invent new metrics, fields, semantic views or tables outside the allowed lists",
                     "for follow-up questions, preserve previous subject when the new question is only refining filters or time",
                 ],
                 "fields": [
@@ -136,6 +141,12 @@ class PromptBuilder:
         if self.semantic_runtime is None or subject_domain == "unknown":
             return None
         return self.semantic_runtime.domain_tables(subject_domain)
+
+
+    def _allowed_semantic_views(self, subject_domain: str) -> list[str] | None:
+        if self.semantic_runtime is None or subject_domain == "unknown":
+            return None
+        return self.semantic_runtime.semantic_views_for_domain(subject_domain)
 
     def _semantic_view_schemas(self, semantic_views: list[str]) -> dict[str, list[str]]:
         if self.semantic_runtime is None:

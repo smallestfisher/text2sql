@@ -90,6 +90,13 @@ class ConversationOrchestrator:
         )
         base_query_plan = query_plan.model_copy(deep=True)
         llm_plan_hint = self.llm_client.generate_query_plan_hint(query_plan_prompt)
+        plan_hint_status = "stub"
+        plan_hint_detail = "stub prompt built"
+        plan_hint_metadata = {
+            "mode": llm_plan_hint.get("mode"),
+            "model": llm_plan_hint.get("model"),
+            "attempt": llm_plan_hint.get("attempt"),
+        }
         if llm_plan_hint.get("mode") == "live":
             candidate_query_plan = self.query_plan_compiler.apply_llm_hint(query_plan, llm_plan_hint)
             acceptable, rejection_reasons = self.query_plan_compiler.semantic_runtime.llm_plan_is_acceptable(
@@ -98,7 +105,12 @@ class ConversationOrchestrator:
             )
             if acceptable:
                 query_plan = candidate_query_plan
+                plan_hint_status = "accepted"
+                plan_hint_detail = "live llm query plan hint accepted"
             else:
+                plan_hint_status = "rejected"
+                plan_hint_detail = "live llm query plan hint rejected"
+                plan_hint_metadata["rejection_reasons"] = rejection_reasons
                 warnings.append(
                     "llm query plan hint rejected before compile: " + "; ".join(rejection_reasons)
                 )
@@ -106,7 +118,8 @@ class ConversationOrchestrator:
             trace,
             "build_query_plan_prompt",
             "completed",
-            "live llm hint applied" if llm_plan_hint.get("mode") == "live" else "stub prompt built",
+            plan_hint_detail,
+            metadata=plan_hint_metadata,
         )
 
         query_plan, permission_warnings = self.permission_service.apply_to_query_plan(
@@ -143,13 +156,27 @@ class ConversationOrchestrator:
         self.audit_service.append_step(trace, "validate_plan", "completed" if not plan_errors else "failed")
 
         llm_sql = None
+        sql_hint_metadata = {"mode": "stub", "used": False}
         if not plan_errors:
             sql_prompt = self.prompt_builder.build_sql_prompt(query_plan)
             llm_sql = self.llm_client.generate_sql_hint(sql_prompt)
             if llm_sql:
-                self.audit_service.append_step(trace, "build_sql_prompt", "completed", "live sql hint applied")
+                sql_hint_metadata = {"mode": "live", "used": True}
+                self.audit_service.append_step(
+                    trace,
+                    "build_sql_prompt",
+                    "completed",
+                    "live sql hint returned",
+                    metadata=sql_hint_metadata,
+                )
             else:
-                self.audit_service.append_step(trace, "build_sql_prompt", "completed", "fallback to local sql generator")
+                self.audit_service.append_step(
+                    trace,
+                    "build_sql_prompt",
+                    "completed",
+                    "fallback to local sql generator",
+                    metadata=sql_hint_metadata,
+                )
 
         sql = None
         if not plan_errors:
@@ -185,11 +212,24 @@ class ConversationOrchestrator:
             )
             if not local_sql_errors:
                 warnings.append("llm sql hint rejected; fallback to local sql generator")
+                sql_hint_metadata["used"] = False
+                sql_hint_metadata["fallback_reason"] = "llm_sql_failed_validation"
                 sql = local_sql
                 visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
                 sql_errors = []
                 sql_warnings = local_sql_warnings
-        self.audit_service.append_step(trace, "validate_sql", "completed" if not sql_errors else "failed")
+        self.audit_service.append_step(
+            trace,
+            "validate_sql",
+            "completed" if not sql_errors else "failed",
+            metadata={
+                "llm_sql_used": bool(sql_hint_metadata.get("used")),
+                "llm_sql_mode": sql_hint_metadata.get("mode"),
+                "fallback_reason": sql_hint_metadata.get("fallback_reason"),
+                "error_count": len(sql_errors),
+                "warning_count": len(sql_warnings),
+            },
+        )
 
         execution = None if (plan_errors or sql_errors) else self.sql_executor.execute(
             sql=sql,

@@ -146,6 +146,28 @@ class DbSessionRepository:
             for row in rows
         ]
 
+    def get_last_message(self, session_id: str) -> ChatMessage | None:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT message_id, session_id, role, content, trace_id, created_at
+            FROM chat_messages
+            WHERE session_id = :session_id
+            ORDER BY created_at DESC, message_id DESC
+            LIMIT 1
+            """,
+            {"session_id": session_id},
+        )
+        if row is None:
+            return None
+        return ChatMessage(
+            id=row["message_id"],
+            session_id=row["session_id"],
+            role=row["role"],
+            content=row["content"],
+            trace_id=row["trace_id"],
+            created_at=as_datetime(row["created_at"]),
+        )
+
     def list_state_snapshots(self, session_id: str, limit: int = 50) -> list[SessionSnapshotRecord]:
         rows = self.database_connector.fetch_all(
             """
@@ -266,3 +288,25 @@ class DbSessionRepository:
                 "updated_at": datetime.utcnow(),
             },
         )
+
+    def delete_session(self, session_id: str) -> bool:
+        with self.database_connector.begin() as connection:
+            existing = connection.execute(
+                text("SELECT session_id FROM chat_sessions WHERE session_id = :session_id"),
+                {"session_id": session_id},
+            ).mappings().first()
+            if existing is None:
+                return False
+            connection.execute(
+                text("DELETE FROM session_state_snapshots WHERE session_id = :session_id"),
+                {"session_id": session_id},
+            )
+            connection.execute(
+                text("DELETE FROM chat_messages WHERE session_id = :session_id"),
+                {"session_id": session_id},
+            )
+            connection.execute(
+                text("DELETE FROM chat_sessions WHERE session_id = :session_id"),
+                {"session_id": session_id},
+            )
+        return True

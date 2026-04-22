@@ -69,6 +69,38 @@ class SqlValidator:
             if unexpected_sources:
                 errors.append(f"sql references sources outside query plan: {', '.join(unexpected_sources)}")
 
+            missing_plan_filters = [
+                filter_item.field
+                for filter_item in query_plan.filters
+                if filter_item.field
+                and not self._contains_field_reference(inspection.where_clause, filter_item.field)
+            ]
+            if missing_plan_filters:
+                warnings.append(
+                    "sql does not cover all query plan filters: " + ", ".join(sorted(set(missing_plan_filters)))
+                )
+
+            expected_dimension_fields = set(query_plan.dimensions)
+            if expected_dimension_fields:
+                missing_group_by_fields = [
+                    field for field in expected_dimension_fields if field not in inspection.group_by_fields
+                ]
+                if missing_group_by_fields and inspection.functions:
+                    errors.append(
+                        "sql does not group by required dimensions from query plan: "
+                        + ", ".join(sorted(set(missing_group_by_fields)))
+                    )
+
+            expected_sort_fields = [item.field for item in query_plan.sort]
+            if expected_sort_fields:
+                missing_sort_fields = [
+                    field for field in expected_sort_fields if field not in inspection.order_by_fields
+                ]
+                if missing_sort_fields:
+                    warnings.append(
+                        "sql does not preserve query plan sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
+                    )
+
         if self.semantic_runtime is not None and used_sources:
             known_view_sources = [source for source in used_sources if source in semantic_view_names]
             if known_view_sources:
@@ -97,6 +129,15 @@ class SqlValidator:
                     f"sql is missing required permission filters: {', '.join(missing_filter_fields)}"
                 )
 
+        if len(used_sources) > 1:
+            joins_without_condition = [join.source for join in inspection.joins if not join.has_condition]
+            if joins_without_condition:
+                errors.append(
+                    "sql contains join without ON/USING condition: " + ", ".join(sorted(set(joins_without_condition)))
+                )
+            elif not inspection.joins:
+                warnings.append("sql uses multiple sources but no explicit JOIN was detected; review for cartesian risk")
+
         if query_plan is not None and self.semantic_runtime is not None:
             if self.semantic_runtime.warn_if_missing_time_filter(query_plan.subject_domain):
                 time_fields = self.semantic_runtime.time_filter_fields(query_plan.subject_domain)
@@ -104,7 +145,10 @@ class SqlValidator:
                     self._contains_field_reference(inspection.where_clause, field)
                     for field in time_fields
                 ):
-                    warnings.append("sql does not include a time filter; this may cause wide scans")
+                    warning_message = "sql does not include a time filter; this may cause wide scans"
+                    if len(used_sources) > 1:
+                        warning_message += " across multiple sources"
+                    warnings.append(warning_message)
 
         if not inspection.has_limit:
             warnings.append("sql does not include LIMIT")

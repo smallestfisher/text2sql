@@ -121,7 +121,6 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 
 当前还未接入：
 
-- 企业 SSO / OIDC
 - 稳定可达的数据库网络环境
 - 真实向量库与更完整的向量索引基础设施
 

@@ -1,11 +1,11 @@
-export type ViewMode = "workspace" | "admin";
-
 export interface UserContext {
   user_id: string;
   username?: string | null;
   roles: string[];
   can_view_sql: boolean;
   can_execute_sql: boolean;
+  can_download_results: boolean;
+  is_active: boolean;
 }
 
 export interface LoginResponse {
@@ -17,6 +17,15 @@ export interface LoginResponse {
 
 export interface BootstrapStatus {
   has_users: boolean;
+}
+
+export interface SemanticSummary {
+  version?: string;
+  domains: string[];
+  entities: string[];
+  metrics: string[];
+  semantic_views: string[];
+  tables: string[];
 }
 
 export interface FilterItem {
@@ -38,38 +47,6 @@ export interface TimeContext {
 export interface VersionContext {
   field?: string | null;
   value?: string | null;
-}
-
-export interface ContextDelta {
-  add_filters: FilterItem[];
-  remove_filters: string[];
-  replace_metrics: string[];
-  replace_dimensions: string[];
-  replace_time_context: TimeContext;
-}
-
-export interface QuestionClassification {
-  question_type: string;
-  subject_domain: string;
-  inherit_context: boolean;
-  confidence: number;
-  reason?: string | null;
-  reason_code?: string | null;
-  context_delta: ContextDelta;
-  need_clarification: boolean;
-  clarification_question?: string | null;
-}
-
-export interface SemanticParse {
-  normalized_question: string;
-  matched_metrics: string[];
-  matched_entities: string[];
-  filters: FilterItem[];
-  time_context: TimeContext;
-  version_context?: VersionContext | null;
-  subject_domain: string;
-  has_follow_up_cue: boolean;
-  has_explicit_slots: boolean;
 }
 
 export interface SortItem {
@@ -177,8 +154,6 @@ export interface SessionState {
 }
 
 export interface ChatResponse {
-  classification: QuestionClassification;
-  semantic_parse: SemanticParse;
   retrieval?: RetrievalContext | null;
   trace?: TraceRecord | null;
   answer?: AnswerPayload | null;
@@ -228,14 +203,6 @@ export interface SessionStateResponse {
   state?: SessionState | null;
 }
 
-export interface SessionSnapshotRecord {
-  snapshot_id: string;
-  session_id: string;
-  trace_id?: string | null;
-  state: SessionState;
-  created_at: string;
-}
-
 export interface RuntimeQueryLogRecord {
   trace_id: string;
   session_id?: string | null;
@@ -257,18 +224,6 @@ export interface RuntimeQueryLogCollectionResponse {
   count: number;
 }
 
-export interface RuntimeRetrievalLogRecord {
-  retrieval_log_id: string;
-  trace_id: string;
-  rank_position: number;
-  source_type: string;
-  source_id: string;
-  score: number;
-  matched_features: string[];
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
-
 export interface RuntimeSqlAuditRecord {
   sql_audit_id: string;
   trace_id: string;
@@ -280,21 +235,6 @@ export interface RuntimeSqlAuditRecord {
   warnings: string[];
   errors: string[];
   created_at: string;
-}
-
-export interface FeedbackRecord {
-  id: string;
-  session_id?: string | null;
-  trace_id?: string | null;
-  user_id?: string | null;
-  feedback_type: "correct" | "incorrect" | "clarification" | "other";
-  comment?: string | null;
-  created_at: string;
-}
-
-export interface FeedbackCollectionResponse {
-  feedbacks: FeedbackRecord[];
-  count: number;
 }
 
 export interface FeedbackTypeSummary {
@@ -343,6 +283,24 @@ export interface EvaluationSummary {
   by_answer_status: EvaluationDimensionSummary[];
 }
 
+export interface EvaluationReplayRequest {
+  user_id?: string | null;
+  reuse_original_user: boolean;
+  include_prior_context: boolean;
+}
+
+export interface EvaluationReplayResult {
+  source_type: "evaluation_case" | "runtime_query_log";
+  source_id: string;
+  question: string;
+  session_questions: string[];
+  replay_user?: UserContext | null;
+  original_trace_id?: string | null;
+  original_session_id?: string | null;
+  original_user_id?: string | null;
+  response: ChatResponse;
+}
+
 export interface RuntimeStatus {
   business_database: Record<string, unknown>;
   runtime_database: Record<string, unknown>;
@@ -359,10 +317,6 @@ export interface UserUpsertPayload {
   roles: string[];
   can_view_sql: boolean;
   can_execute_sql: boolean;
+  can_download_results: boolean;
   is_active: boolean;
-}
-
-export interface QueryLogListParams {
-  sessionId?: string;
-  limit?: number;
 }

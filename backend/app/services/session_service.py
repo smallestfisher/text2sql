@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from backend.app.core.exceptions import PermissionDeniedError
@@ -29,10 +30,20 @@ class SessionService:
     def history(self, session_id: str) -> list[ChatMessage]:
         return self.repository.list_messages(session_id)
 
+    def _next_message_created_at(self, session_id: str) -> datetime:
+        next_created_at = datetime.now(timezone.utc)
+        last_message = self.repository.get_last_message(session_id)
+        if last_message is not None:
+            candidate = last_message.created_at + timedelta(seconds=1)
+            if candidate > next_created_at:
+                next_created_at = candidate
+        return next_created_at
+
     def append_user_message(self, session_id: str, content: str, trace_id: str | None = None) -> ChatMessage:
         session = self.repository.get_session(session_id)
         if session is not None and not session.title:
             self.repository.ensure_title(session_id, content[:40])
+        created_at = self._next_message_created_at(session_id)
         return self.repository.append_message(
             ChatMessage(
                 id=f"msg_{uuid.uuid4().hex[:12]}",
@@ -40,10 +51,12 @@ class SessionService:
                 role="user",
                 content=content,
                 trace_id=trace_id,
+                created_at=created_at,
             )
         )
 
     def append_assistant_message(self, session_id: str, content: str, trace_id: str | None = None) -> ChatMessage:
+        created_at = self._next_message_created_at(session_id)
         return self.repository.append_message(
             ChatMessage(
                 id=f"msg_{uuid.uuid4().hex[:12]}",
@@ -51,6 +64,7 @@ class SessionService:
                 role="assistant",
                 content=content,
                 trace_id=trace_id,
+                created_at=created_at,
             )
         )
 
@@ -65,6 +79,11 @@ class SessionService:
 
     def update_status(self, session_id: str, status: str) -> None:
         self.repository.update_status(session_id, status)
+
+    def delete_session(self, session_id: str) -> None:
+        deleted = self.repository.delete_session(session_id)
+        if not deleted:
+            raise KeyError(session_id)
 
     def ensure_access(self, session: ChatSession, user_context: UserContext | None) -> None:
         if user_context is None or session.user_id is None:

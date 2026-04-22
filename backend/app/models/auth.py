@@ -29,6 +29,8 @@ class UserContext(BaseModel):
     field_visibility: list[FieldVisibilityPolicy] = Field(default_factory=list)
     can_view_sql: bool = True
     can_execute_sql: bool = True
+    can_download_results: bool = True
+    is_active: bool = True
 
 
 class AuthUserRecord(BaseModel):
@@ -40,6 +42,7 @@ class AuthUserRecord(BaseModel):
     field_visibility: list[FieldVisibilityPolicy] = Field(default_factory=list)
     can_view_sql: bool = True
     can_execute_sql: bool = True
+    can_download_results: bool = True
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -60,6 +63,10 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class AdminPasswordResetRequest(BaseModel):
+    new_password: str
+
+
 class UserUpsertRequest(BaseModel):
     username: str
     password: str | None = None
@@ -68,6 +75,7 @@ class UserUpsertRequest(BaseModel):
     field_visibility: list[FieldVisibilityPolicy] = Field(default_factory=list)
     can_view_sql: bool = True
     can_execute_sql: bool = True
+    can_download_results: bool = True
     is_active: bool = True
 
 
