@@ -10,6 +10,7 @@ from backend.app.services.query_plan_compiler import QueryPlanCompiler
 from backend.app.services.query_plan_validator import QueryPlanValidator
 from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.retrieval_service import RetrievalService
+from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
 from backend.app.services.sql_executor import SqlExecutor
@@ -34,6 +35,7 @@ class ConversationOrchestrator:
         retrieval_service: RetrievalService,
         session_service: SessionService,
         audit_service: AuditService,
+        runtime_log_repository: DbRuntimeLogRepository,
         semantic_layer: dict,
     ) -> None:
         self.query_planner = query_planner
@@ -50,6 +52,7 @@ class ConversationOrchestrator:
         self.retrieval_service = retrieval_service
         self.session_service = session_service
         self.audit_service = audit_service
+        self.runtime_log_repository = runtime_log_repository
         self.semantic_layer = semantic_layer
 
     def chat(self, request: PlanRequest) -> ChatResponse:
@@ -69,7 +72,14 @@ class ConversationOrchestrator:
         self.audit_service.append_step(trace, "plan", "completed", classification.question_type)
 
         retrieval = self.retrieval_service.retrieve(semantic_parse)
-        self.audit_service.append_step(trace, "retrieve", "completed", f"{len(retrieval.hits)} hits")
+        retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
+        self.audit_service.append_step(
+            trace,
+            "retrieve",
+            "completed",
+            f"{len(retrieval.hits)} hits",
+            metadata=retrieval_summary,
+        )
 
         query_plan_prompt = self.prompt_builder.build_query_plan_prompt(
             question=request.question,
@@ -78,9 +88,20 @@ class ConversationOrchestrator:
             base_plan=query_plan,
             session_state=session_state,
         )
+        base_query_plan = query_plan.model_copy(deep=True)
         llm_plan_hint = self.llm_client.generate_query_plan_hint(query_plan_prompt)
         if llm_plan_hint.get("mode") == "live":
-            query_plan = self.query_plan_compiler.apply_llm_hint(query_plan, llm_plan_hint)
+            candidate_query_plan = self.query_plan_compiler.apply_llm_hint(query_plan, llm_plan_hint)
+            acceptable, rejection_reasons = self.query_plan_compiler.semantic_runtime.llm_plan_is_acceptable(
+                candidate_query_plan,
+                base_query_plan,
+            )
+            if acceptable:
+                query_plan = candidate_query_plan
+            else:
+                warnings.append(
+                    "llm query plan hint rejected before compile: " + "; ".join(rejection_reasons)
+                )
         self.audit_service.append_step(
             trace,
             "build_query_plan_prompt",
@@ -102,6 +123,22 @@ class ConversationOrchestrator:
             query_plan=query_plan,
             semantic_layer=self.semantic_layer,
         )
+        if plan_errors and llm_plan_hint.get("mode") == "live":
+            fallback_plan, fallback_permission_warnings = self.permission_service.apply_to_query_plan(
+                query_plan=base_query_plan.model_copy(deep=True),
+                user_context=request.user_context,
+            )
+            fallback_plan = self.query_plan_compiler.compile(query_plan=fallback_plan, retrieval=retrieval)
+            fallback_errors, fallback_warnings = self.query_plan_validator.validate(
+                query_plan=fallback_plan,
+                semantic_layer=self.semantic_layer,
+            )
+            if not fallback_errors:
+                warnings.append("llm query plan hint rejected; fallback to local planner result")
+                query_plan = fallback_plan
+                permission_warnings = fallback_permission_warnings
+                plan_errors = []
+                plan_warnings = fallback_warnings
         warnings.extend(plan_warnings)
         self.audit_service.append_step(trace, "validate_plan", "completed" if not plan_errors else "failed")
 
@@ -114,7 +151,9 @@ class ConversationOrchestrator:
             else:
                 self.audit_service.append_step(trace, "build_sql_prompt", "completed", "fallback to local sql generator")
 
-        sql = None if plan_errors else self.sql_generator.generate(query_plan, llm_sql=llm_sql)
+        sql = None
+        if not plan_errors:
+            sql = self.sql_generator.generate(query_plan, llm_sql=llm_sql)
         visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
         self.audit_service.append_step(trace, "generate_sql", "completed" if sql else "skipped")
 
@@ -132,10 +171,32 @@ class ConversationOrchestrator:
             if sql is not None
             else ([], [])
         )
+        if sql_errors and llm_sql and not plan_errors:
+            local_sql = self.sql_generator.generate(query_plan, llm_sql=None)
+            local_sql_errors, local_sql_warnings = (
+                self.sql_validator.validate(
+                    local_sql,
+                    self.semantic_layer,
+                    query_plan=query_plan,
+                    required_filter_fields=required_filter_fields,
+                )
+                if local_sql is not None
+                else (["sql is empty"], [])
+            )
+            if not local_sql_errors:
+                warnings.append("llm sql hint rejected; fallback to local sql generator")
+                sql = local_sql
+                visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
+                sql_errors = []
+                sql_warnings = local_sql_warnings
         self.audit_service.append_step(trace, "validate_sql", "completed" if not sql_errors else "failed")
 
         execution = None if (plan_errors or sql_errors) else self.sql_executor.execute(
             sql=sql,
+            user_context=request.user_context,
+        )
+        execution = self.permission_service.apply_to_execution(
+            execution=execution,
             user_context=request.user_context,
         )
         if execution is not None and not self.permission_service.can_view_sql(request.user_context):
@@ -173,8 +234,29 @@ class ConversationOrchestrator:
             assistant_text = answer.summary
             self.session_service.append_assistant_message(request.session_id, assistant_text, trace.trace_id)
             next_session_state.session_id = request.session_id
-            self.session_service.update_state(request.session_id, next_session_state)
+            self.session_service.update_state(request.session_id, next_session_state, trace_id=trace.trace_id)
         self.audit_service.finalize(trace, warnings=warnings + sql_warnings)
+        self.runtime_log_repository.log_retrieval(trace.trace_id, retrieval)
+        self.runtime_log_repository.log_sql_audit(
+            trace_id=trace.trace_id,
+            sql=sql,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+            execution=execution,
+        )
+        self.runtime_log_repository.log_query(
+            trace_id=trace.trace_id,
+            session_id=request.session_id,
+            user_id=request.user_context.user_id if request.user_context else None,
+            question=request.question,
+            question_type=classification.question_type,
+            subject_domain=classification.subject_domain,
+            answer_status=answer.status if answer else None,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+            execution=execution,
+            warnings=warnings + sql_warnings,
+        )
 
         return ChatResponse(
             classification=classification,

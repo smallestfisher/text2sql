@@ -45,6 +45,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 提供 LLM prompt builder 和 OpenAI-compatible LLM client
 - 提供 DB connector、answer builder、middleware、settings、异常处理
 - 提供 token 登录、bootstrap-admin、用户与角色骨架
+- 提供基础登录鉴权、管理员接口控制、用户会话归属与反馈管理
 - 提供评测 case / replay run 骨架
 
 ## API
@@ -56,6 +57,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `POST /api/auth/bootstrap-admin`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
+- `POST /api/auth/change-password`
 - `POST /api/auth/stub-login`
 - `GET /api/admin/metadata/overview`
 - `GET /api/admin/metadata/documents`
@@ -68,19 +70,35 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `GET /api/admin/traces`
 - `GET /api/admin/traces/{trace_id}`
 - `GET /api/admin/feedbacks`
+- `GET /api/admin/feedbacks/summary`
 - `GET /api/admin/runtime/status`
 - `POST /api/admin/database/bootstrap-semantic-views`
 - `GET /api/admin/users`
+- `GET /api/admin/users/{user_id}`
 - `PUT /api/admin/users/{user_id}`
+- `PUT /api/admin/users/{user_id}/data-scope`
+- `PUT /api/admin/users/{user_id}/field-visibility`
+- `GET /api/admin/roles`
+- `PUT /api/admin/roles/{role_name}`
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/cases`
 - `GET /api/admin/eval/runs`
+- `GET /api/admin/eval/summary`
 - `POST /api/admin/eval/run`
 - `POST /api/chat/sessions`
+- `GET /api/chat/sessions`
 - `GET /api/chat/sessions/{session_id}`
+- `PUT /api/chat/sessions/{session_id}/status`
 - `GET /api/chat/history/{session_id}`
+- `GET /api/chat/snapshots/{session_id}`
 - `GET /api/chat/state/{session_id}`
 - `POST /api/chat/feedback`
+- `GET /api/chat/feedbacks`
+- `GET /api/chat/feedbacks/summary`
+- `GET /api/chat/query-logs`
+- `GET /api/chat/traces/{trace_id}`
+- `GET /api/chat/traces/{trace_id}/retrieval`
+- `GET /api/chat/traces/{trace_id}/sql-audit`
 - `POST /api/query/classify`
 - `POST /api/query/plan`
 - `POST /api/query/plan/validate`
@@ -99,10 +117,20 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 当前还未接入：
 
 - 企业 SSO / OIDC
-- 向量检索 / BM25 / pgvector
-- 数据库级持久化元数据表
-- 更强的 AST 级 SQL 解析库
 - 稳定可达的数据库网络环境
+- 真实向量库与更完整的向量索引基础设施
+
+当前已补一版前端工作台，见 [frontend/README.md](/home/y/llm/new/frontend/README.md)：
+
+- 登录 / 初始化管理员
+- 聊天工作台
+- SQL / Trace / State 侧栏
+- 管理台基础页面
+
+当前权限范围：
+
+- 以登录鉴权和基础管理员控制为主
+- 不以复杂组织树/RBAC/ABAC 为当前后端目标
 
 ## Structure
 

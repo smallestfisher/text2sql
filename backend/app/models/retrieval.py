@@ -17,4 +17,6 @@ class RetrievalContext(BaseModel):
     semantic_views: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     retrieval_terms: list[str] = Field(default_factory=list)
+    retrieval_channels: list[str] = Field(default_factory=list)
     hits: list[RetrievalHit] = Field(default_factory=list)
+    hit_count_by_source: dict[str, int] = Field(default_factory=dict)

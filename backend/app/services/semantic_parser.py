@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import calendar
-import re
 from typing import Any
 
 from backend.app.models.classification import SemanticParse
-from backend.app.models.query_plan import FilterItem, TimeContext, TimeRange
+from backend.app.models.query_plan import FilterItem
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -78,63 +76,10 @@ class SemanticParser:
         return sorted(matched)
 
     def _extract_filters(self, question: str) -> list[FilterItem]:
-        filters: list[FilterItem] = []
-        month_match = re.search(r"(\d{4})年(\d{1,2})月(?!\d)", question)
-        day_match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", question)
-        iso_day_match = re.search(r"(\d{4}-\d{2}-\d{2})", question)
-
-        if day_match:
-            year, month, day = day_match.groups()
-            filters.append(
-                FilterItem(
-                    field="biz_date",
-                    op="=",
-                    value=f"{int(year):04d}-{int(month):02d}-{int(day):02d}",
-                )
-            )
-        elif iso_day_match:
-            filters.append(FilterItem(field="biz_date", op="=", value=iso_day_match.group(1)))
-        elif month_match:
-            year, month = month_match.groups()
-            month_end = calendar.monthrange(int(year), int(month))[1]
-            filters.append(
-                FilterItem(
-                    field="biz_month",
-                    op="between",
-                    value=[
-                        f"{int(year):04d}-{int(month):02d}-01",
-                        f"{int(year):04d}-{int(month):02d}-{month_end:02d}",
-                    ],
-                )
-            )
-
+        filters = self.semantic_runtime.extract_time_filters(question)
         filters.extend(self.semantic_runtime.extract_filters(question))
 
         return filters
 
-    def _extract_time_context(self, question: str) -> TimeContext:
-        day_match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", question)
-        month_match = re.search(r"(\d{4})年(\d{1,2})月(?!\d)", question)
-        iso_day_match = re.search(r"(\d{4}-\d{2}-\d{2})", question)
-
-        if day_match:
-            year, month, day = day_match.groups()
-            value = f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-            return TimeContext(grain="day", range=TimeRange(start=value, end=value))
-
-        if iso_day_match:
-            value = iso_day_match.group(1)
-            return TimeContext(grain="day", range=TimeRange(start=value, end=value))
-
-        if month_match:
-            year, month = month_match.groups()
-            month_end = calendar.monthrange(int(year), int(month))[1]
-            return TimeContext(
-                grain="month",
-                range=TimeRange(
-                    start=f"{int(year):04d}-{int(month):02d}-01",
-                    end=f"{int(year):04d}-{int(month):02d}-{month_end:02d}",
-                ),
-            )
-
-        return TimeContext(grain="unknown", range=TimeRange())
+    def _extract_time_context(self, question: str):
+        return self.semantic_runtime.extract_time_context(question)

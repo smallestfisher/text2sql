@@ -23,13 +23,16 @@ class SessionService:
     def get_session(self, session_id: str) -> ChatSession | None:
         return self.repository.get_session(session_id)
 
+    def list_sessions(self, user_id: str | None = None, limit: int = 50) -> list[ChatSession]:
+        return self.repository.list_sessions_by_user(user_id=user_id, limit=limit)
+
     def history(self, session_id: str) -> list[ChatMessage]:
         return self.repository.list_messages(session_id)
 
     def append_user_message(self, session_id: str, content: str, trace_id: str | None = None) -> ChatMessage:
         session = self.repository.get_session(session_id)
         if session is not None and not session.title:
-            session.title = content[:40]
+            self.repository.ensure_title(session_id, content[:40])
         return self.repository.append_message(
             ChatMessage(
                 id=f"msg_{uuid.uuid4().hex[:12]}",
@@ -57,8 +60,11 @@ class SessionService:
             return None
         return session.last_state
 
-    def update_state(self, session_id: str, session_state: SessionState) -> None:
-        self.repository.update_state(session_id, session_state)
+    def update_state(self, session_id: str, session_state: SessionState, trace_id: str | None = None) -> None:
+        self.repository.update_state(session_id, session_state, trace_id=trace_id)
+
+    def update_status(self, session_id: str, status: str) -> None:
+        self.repository.update_status(session_id, status)
 
     def ensure_access(self, session: ChatSession, user_context: UserContext | None) -> None:
         if user_context is None or session.user_id is None:

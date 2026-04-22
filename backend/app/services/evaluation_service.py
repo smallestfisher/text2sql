@@ -3,15 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import uuid
+from collections import Counter
 
-from backend.app.config import EVAL_CASES_PATH, EVAL_RUNS_PATH
+from backend.app.config import EVAL_CASES_PATH
 from backend.app.models.api import PlanRequest
 from backend.app.models.evaluation import (
     EvaluationCase,
     EvaluationCaseCollection,
+    EvaluationDimensionSummary,
     EvaluationResultItem,
     EvaluationRunRecord,
     EvaluationRunRequest,
+    EvaluationSummary,
 )
 
 
@@ -20,17 +23,14 @@ class EvaluationService:
         self,
         orchestrator,
         eval_cases_path: Path = EVAL_CASES_PATH,
-        eval_runs_path: Path = EVAL_RUNS_PATH,
+        evaluation_run_repository=None,
     ) -> None:
         self.orchestrator = orchestrator
         self.eval_cases_path = eval_cases_path
-        self.eval_runs_path = eval_runs_path
+        self.evaluation_run_repository = evaluation_run_repository
         self.eval_cases_path.parent.mkdir(parents=True, exist_ok=True)
-        self.eval_runs_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.eval_cases_path.exists():
             self.eval_cases_path.write_text('[]\n', encoding='utf-8')
-        if not self.eval_runs_path.exists():
-            self.eval_runs_path.write_text('[]\n', encoding='utf-8')
 
     def list_cases(self) -> EvaluationCaseCollection:
         cases = self._load_cases()
@@ -46,7 +46,45 @@ class EvaluationService:
         return case
 
     def list_runs(self) -> list[EvaluationRunRecord]:
-        return self._load_runs()
+        if self.evaluation_run_repository is not None:
+            return self.evaluation_run_repository.list_runs()
+        return []
+
+    def summarize_runs(self, limit: int = 50) -> EvaluationSummary:
+        runs = self.list_runs()[:limit]
+        by_domain: dict[str, Counter[str]] = {}
+        by_question_type: dict[str, Counter[str]] = {}
+        by_answer_status: dict[str, Counter[str]] = {}
+
+        case_count = 0
+        passed_count = 0
+        failed_count = 0
+        for run in runs:
+            case_count += run.case_count
+            passed_count += run.passed_count
+            failed_count += run.failed_count
+            for item in run.items:
+                self._accumulate_dimension(by_domain, item.classification_domain or "unknown", item.passed)
+                self._accumulate_dimension(
+                    by_question_type,
+                    item.classification_question_type or "unknown",
+                    item.passed,
+                )
+                self._accumulate_dimension(
+                    by_answer_status,
+                    item.answer_status or "unknown",
+                    item.passed,
+                )
+
+        return EvaluationSummary(
+            run_count=len(runs),
+            case_count=case_count,
+            passed_count=passed_count,
+            failed_count=failed_count,
+            by_domain=self._materialize_dimension(by_domain),
+            by_question_type=self._materialize_dimension(by_question_type),
+            by_answer_status=self._materialize_dimension(by_answer_status),
+        )
 
     def run(self, request: EvaluationRunRequest) -> EvaluationRunRecord:
         cases = self._load_cases()
@@ -83,9 +121,8 @@ class EvaluationService:
             failed_count=sum(1 for item in items if not item.passed),
             items=items,
         )
-        runs = self._load_runs()
-        runs.append(run)
-        self._save_runs(runs)
+        if self.evaluation_run_repository is not None:
+            self.evaluation_run_repository.append(run)
         return run
 
     def _run_case(self, case: EvaluationCase, request: EvaluationRunRequest):
@@ -145,12 +182,33 @@ class EvaluationService:
             encoding='utf-8',
         )
 
-    def _load_runs(self) -> list[EvaluationRunRecord]:
-        payload = json.loads(self.eval_runs_path.read_text(encoding='utf-8'))
-        return [EvaluationRunRecord(**item) for item in payload]
+    def _accumulate_dimension(
+        self,
+        bucket: dict[str, Counter[str]],
+        key: str,
+        passed: bool,
+    ) -> None:
+        counter = bucket.setdefault(key, Counter())
+        counter["total"] += 1
+        if passed:
+            counter["passed"] += 1
+        else:
+            counter["failed"] += 1
 
-    def _save_runs(self, runs: list[EvaluationRunRecord]) -> None:
-        self.eval_runs_path.write_text(
-            json.dumps([item.model_dump(mode='json') for item in runs], ensure_ascii=False, indent=2) + "\n",
-            encoding='utf-8',
-        )
+    def _materialize_dimension(
+        self,
+        bucket: dict[str, Counter[str]],
+    ) -> list[EvaluationDimensionSummary]:
+        return [
+            EvaluationDimensionSummary(
+                key=key,
+                total=counter.get("total", 0),
+                passed=counter.get("passed", 0),
+                failed=counter.get("failed", 0),
+            )
+            for key, counter in sorted(
+                bucket.items(),
+                key=lambda item: (item[1].get("total", 0), item[0]),
+                reverse=True,
+            )
+        ]

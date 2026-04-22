@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from backend.app.models.api import ExecutionResponse
 from backend.app.models.auth import UserContext
 from backend.app.models.query_plan import FilterItem, QueryPlan
 from backend.app.services.policy_engine import PolicyEngine
@@ -55,6 +56,63 @@ class PermissionService:
             if filter_item.field not in fields:
                 fields.append(filter_item.field)
         return fields
+
+    def apply_to_execution(
+        self,
+        execution: ExecutionResponse | None,
+        user_context: UserContext | None,
+    ) -> ExecutionResponse | None:
+        if execution is None or user_context is None or not execution.columns:
+            return execution
+        visibility_map = {
+            item.field_name: item.mode
+            for item in user_context.field_visibility
+        }
+        if not visibility_map:
+            return execution
+
+        hidden_columns = {
+            column
+            for column in execution.columns
+            if visibility_map.get(column) == "hidden"
+        }
+        masked_columns = {
+            column
+            for column in execution.columns
+            if visibility_map.get(column) == "masked"
+        }
+        if not hidden_columns and not masked_columns:
+            return execution
+
+        filtered_columns = [column for column in execution.columns if column not in hidden_columns]
+        filtered_rows: list[dict] = []
+        for row in execution.rows:
+            next_row: dict = {}
+            for column in filtered_columns:
+                value = row.get(column)
+                if column in masked_columns and value is not None:
+                    next_row[column] = "***"
+                else:
+                    next_row[column] = value
+            filtered_rows.append(next_row)
+
+        warnings = list(execution.warnings)
+        if hidden_columns:
+            warnings.append(
+                "hidden sensitive fields removed from result: " + ", ".join(sorted(hidden_columns))
+            )
+        if masked_columns:
+            warnings.append(
+                "masked sensitive fields in result: " + ", ".join(sorted(masked_columns))
+            )
+
+        return execution.model_copy(
+            update={
+                "columns": filtered_columns,
+                "rows": filtered_rows,
+                "warnings": warnings,
+            }
+        )
 
     def _filter_key(self, filter_item: FilterItem) -> str:
         return f"{filter_item.field}:{filter_item.op}"

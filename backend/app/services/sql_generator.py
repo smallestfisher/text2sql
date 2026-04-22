@@ -58,7 +58,7 @@ class SqlGenerator:
 
     def _metric_selects(self, source_name: str, metrics: list[str]) -> list[str]:
         return [
-            f"SUM({self._resolve_field(source_name, self._metric_column(metric))}) AS {metric}"
+            f"{self._metric_aggregate(metric)}({self._resolve_field(source_name, self._metric_column(metric))}) AS {metric}"
             for metric in metrics
         ]
 
@@ -66,6 +66,11 @@ class SqlGenerator:
         if self.semantic_runtime is None:
             return metric
         return self.semantic_runtime.metric_column(metric)
+
+    def _metric_aggregate(self, metric: str) -> str:
+        if self.semantic_runtime is None:
+            return "SUM"
+        return self.semantic_runtime.metric_aggregate_function(metric)
 
     def _where_clauses(self, source_name: str, filters: list[FilterItem]) -> list[str]:
         return [self._render_filter(filter_item, source_name) for filter_item in filters]

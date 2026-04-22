@@ -37,12 +37,30 @@ class AnswerBuilder:
             )
 
         if execution is not None and execution.executed:
+            if execution.status == "empty_result":
+                return AnswerPayload(
+                    status="ok",
+                    summary="查询已执行，但没有返回结果。",
+                    detail="可以调整时间范围、过滤条件或统计口径后再试。",
+                )
+            if execution.status == "truncated":
+                return AnswerPayload(
+                    status="ok",
+                    summary=f"查询已执行，当前返回前 {execution.row_count} 行结果。",
+                    detail="结果集过大，系统已自动截断返回。",
+                )
             return AnswerPayload(
                 status="ok",
                 summary=f"查询已执行，返回 {execution.row_count} 行结果。",
             )
 
         if execution is not None and execution.errors:
+            if execution.status == "timeout":
+                return AnswerPayload(
+                    status="error",
+                    summary="查询执行超时。",
+                    detail="请缩小时间范围、过滤条件或降低结果粒度后重试。",
+                )
             return AnswerPayload(
                 status="error",
                 summary="查询已生成，但数据库执行失败。",

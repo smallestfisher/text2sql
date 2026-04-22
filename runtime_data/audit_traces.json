@@ -1,1 +1,126 @@
-[]
+[
+  {
+    "trace_id": "trace_832b64a89020",
+    "created_at": "2026-04-22T05:59:57.738681",
+    "steps": [
+      {
+        "name": "load_session",
+        "status": "completed",
+        "detail": "session state resolved",
+        "metadata": {}
+      },
+      {
+        "name": "plan",
+        "status": "completed",
+        "detail": "new",
+        "metadata": {}
+      },
+      {
+        "name": "retrieve",
+        "status": "completed",
+        "detail": "4 hits",
+        "metadata": {
+          "channels": [
+            "structured",
+            "keyword",
+            "vector"
+          ],
+          "hit_count_by_source": {
+            "example": 2,
+            "semantic_view": 1,
+            "metric": 1
+          },
+          "top_hits": [
+            {
+              "source_type": "example",
+              "source_id": "inventory_daily_001",
+              "score": 2.681331,
+              "matched_features": [
+                "metrics:inventory_qty",
+                "domain:inventory",
+                "lexical:2026,查询",
+                "keyword:4.727",
+                "vector:0.282"
+              ]
+            },
+            {
+              "source_type": "example",
+              "source_id": "inventory_follow_up_001",
+              "score": 2.2742979500000002,
+              "matched_features": [
+                "metrics:inventory_qty",
+                "filters:biz_month",
+                "time_grain:month",
+                "domain:inventory",
+                "lexical:2026",
+                "keyword:3.355"
+              ]
+            },
+            {
+              "source_type": "semantic_view",
+              "source_id": "semantic_inventory_view",
+              "score": 2.023112,
+              "matched_features": [
+                "view_rank:1",
+                "metric_fields:inventory_qty",
+                "filter_fields:biz_month",
+                "domain_tables:daily_inventory,oms_inventory",
+                "keyword:1.915",
+                "vector:0.238"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "build_query_plan_prompt",
+        "status": "completed",
+        "detail": "stub prompt built",
+        "metadata": {}
+      },
+      {
+        "name": "authorize",
+        "status": "completed",
+        "detail": "permission filters applied",
+        "metadata": {}
+      },
+      {
+        "name": "compile_plan",
+        "status": "completed",
+        "detail": "query plan compiled",
+        "metadata": {}
+      },
+      {
+        "name": "validate_plan",
+        "status": "completed",
+        "detail": null,
+        "metadata": {}
+      },
+      {
+        "name": "build_sql_prompt",
+        "status": "completed",
+        "detail": "fallback to local sql generator",
+        "metadata": {}
+      },
+      {
+        "name": "generate_sql",
+        "status": "completed",
+        "detail": null,
+        "metadata": {}
+      },
+      {
+        "name": "validate_sql",
+        "status": "completed",
+        "detail": null,
+        "metadata": {}
+      },
+      {
+        "name": "execute",
+        "status": "completed",
+        "detail": null,
+        "metadata": {}
+      }
+    ],
+    "warnings": []
+  }
+]

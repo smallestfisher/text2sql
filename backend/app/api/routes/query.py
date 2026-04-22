@@ -149,6 +149,7 @@ def execute_sql(
     if sql_errors:
         return ExecutionResponse(
             executed=False,
+            status="db_error",
             sql=request.sql if container.permission_service.can_view_sql(request.user_context) else None,
             row_count=0,
             columns=[],
@@ -156,8 +157,14 @@ def execute_sql(
             errors=sql_errors,
             warnings=sql_warnings,
             elapsed_ms=None,
+            error_category="validation",
+            truncated=False,
         )
     execution = container.sql_executor.execute(sql=request.sql, user_context=request.user_context)
+    execution = container.permission_service.apply_to_execution(
+        execution=execution,
+        user_context=request.user_context,
+    )
     execution.warnings.extend(sql_warnings)
     if not container.permission_service.can_view_sql(request.user_context):
         execution.sql = None

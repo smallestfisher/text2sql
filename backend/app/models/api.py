@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
+from typing import Literal
 
 from .answer import AnswerPayload
 from .auth import UserContext
@@ -63,8 +64,21 @@ class SqlResponse(BaseModel):
     validation: ValidationResponse
 
 
+ExecutionStatus = Literal[
+    "ok",
+    "empty_result",
+    "truncated",
+    "db_error",
+    "timeout",
+    "permission_denied",
+    "sql_missing",
+    "not_configured",
+]
+
+
 class ExecutionResponse(BaseModel):
     executed: bool
+    status: ExecutionStatus
     sql: str | None
     row_count: int
     columns: list[str]
@@ -72,6 +86,8 @@ class ExecutionResponse(BaseModel):
     errors: list[str]
     warnings: list[str]
     elapsed_ms: int | None = None
+    error_category: str | None = None
+    truncated: bool = False
 
 
 class ChatResponse(BaseModel):

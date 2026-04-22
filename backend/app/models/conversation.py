@@ -40,6 +40,11 @@ class SessionCreateResponse(BaseModel):
     session: ChatSession
 
 
+class SessionCollectionResponse(BaseModel):
+    sessions: list[ChatSession]
+    count: int
+
+
 class SessionHistoryResponse(BaseModel):
     session: ChatSession
     messages: list[ChatMessage]
@@ -48,3 +53,7 @@ class SessionHistoryResponse(BaseModel):
 class SessionStateResponse(BaseModel):
     session: ChatSession
     state: SessionState | None = None
+
+
+class SessionStatusUpdateRequest(BaseModel):
+    status: Literal["active", "archived"]

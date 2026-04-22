@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
+from typing import Any
+
+try:
+    import sqlglot
+    from sqlglot import exp
+    from sqlglot.errors import ParseError
+except Exception:  # pragma: no cover - optional dependency
+    sqlglot = None
+    exp = None
+    ParseError = Exception
 
 
 @dataclass
@@ -24,6 +34,8 @@ class SqlInspection:
     limit_value: int | None = None
     has_subquery: bool = False
     normalized_sql: str = ""
+    parser_backend: str = "regex"
+    parse_errors: list[str] = field(default_factory=list)
 
 
 class SqlAstValidator:
@@ -65,7 +77,56 @@ class SqlAstValidator:
         "HAVING",
     }
 
+    def health(self) -> dict:
+        return {
+            "backend": "sqlglot" if sqlglot is not None else "regex",
+            "sqlglot_enabled": sqlglot is not None,
+        }
+
     def inspect(self, sql: str | None) -> SqlInspection:
+        if sqlglot is not None:
+            inspection = self._inspect_with_sqlglot(sql)
+            if inspection is not None:
+                return inspection
+        return self._inspect_with_regex(sql)
+
+    def validate(self, sql: str | None) -> tuple[list[str], list[str]]:
+        if sql is None:
+            return ["sql is empty"], []
+
+        errors: list[str] = []
+        warnings: list[str] = []
+        inspection = self.inspect(sql)
+
+        errors.extend(inspection.parse_errors)
+        normalized = (sql or "").strip()
+
+        if not inspection.has_select:
+            errors.append("sql does not contain SELECT")
+        if inspection.statement_count > 1:
+            errors.append("multiple SQL statements are not allowed")
+        if re.search(r"\bGROUP\s+BY\b", normalized, re.IGNORECASE) and not any(
+            function in self.AGGREGATE_FUNCTIONS for function in inspection.functions
+        ):
+            warnings.append("GROUP BY exists without recognized aggregate function")
+        for join in inspection.joins:
+            if not join.has_condition:
+                warnings.append(f"JOIN on {join.source} does not include ON/USING condition")
+        if inspection.has_subquery:
+            warnings.append("sql contains subquery; review semantic explainability carefully")
+
+        unsupported = sorted(
+            function
+            for function in inspection.functions
+            if function not in self.AGGREGATE_FUNCTIONS
+            and function not in self.NON_FUNCTION_TOKENS
+        )
+        if unsupported:
+            warnings.append(f"sql contains unclassified functions: {', '.join(unsupported)}")
+
+        return errors, warnings
+
+    def _inspect_with_regex(self, sql: str | None) -> SqlInspection:
         normalized = (sql or "").strip()
         statements = [item.strip() for item in re.split(r";\s*", normalized) if item.strip()]
         lowered = normalized.lower()
@@ -87,40 +148,68 @@ class SqlAstValidator:
             limit_value=int(limit_match.group(1)) if limit_match else None,
             has_subquery=re.search(r"\(\s*SELECT\b", normalized, re.IGNORECASE) is not None,
             normalized_sql=lowered,
+            parser_backend="regex",
         )
 
-    def validate(self, sql: str | None) -> tuple[list[str], list[str]]:
-        if sql is None:
-            return ["sql is empty"], []
+    def _inspect_with_sqlglot(self, sql: str | None) -> SqlInspection | None:
+        normalized = (sql or "").strip()
+        if not normalized:
+            return SqlInspection(statement_count=0, normalized_sql="", parser_backend="sqlglot")
+        try:
+            statements = sqlglot.parse(normalized, read="mysql")
+        except ParseError as exc:
+            return SqlInspection(
+                statement_count=1,
+                normalized_sql=normalized.lower(),
+                parser_backend="sqlglot",
+                parse_errors=[f"sql parse error: {exc}"],
+            )
+        if not statements:
+            return SqlInspection(statement_count=0, normalized_sql="", parser_backend="sqlglot")
 
-        errors: list[str] = []
-        warnings: list[str] = []
-        inspection = self.inspect(sql)
-
-        if not inspection.has_select:
-            errors.append("sql does not contain SELECT")
-        if inspection.statement_count > 1:
-            errors.append("multiple SQL statements are not allowed")
-        if re.search(r"\bGROUP\s+BY\b", sql, re.IGNORECASE) and re.search(
-            r"\bSUM\b|\bCOUNT\b|\bAVG\b|\bMIN\b|\bMAX\b", sql, re.IGNORECASE
-        ) is None:
-            warnings.append("GROUP BY exists without recognized aggregate function")
-        for join in inspection.joins:
-            if not join.has_condition:
-                warnings.append(f"JOIN on {join.source} does not include ON/USING condition")
-        if inspection.has_subquery:
-            warnings.append("sql contains subquery; review semantic explainability carefully")
-
-        unsupported = sorted(
-            function
-            for function in inspection.functions
-            if function not in self.AGGREGATE_FUNCTIONS
-            and function not in self.NON_FUNCTION_TOKENS
+        root = statements[0]
+        sources = self._unique_strings(
+            [
+                table.name
+                for table in root.find_all(exp.Table)
+                if getattr(table, "name", None)
+            ]
         )
-        if unsupported:
-            warnings.append(f"sql contains unclassified functions: {', '.join(unsupported)}")
+        functions = self._unique_strings(
+            [
+                self._function_name(node)
+                for node in root.find_all(exp.Func)
+                if self._function_name(node)
+            ]
+        )
+        referenced_fields = self._unique_strings(
+            [
+                column.name
+                for column in root.find_all(exp.Column)
+                if getattr(column, "name", None)
+            ]
+        )
+        where_clause = ""
+        where_node = root.find(exp.Where)
+        if where_node is not None:
+            where_clause = where_node.this.sql(dialect="mysql")
+        limit_node = root.find(exp.Limit)
 
-        return errors, warnings
+        return SqlInspection(
+            statement_count=len(statements),
+            sources=sources,
+            joins=self._extract_sqlglot_joins(root),
+            functions=functions,
+            referenced_fields=referenced_fields,
+            has_select=root.find(exp.Select) is not None or isinstance(root, exp.Select),
+            has_where=bool(where_clause),
+            where_clause=where_clause,
+            has_limit=limit_node is not None,
+            limit_value=self._extract_limit_value(limit_node),
+            has_subquery=any(True for _ in root.find_all(exp.Subquery)),
+            normalized_sql=root.sql(dialect="mysql").lower(),
+            parser_backend="sqlglot",
+        )
 
     def _extract_where_clause(self, sql: str) -> str:
         match = re.search(
@@ -179,3 +268,55 @@ class SqlAstValidator:
             seen.add(candidate)
             referenced.append(candidate)
         return referenced
+
+    def _extract_sqlglot_joins(self, root: Any) -> list[JoinInspection]:
+        joins: list[JoinInspection] = []
+        for join in root.find_all(exp.Join):
+            source = ""
+            if isinstance(join.this, exp.Table):
+                source = join.this.name
+            elif hasattr(join.this, "alias_or_name"):
+                source = join.this.alias_or_name
+            elif join.this is not None:
+                source = join.this.sql(dialect="mysql")
+            joins.append(
+                JoinInspection(
+                    source=source,
+                    has_condition=join.args.get("on") is not None or join.args.get("using") is not None,
+                )
+            )
+        return joins
+
+    def _extract_limit_value(self, limit_node: Any) -> int | None:
+        if limit_node is None:
+            return None
+        expression = getattr(limit_node, "expression", None)
+        if expression is not None:
+            value = getattr(expression, "this", None)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+        match = re.search(r"\bLIMIT\s+(\d+)", limit_node.sql(dialect="mysql"), re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return None
+
+    def _function_name(self, node: Any) -> str:
+        if hasattr(node, "sql_name") and callable(node.sql_name):
+            name = node.sql_name()
+            if name:
+                return str(name).upper()
+        if hasattr(node, "key") and node.key:
+            return str(node.key).upper()
+        return ""
+
+    def _unique_strings(self, items: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result

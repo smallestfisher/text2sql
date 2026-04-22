@@ -12,8 +12,22 @@ class AuditService:
     def new_trace(self) -> TraceRecord:
         return TraceRecord(trace_id=f"trace_{uuid.uuid4().hex[:12]}")
 
-    def append_step(self, trace: TraceRecord, name: str, status: str, detail: str | None = None) -> None:
-        trace.steps.append(TraceStep(name=name, status=status, detail=detail))
+    def append_step(
+        self,
+        trace: TraceRecord,
+        name: str,
+        status: str,
+        detail: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        trace.steps.append(
+            TraceStep(
+                name=name,
+                status=status,
+                detail=detail,
+                metadata=metadata or {},
+            )
+        )
 
     def finalize(self, trace: TraceRecord, warnings: list[str] | None = None) -> TraceRecord:
         if warnings:

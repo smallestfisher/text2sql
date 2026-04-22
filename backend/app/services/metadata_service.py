@@ -62,6 +62,39 @@ class MetadataService:
             count=len(examples),
         )
 
+    def bulk_upsert_examples(
+        self,
+        payloads: list[dict | ExampleRecord],
+        retrieval_service: RetrievalService,
+        replace_existing: bool = False,
+    ) -> ExampleCollectionResponse:
+        incoming = [retrieval_service.validate_example(item) for item in payloads]
+        incoming_ids = [item.id for item in incoming]
+        if len(set(incoming_ids)) != len(incoming_ids):
+            raise ValueError("example ids must be unique within the bulk payload")
+
+        if replace_existing:
+            merged = incoming
+        else:
+            existing = {
+                item.id: item
+                for item in (
+                    retrieval_service.validate_example(item)
+                    for item in self.metadata_repository.read("examples_template")
+                )
+            }
+            for item in incoming:
+                existing[item.id] = item
+            merged = list(existing.values())
+
+        merged.sort(key=lambda item: item.id)
+        self.metadata_repository.write(
+            "examples_template",
+            [item.model_dump() for item in merged],
+        )
+        retrieval_service.reload()
+        return ExampleCollectionResponse(examples=merged, count=len(merged))
+
     def update_example(
         self,
         example_id: str,

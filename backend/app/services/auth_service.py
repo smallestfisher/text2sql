@@ -12,18 +12,23 @@ from backend.app.core.exceptions import PermissionDeniedError
 from backend.app.models.auth import (
     AuthUserRecord,
     BootstrapAdminRequest,
+    DataScopeUpdateRequest,
+    FieldVisibilityUpdateRequest,
     LoginRequest,
     LoginResponse,
+    FieldVisibilityPolicy,
+    PasswordChangeRequest,
+    RoleRecord,
+    RoleUpsertRequest,
     UserContext,
     UserUpsertRequest,
 )
-from backend.app.repositories.auth_repository import FileAuthRepository
 
 
 class AuthService:
     def __init__(
         self,
-        repository: FileAuthRepository,
+        repository,
         token_secret: str,
         token_ttl_seconds: int,
     ) -> None:
@@ -90,6 +95,27 @@ class AuthService:
     def list_users(self) -> list[UserContext]:
         return [self._to_user_context(item) for item in self.repository.list_users()]
 
+    def get_user(self, user_id: str) -> UserContext | None:
+        user = self.repository.get_by_user_id(user_id)
+        return None if user is None else self._to_user_context(user)
+
+    def list_roles(self) -> list[RoleRecord]:
+        return self.repository.list_roles()
+
+    def upsert_role(self, role_name: str, request: RoleUpsertRequest) -> RoleRecord:
+        existing = {item.role_name: item for item in self.repository.list_roles()}
+        created_at = (
+            existing[role_name].created_at
+            if role_name in existing
+            else datetime.utcnow()
+        )
+        role = RoleRecord(
+            role_name=role_name,
+            description=request.description,
+            created_at=created_at,
+        )
+        return self.repository.upsert_role(role)
+
     def upsert_user(self, user_id: str, request: UserUpsertRequest) -> UserContext:
         existing = self.repository.get_by_user_id(user_id)
         record = self._build_user_record(
@@ -99,6 +125,50 @@ class AuthService:
         )
         self.repository.upsert(record)
         return self._to_user_context(record)
+
+    def update_data_scope(self, user_id: str, request: DataScopeUpdateRequest) -> UserContext:
+        existing = self.repository.get_by_user_id(user_id)
+        if existing is None:
+            raise KeyError(user_id)
+        record = existing.model_copy(update={"data_scope": request.data_scope, "updated_at": datetime.utcnow()})
+        self.repository.upsert(record)
+        return self._to_user_context(record)
+
+    def update_field_visibility(
+        self,
+        user_id: str,
+        request: FieldVisibilityUpdateRequest,
+    ) -> UserContext:
+        existing = self.repository.get_by_user_id(user_id)
+        if existing is None:
+            raise KeyError(user_id)
+        normalized = self._normalize_field_visibility(request.field_visibility)
+        record = existing.model_copy(
+            update={
+                "field_visibility": normalized,
+                "updated_at": datetime.utcnow(),
+            }
+        )
+        self.repository.upsert(record)
+        return self._to_user_context(record)
+
+    def change_password(
+        self,
+        current_user: UserContext,
+        request: PasswordChangeRequest,
+    ) -> None:
+        existing = self.repository.get_by_user_id(current_user.user_id)
+        if existing is None or not existing.is_active:
+            raise PermissionDeniedError("user is not available")
+        if not self._verify_password(request.current_password, existing.password_hash):
+            raise PermissionDeniedError("current password is incorrect")
+        updated = existing.model_copy(
+            update={
+                "password_hash": self._hash_password(request.new_password),
+                "updated_at": datetime.utcnow(),
+            }
+        )
+        self.repository.upsert(updated)
 
     def _build_user_record(
         self,
@@ -118,6 +188,7 @@ class AuthService:
             password_hash=password_hash,
             roles=request.roles or (existing.roles if existing is not None else ["viewer"]),
             data_scope=request.data_scope,
+            field_visibility=self._normalize_field_visibility(request.field_visibility),
             can_view_sql=request.can_view_sql,
             can_execute_sql=request.can_execute_sql,
             is_active=request.is_active,
@@ -131,9 +202,24 @@ class AuthService:
             username=user.username,
             roles=user.roles,
             data_scope=user.data_scope,
+            field_visibility=user.field_visibility,
             can_view_sql=user.can_view_sql,
             can_execute_sql=user.can_execute_sql,
         )
+
+    def _normalize_field_visibility(
+        self,
+        policies: list[FieldVisibilityPolicy],
+    ) -> list[FieldVisibilityPolicy]:
+        deduplicated: dict[str, FieldVisibilityPolicy] = {}
+        for item in policies:
+            if not item.field_name.strip():
+                continue
+            deduplicated[item.field_name.strip()] = FieldVisibilityPolicy(
+                field_name=item.field_name.strip(),
+                mode=item.mode,
+            )
+        return [deduplicated[key] for key in sorted(deduplicated)]
 
     def _hash_password(self, password: str) -> str:
         salt = secrets.token_hex(16)

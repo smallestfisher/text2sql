@@ -5,6 +5,8 @@ from typing import Any
 from backend.app.models.classification import QuestionClassification, SemanticParse
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.session_state import SessionState
+from backend.app.services.llm_client import LLMClient
+from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_classifier import QuestionClassifier
 from backend.app.services.semantic_parser import SemanticParser
 from backend.app.services.semantic_runtime import SemanticRuntime
@@ -15,22 +17,30 @@ class QueryPlanner:
         self,
         semantic_layer: dict[str, Any],
         semantic_runtime: SemanticRuntime | None = None,
+        llm_client: LLMClient | None = None,
+        prompt_builder: PromptBuilder | None = None,
+        classification_llm_enabled: bool = False,
     ) -> None:
         self.semantic_layer = semantic_layer
         self.semantic_runtime = semantic_runtime or SemanticRuntime(semantic_layer)
         self.parser = SemanticParser(semantic_layer, semantic_runtime=self.semantic_runtime)
-        self.classifier = QuestionClassifier(semantic_runtime=self.semantic_runtime)
-        self.metric_to_tables = self._build_metric_table_index()
+        self.classifier = QuestionClassifier(
+            semantic_runtime=self.semantic_runtime,
+            llm_client=llm_client,
+            prompt_builder=prompt_builder,
+            classification_llm_enabled=classification_llm_enabled,
+        )
 
     def classify(
         self, question: str, session_state: SessionState | None = None
     ) -> tuple[SemanticParse, QuestionClassification, list[str]]:
         semantic_parse = self.parser.parse(question=question, session_state=session_state)
-        classification = self.classifier.classify(
+        classification, classifier_warnings = self.classifier.classify(
+            question=question,
             semantic_parse=semantic_parse,
             session_state=session_state,
         )
-        warnings: list[str] = []
+        warnings: list[str] = list(classifier_warnings)
         if classification.need_clarification:
             warnings.append("clarification required before stable SQL generation")
         return semantic_parse, classification, warnings
@@ -92,16 +102,20 @@ class QueryPlanner:
             context_delta=classification.context_delta,
             need_clarification=classification.need_clarification,
             clarification_question=classification.clarification_question,
+            reason_code=classification.reason_code,
             sort=[],
-            limit=200,
+            limit=self.semantic_runtime.default_limit(classification.subject_domain),
             reason=classification.reason,
         )
-        plan = self.semantic_runtime.apply_domain_constraints(plan)
+        plan = self.semantic_runtime.sanitize_query_plan(plan)
         if plan.need_clarification:
             classification.question_type = "clarification_needed"
             classification.need_clarification = True
             classification.reason = plan.reason
+            classification.reason_code = plan.reason_code
             classification.clarification_question = plan.clarification_question
+            if "clarification required before stable SQL generation" not in warnings:
+                warnings.append("clarification required before stable SQL generation")
         if classification.question_type == "invalid":
             plan.tables = []
             plan.semantic_views = []
@@ -109,14 +123,6 @@ class QueryPlanner:
             plan.dimensions = []
             plan.filters = []
         return semantic_parse, classification, plan, warnings
-
-    def _build_metric_table_index(self) -> dict[str, list[str]]:
-        mapping: dict[str, list[str]] = {}
-        for metric in self.semantic_layer.get("metrics", []):
-            mapping[metric["name"]] = [
-                definition["table"] for definition in metric.get("definitions", [])
-            ]
-        return mapping
 
     def _pick_semantic_views(
         self,
@@ -135,19 +141,7 @@ class QueryPlanner:
         )
 
     def _pick_tables(self, subject_domain: str, matched_metrics: list[str]) -> list[str]:
-        if matched_metrics:
-            ordered_tables: list[str] = []
-            for metric in matched_metrics:
-                for table in self.metric_to_tables.get(metric, []):
-                    if table not in ordered_tables:
-                        ordered_tables.append(table)
-            if ordered_tables:
-                return ordered_tables
-
-        for domain in self.semantic_layer.get("domains", []):
-            if domain["name"] == subject_domain:
-                return domain.get("tables", [])
-        return []
+        return self.semantic_runtime.resolve_tables_for_plan(subject_domain, matched_metrics)
 
     def _infer_dimensions(self, subject_domain: str, matched_entities: list[str], filters, time_context) -> list[str]:
         filter_fields = {item.field for item in filters}

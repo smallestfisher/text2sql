@@ -33,18 +33,13 @@ class PolicyEngine:
             return PolicyDecision(allow_execute=True, allow_view_sql=True)
 
         filters: list[FilterItem] = []
-        if user_context.data_scope.factories:
-            field = self._scope_field(query_plan, "factories", "factory")
+        for scope_name, fallback_field in self._scope_definitions().items():
+            scope_values = list(getattr(user_context.data_scope, scope_name, []))
+            if not scope_values:
+                continue
+            field = self._scope_field(query_plan, scope_name, fallback_field)
             if field:
-                filters.append(FilterItem(field=field, op="in", value=user_context.data_scope.factories))
-        if user_context.data_scope.customers:
-            field = self._scope_field(query_plan, "customers", "customer")
-            if field:
-                filters.append(FilterItem(field=field, op="in", value=user_context.data_scope.customers))
-        if user_context.data_scope.products:
-            field = self._scope_field(query_plan, "products", "product_ID")
-            if field:
-                filters.append(FilterItem(field=field, op="in", value=user_context.data_scope.products))
+                filters.append(FilterItem(field=field, op="in", value=scope_values))
 
         reasons: list[str] = []
         if not user_context.can_execute_sql:
@@ -69,3 +64,12 @@ class PolicyEngine:
             return fallback
         profile = self.semantic_runtime.query_profile(query_plan.subject_domain)
         return profile.get("permission_scope_fields", {}).get(scope_name, fallback)
+
+    def _scope_definitions(self) -> dict[str, str]:
+        return {
+            "factories": "factory",
+            "sbus": "sbu",
+            "bus": "bu",
+            "customers": "customer",
+            "products": "product_ID",
+        }

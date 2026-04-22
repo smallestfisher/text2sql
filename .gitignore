@@ -7,3 +7,5 @@ env
 .vscode/
 __pycache__/
 .codex
+frontend/node_modules/
+frontend/dist/

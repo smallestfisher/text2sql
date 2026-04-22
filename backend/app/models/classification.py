@@ -23,6 +23,7 @@ class QuestionClassification(BaseModel):
     inherit_context: bool = False
     confidence: float = 0.0
     reason: str | None = None
+    reason_code: str | None = None
     context_delta: ContextDelta = Field(default_factory=ContextDelta)
     need_clarification: bool = False
     clarification_question: str | None = None

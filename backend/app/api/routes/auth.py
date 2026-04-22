@@ -9,6 +9,7 @@ from backend.app.models.auth import (
     BootstrapAdminRequest,
     LoginRequest,
     LoginResponse,
+    PasswordChangeRequest,
     UserContext,
 )
 
@@ -52,6 +53,19 @@ def login(
 @router.get("/me", response_model=UserContext)
 def me(current_user: UserContext = Depends(get_current_user)) -> UserContext:
     return current_user
+
+
+@router.post("/change-password")
+def change_password(
+    request: PasswordChangeRequest,
+    current_user: UserContext = Depends(get_current_user),
+    container: AppContainer = Depends(get_container),
+) -> dict:
+    try:
+        container.auth_service.change_password(current_user, request)
+        return {"updated": True}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/stub-login", response_model=UserContext)

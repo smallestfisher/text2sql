@@ -49,3 +49,20 @@ class EvaluationRunRecord(BaseModel):
     passed_count: int
     failed_count: int
     items: list[EvaluationResultItem] = Field(default_factory=list)
+
+
+class EvaluationDimensionSummary(BaseModel):
+    key: str
+    total: int
+    passed: int
+    failed: int
+
+
+class EvaluationSummary(BaseModel):
+    run_count: int
+    case_count: int
+    passed_count: int
+    failed_count: int
+    by_domain: list[EvaluationDimensionSummary] = Field(default_factory=list)
+    by_question_type: list[EvaluationDimensionSummary] = Field(default_factory=list)
+    by_answer_status: list[EvaluationDimensionSummary] = Field(default_factory=list)

@@ -88,6 +88,89 @@
         "version": ["PM_VERSION"]
       }
     },
+    "classification": {
+      "rules": [
+        {
+          "name": "unknown_domain_follow_up",
+          "question_type": "follow_up",
+          "subject_domain": "session_subject_domain",
+          "inherit_context": true,
+          "confidence": 0.84,
+          "reason": "当前问题缺少完整主体，但明显在延续上一轮查询。",
+          "when": {
+            "session_required": true,
+            "subject_domain_in": ["unknown"],
+            "any_signals": ["has_follow_up_cue", "has_explicit_slots"]
+          }
+        },
+        {
+          "name": "same_domain_follow_up",
+          "question_type": "follow_up",
+          "subject_domain": "parse_subject_domain",
+          "inherit_context": true,
+          "confidence": 0.88,
+          "reason": "当前问题延续了上一轮主题，仅变更指标、过滤或粒度。",
+          "when": {
+            "session_required": true,
+            "subject_domain_equals_session": true,
+            "any_signals": [
+              "has_follow_up_cue",
+              "missing_metrics",
+              "new_filter_fields",
+              "reused_filter_fields",
+              "time_grain_changed",
+              "version_changed"
+            ]
+          }
+        },
+        {
+          "name": "same_domain_new_related",
+          "question_type": "new_related",
+          "subject_domain": "parse_subject_domain",
+          "inherit_context": false,
+          "confidence": 0.8,
+          "reason": "当前问题与上一轮属于同一主题域，但可独立执行。",
+          "when": {
+            "session_required": true,
+            "subject_domain_equals_session": true
+          }
+        },
+        {
+          "name": "implicit_filter_follow_up",
+          "question_type": "follow_up",
+          "subject_domain": "session_subject_domain",
+          "inherit_context": true,
+          "confidence": 0.82,
+          "reason": "当前问题只是在补充过滤、时间或版本条件，应继承上一轮主题。",
+          "when": {
+            "session_required": true,
+            "all_signals": [
+              "missing_metrics"
+            ],
+            "any_signals": [
+              "has_follow_up_cue",
+              "new_filter_fields",
+              "reused_filter_fields",
+              "time_grain_changed",
+              "version_changed"
+            ]
+          }
+        },
+        {
+          "name": "different_domain_new_unrelated",
+          "question_type": "new_unrelated",
+          "subject_domain": "parse_subject_domain",
+          "inherit_context": false,
+          "confidence": 0.9,
+          "reason": "当前问题切换到了新的业务主题域，不应继承上一轮上下文。",
+          "when": {
+            "session_required": true,
+            "subject_domain_known": true,
+            "domain_changed": true
+          }
+        }
+      ]
+    },
     "clarification_questions": {
       "unknown_request": "请补充你要查询的主题、指标和时间范围，例如库存、计划投入或实际产出。",
       "missing_metric": "请补充要查询的指标，例如库存量、计划投入量、实际产出或销售业绩。",
@@ -128,6 +211,26 @@
     "fallback_to_session": true
   },
   "extractors": {
+    "time": [
+      {
+        "name": "cn_day",
+        "type": "calendar_day",
+        "field": "biz_date",
+        "pattern": "(\\d{4})年(\\d{1,2})月(\\d{1,2})日"
+      },
+      {
+        "name": "iso_day",
+        "type": "iso_day",
+        "field": "biz_date",
+        "pattern": "(\\d{4}-\\d{2}-\\d{2})"
+      },
+      {
+        "name": "cn_month",
+        "type": "calendar_month",
+        "field": "biz_month",
+        "pattern": "(\\d{4})年(\\d{1,2})月(?!\\d)"
+      }
+    ],
     "filters": [
       {
         "name": "factory_keyword",
@@ -204,6 +307,7 @@
       "name": "inventory_qty",
       "aliases": ["库存", "库存量", "库存数量"],
       "semantic_column": "inventory_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "daily_inventory",
@@ -221,6 +325,7 @@
       "name": "plan_input_qty",
       "aliases": ["计划投入", "投入量", "计划投入量"],
       "semantic_column": "plan_input_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "daily_PLAN",
@@ -238,6 +343,7 @@
       "name": "actual_output_qty",
       "aliases": ["实际产出", "产出量"],
       "semantic_column": "actual_output_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "production_actuals",
@@ -250,6 +356,7 @@
       "name": "actual_input_qty",
       "aliases": ["实际投入", "实际投产"],
       "semantic_column": "actual_input_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "production_actuals",
@@ -262,6 +369,7 @@
       "name": "demand_qty",
       "aliases": ["需求", "需求量", "V版需求", "P版需求"],
       "semantic_column": "demand_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "v_demand",
@@ -279,6 +387,7 @@
       "name": "sales_qty",
       "aliases": ["销售业绩", "销售量"],
       "semantic_column": "sales_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "sales_financial_perf",
@@ -291,6 +400,7 @@
       "name": "financial_qty",
       "aliases": ["财务业绩", "财务量"],
       "semantic_column": "financial_qty",
+      "aggregate_function": "SUM",
       "definitions": [
         {
           "table": "sales_financial_perf",
@@ -303,8 +413,14 @@
   "query_profiles": {
     "inventory": {
       "default_semantic_views": ["semantic_inventory_view"],
+      "default_limit": 200,
+      "max_limit": 200,
       "time_filter_fields": ["biz_date", "biz_month"],
       "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
       "default_sort": [
         {
           "field": "biz_date",
@@ -348,6 +464,7 @@
           "entities": ["factory"],
           "exclude_entities": ["factory_code", "erp_factory"],
           "exclude_filter_fields": ["factory_code", "ERP_FACTORY"],
+          "reason_code": "inventory_factory_ambiguous",
           "question_type": "clarification_needed",
           "reason": "库存域中的工厂语义不明确。",
           "clarification_question": "库存查询请明确使用 factory_code 还是 ERP_FACTORY。"
@@ -358,8 +475,14 @@
     },
     "plan_actual": {
       "default_semantic_views": ["semantic_plan_actual_view"],
+      "default_limit": 200,
+      "max_limit": 200,
       "time_filter_fields": ["biz_date", "biz_month"],
       "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
       "default_sort": [
         {
           "field": "biz_date",
@@ -393,9 +516,15 @@
     },
     "demand": {
       "default_semantic_views": ["semantic_demand_perf_view", "semantic_demand_unpivot_view"],
+      "default_limit": 200,
+      "max_limit": 200,
       "version_field": "PM_VERSION",
       "time_filter_fields": ["biz_month"],
       "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
       "default_sort": [
         {
           "field": "biz_month",
@@ -430,9 +559,15 @@
     },
     "sales_financial": {
       "default_semantic_views": ["semantic_demand_perf_view"],
+      "default_limit": 200,
+      "max_limit": 200,
       "version_field": "PM_VERSION",
       "time_filter_fields": ["biz_month"],
       "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
       "default_sort": [
         {
           "field": "biz_month",

@@ -9,6 +9,7 @@ class TraceStep(BaseModel):
     name: str
     status: str
     detail: str | None = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class TraceRecord(BaseModel):
