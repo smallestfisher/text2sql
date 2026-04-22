@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import time
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError, TimeoutError
 
 from backend.app.models.api import ExecutionResponse
@@ -180,6 +181,35 @@ class DatabaseConnector:
         with self.engine.begin() as connection:
             result = connection.execute(text(sql), params or {})
             return int(result.rowcount or 0)
+
+    def ensure_database_exists(self) -> dict:
+        if not self.database_url:
+            return {"executed": False, "error": "database connector is not configured"}
+
+        target_url = make_url(self.database_url)
+        target_database = target_url.database
+        if not target_database:
+            return {"executed": False, "error": "target database name is missing"}
+
+        admin_engine = create_engine(
+            target_url.set(database=None),
+            pool_pre_ping=True,
+            future=True,
+        )
+        try:
+            with admin_engine.begin() as connection:
+                escaped_database = target_database.replace("`", "``")
+                connection.execute(
+                    text(
+                        f"CREATE DATABASE IF NOT EXISTS `{escaped_database}` "
+                        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+                )
+            return {"executed": True, "database": target_database}
+        except SQLAlchemyError as exc:
+            return {"executed": False, "error": str(exc), "database": target_database}
+        finally:
+            admin_engine.dispose()
 
     @contextmanager
     def begin(self):

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from pydantic import BaseModel
+from sqlalchemy.engine import make_url
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -28,24 +29,41 @@ def load_env_file() -> None:
 load_env_file()
 
 
+def _raw_business_database_url() -> str | None:
+    return (
+        os.getenv("BUSINESS_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("DB_URI")
+    )
+
+
+def _resolve_runtime_database_url() -> str | None:
+    explicit_runtime_url = (
+        os.getenv("RUNTIME_DATABASE_URL")
+        or os.getenv("AUTH_DATABASE_URL")
+        or os.getenv("RUNTIME_DB_URI")
+    )
+    if explicit_runtime_url:
+        return explicit_runtime_url
+
+    business_database_url = _raw_business_database_url()
+    if not business_database_url:
+        return None
+
+    runtime_database_name = os.getenv("RUNTIME_DATABASE_NAME", "manager").strip() or "manager"
+    return make_url(business_database_url).set(database=runtime_database_name).render_as_string(
+        hide_password=False
+    )
+
+
 class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Text2SQL Backend")
     app_version: str = os.getenv("APP_VERSION", "0.3.0")
     app_env: str = os.getenv("APP_ENV", "dev")
     enable_docs: bool = os.getenv("ENABLE_DOCS", "true").lower() == "true"
-    business_database_url: str | None = (
-        os.getenv("BUSINESS_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("DB_URI")
-    )
-    runtime_database_url: str | None = (
-        os.getenv("RUNTIME_DATABASE_URL")
-        or os.getenv("AUTH_DATABASE_URL")
-        or os.getenv("RUNTIME_DB_URI")
-        or os.getenv("BUSINESS_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("DB_URI")
-    )
+    business_database_url: str | None = _raw_business_database_url()
+    runtime_database_url: str | None = _resolve_runtime_database_url()
+    runtime_database_name: str = os.getenv("RUNTIME_DATABASE_NAME", "manager")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_api_base: str | None = os.getenv("OPENAI_API_BASE")
     openai_model: str = os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL", "stub")

@@ -517,19 +517,6 @@ function App() {
             onQuestionChange={setQuestion}
             onSend={() => void handleChatSubmit()}
             onArchiveToggle={(session) => void handleArchiveToggle(session)}
-            currentResponse={currentResponse}
-            queryLogs={queryLogs}
-            sessionSnapshots={sessionSnapshots}
-            selectedTrace={selectedTrace}
-            selectedTraceRetrieval={selectedTraceRetrieval}
-            selectedTraceSqlAudit={selectedTraceSqlAudit}
-            onSelectTrace={(traceId) => void loadTraceBundle(traceId)}
-            inspectorTab={inspectorTab}
-            onInspectorTabChange={setInspectorTab}
-            feedbackComment={feedbackComment}
-            onFeedbackCommentChange={setFeedbackComment}
-            onFeedback={handleFeedback}
-            canViewSql={canViewSql}
             canExecuteSql={canExecuteSql}
             pending={chatPending || sessionPending}
             error={workspaceError}
@@ -639,35 +626,10 @@ function WorkspaceView(props: {
   onQuestionChange: (value: string) => void;
   onSend: () => void;
   onArchiveToggle: (session: ChatSession) => void;
-  currentResponse: ChatResponse | null;
-  queryLogs: RuntimeQueryLogRecord[];
-  sessionSnapshots: SessionSnapshotRecord[];
-  selectedTrace: TraceRecord | null;
-  selectedTraceRetrieval: RuntimeRetrievalLogRecord[];
-  selectedTraceSqlAudit: RuntimeSqlAuditRecord | null;
-  onSelectTrace: (traceId: string) => void;
-  inspectorTab: InspectorTab;
-  onInspectorTabChange: (tab: InspectorTab) => void;
-  feedbackComment: string;
-  onFeedbackCommentChange: (value: string) => void;
-  onFeedback: (type: "correct" | "incorrect" | "clarification" | "other") => void;
-  canViewSql: boolean;
   canExecuteSql: boolean;
   pending: boolean;
   error: string;
 }) {
-  const tabs: Array<{ value: InspectorTab; label: string }> = props.canViewSql
-    ? [
-        { value: "result", label: "结果" },
-        { value: "sql", label: "SQL" },
-        { value: "trace", label: "链路" },
-        { value: "state", label: "状态" },
-      ]
-    : [
-        { value: "result", label: "结果" },
-        { value: "trace", label: "链路" },
-        { value: "state", label: "状态" },
-      ];
   const activeSession = props.session;
 
   return (
@@ -696,13 +658,17 @@ function WorkspaceView(props: {
                 <span>{formatDateTime(message.created_at)}</span>
               </div>
               <div className="message-content">{message.content}</div>
-              {message.trace_id ? (
-                <button className="inline-link" onClick={() => props.onSelectTrace(message.trace_id || "")}>
-                  打开链路
-                </button>
-              ) : null}
             </article>
           ))}
+          {props.pending ? (
+            <article className="message-card message-status">
+              <div className="message-row">
+                <strong>系统</strong>
+                <span>处理中</span>
+              </div>
+              <div className="message-content">正在分析问题并生成查询结果，请稍等。</div>
+            </article>
+          ) : null}
           {!props.messages.length ? <div className="empty-line">发送第一个问题后，这里会保留完整对话历史。</div> : null}
         </div>
 
@@ -717,7 +683,11 @@ function WorkspaceView(props: {
           />
           <div className="composer-footer">
             <div className="composer-note">
-              {props.canExecuteSql ? "支持多轮追问、补充问题和上下文延续。" : "当前账号只能查看历史，不能执行 SQL。"}
+              {props.pending
+                ? "请求已提交，正在处理。"
+                : props.canExecuteSql
+                  ? "支持多轮追问、补充问题和上下文延续。"
+                  : "当前账号只能查看历史，不能执行 SQL。"}
             </div>
             <button className="button primary" onClick={props.onSend} disabled={props.pending || !props.question.trim() || !props.canExecuteSql}>
               {props.pending ? "发送中..." : "发送"}
@@ -725,41 +695,6 @@ function WorkspaceView(props: {
           </div>
           {props.error ? <div className="error-inline">{props.error}</div> : null}
         </div>
-      </section>
-
-      <section className="panel inspector-panel">
-        <div className="tab-bar">
-          {tabs.map((tab) => (
-            <button
-              key={tab.value}
-              className={props.inspectorTab === tab.value ? "tab-button is-active" : "tab-button"}
-              onClick={() => props.onInspectorTabChange(tab.value)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {props.inspectorTab === "result" ? (
-          <ResultTab
-            response={props.currentResponse}
-            feedbackComment={props.feedbackComment}
-            onFeedbackCommentChange={props.onFeedbackCommentChange}
-            onFeedback={props.onFeedback}
-          />
-        ) : null}
-
-        {props.inspectorTab === "sql" && props.canViewSql ? <SqlTab response={props.currentResponse} /> : null}
-        {props.inspectorTab === "trace" ? (
-          <TraceTab
-            queryLogs={props.queryLogs}
-            trace={props.selectedTrace}
-            retrieval={props.selectedTraceRetrieval}
-            sqlAudit={props.selectedTraceSqlAudit}
-            onSelectTrace={props.onSelectTrace}
-          />
-        ) : null}
-        {props.inspectorTab === "state" ? <StateTab snapshots={props.sessionSnapshots} response={props.currentResponse} /> : null}
       </section>
     </div>
   );

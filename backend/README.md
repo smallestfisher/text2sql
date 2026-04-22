@@ -20,13 +20,15 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 如果不存在，则读取仓库根目录的 `env`
 - 业务查询库优先读取 `BUSINESS_DATABASE_URL`
 - 运行时库优先读取 `RUNTIME_DATABASE_URL`
-- 为兼容旧配置，业务库仍兼容 `DATABASE_URL` / `DB_URI`
+- 未显式配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接自动派生并使用 `manager` 数据库
+- 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
+- 业务库仍兼容旧字段 `DATABASE_URL` / `DB_URI`
 
 运行时存储：
 
 - 登录、用户、会话、反馈、审计、评测 run 默认落到运行时数据库
 - 运行时表定义见 `sql/runtime_store.sql`
-- 如果未单独配置 `RUNTIME_DATABASE_URL`，当前会回退到业务库连接串
+- 启动时会自动执行“建库 + 建表”；默认会在同一 MySQL 实例上创建 `manager` 数据库
 
 ## Current Scope
 

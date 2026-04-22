@@ -16,5 +16,11 @@ class RuntimeStoreInitializer:
     def ensure_schema(self) -> dict:
         if not self.database_connector.connected:
             return {"executed": False, "error": "database connector is not configured"}
+        database_result = self.database_connector.ensure_database_exists()
+        if not database_result.get("executed"):
+            return database_result
         sql_script = self.schema_path.read_text(encoding="utf-8")
-        return self.database_connector.execute_script(sql_script)
+        schema_result = self.database_connector.execute_script(sql_script)
+        if schema_result.get("executed"):
+            schema_result["database"] = database_result.get("database")
+        return schema_result
