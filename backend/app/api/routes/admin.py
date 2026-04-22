@@ -205,7 +205,8 @@ def summarize_feedbacks(
 @router.get("/runtime/status")
 def runtime_status(container: AppContainer = Depends(get_container)) -> dict:
     return {
-        "database": container.sql_executor.health(),
+        "business_database": container.business_database_connector.test_connection(),
+        "runtime_database": container.runtime_database_connector.test_connection(),
         "llm": container.llm_client.health(),
         "vector_retrieval": container.vector_retriever.health(),
         "retrieval_corpus": container.retrieval_service.health(),
@@ -291,7 +292,7 @@ def get_runtime_sql_audit(
 @router.post("/database/bootstrap-semantic-views")
 def bootstrap_semantic_views(container: AppContainer = Depends(get_container)) -> dict:
     sql_script = SEMANTIC_VIEW_DRAFTS_PATH.read_text(encoding="utf-8")
-    return container.database_connector.execute_script(sql_script)
+    return container.business_database_connector.execute_script(sql_script)
 
 
 @router.get("/users", response_model=list[UserContext])

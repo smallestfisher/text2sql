@@ -1079,7 +1079,8 @@ function AdminView(props: {
           <KeyTable
             title="服务"
             rows={[
-              ["Database", stringifyObject(props.runtimeStatus?.database)],
+              ["Business DB", stringifyObject(props.runtimeStatus?.business_database)],
+              ["Runtime DB", stringifyObject(props.runtimeStatus?.runtime_database)],
               ["LLM", stringifyObject(props.runtimeStatus?.llm)],
               ["Vector", stringifyObject(props.runtimeStatus?.vector_retrieval)],
               ["SQL AST", stringifyObject(props.runtimeStatus?.sql_ast)],

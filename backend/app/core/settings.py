@@ -33,7 +33,19 @@ class Settings(BaseModel):
     app_version: str = os.getenv("APP_VERSION", "0.3.0")
     app_env: str = os.getenv("APP_ENV", "dev")
     enable_docs: bool = os.getenv("ENABLE_DOCS", "true").lower() == "true"
-    database_url: str | None = os.getenv("DATABASE_URL") or os.getenv("DB_URI")
+    business_database_url: str | None = (
+        os.getenv("BUSINESS_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("DB_URI")
+    )
+    runtime_database_url: str | None = (
+        os.getenv("RUNTIME_DATABASE_URL")
+        or os.getenv("AUTH_DATABASE_URL")
+        or os.getenv("RUNTIME_DB_URI")
+        or os.getenv("BUSINESS_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("DB_URI")
+    )
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_api_base: str | None = os.getenv("OPENAI_API_BASE")
     openai_model: str = os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL", "stub")

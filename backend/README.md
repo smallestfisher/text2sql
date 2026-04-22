@@ -18,12 +18,15 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 - 优先读取仓库根目录的 `.env`
 - 如果不存在，则读取仓库根目录的 `env`
-- 当前已兼容 `DB_URI`、`OPENAI_API_BASE`、`LLM_MODEL`
+- 业务查询库优先读取 `BUSINESS_DATABASE_URL`
+- 运行时库优先读取 `RUNTIME_DATABASE_URL`
+- 为兼容旧配置，业务库仍兼容 `DATABASE_URL` / `DB_URI`
 
 运行时存储：
 
-- 默认使用 `RUNTIME_STORAGE_MODE=file`
-- 会话、审计、反馈、评测 run、认证用户会落到仓库根目录 `runtime_data/`
+- 登录、用户、会话、反馈、审计、评测 run 默认落到运行时数据库
+- 运行时表定义见 `sql/runtime_store.sql`
+- 如果未单独配置 `RUNTIME_DATABASE_URL`，当前会回退到业务库连接串
 
 ## Current Scope
 

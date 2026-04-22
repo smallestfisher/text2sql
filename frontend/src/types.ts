@@ -344,7 +344,8 @@ export interface EvaluationSummary {
 }
 
 export interface RuntimeStatus {
-  database: Record<string, unknown>;
+  business_database: Record<string, unknown>;
+  runtime_database: Record<string, unknown>;
   llm: Record<string, unknown>;
   vector_retrieval: Record<string, unknown>;
   retrieval_corpus: Record<string, unknown>;

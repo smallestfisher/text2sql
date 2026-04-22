@@ -43,20 +43,28 @@ class AppContainer:
         self.semantic_loader = SemanticLayerLoader()
         self.semantic_layer = self.semantic_loader.load()
         self.semantic_runtime = SemanticRuntime(self.semantic_layer)
-        self.database_connector = DatabaseConnector(
-            database_url=self.settings.database_url,
+        self.business_database_connector = DatabaseConnector(
+            database_url=self.settings.business_database_url,
             timeout_seconds=self.settings.sql_timeout_seconds,
             max_result_rows=self.settings.execution_max_rows,
             slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
         )
-        self.runtime_store_initializer = RuntimeStoreInitializer(self.database_connector)
+        self.runtime_database_connector = DatabaseConnector(
+            database_url=self.settings.runtime_database_url,
+            timeout_seconds=self.settings.sql_timeout_seconds,
+            max_result_rows=self.settings.execution_max_rows,
+            slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
+        )
+        # Backward-compatible alias for business-data operations.
+        self.database_connector = self.business_database_connector
+        self.runtime_store_initializer = RuntimeStoreInitializer(self.runtime_database_connector)
         self.runtime_store_initializer.ensure_schema()
-        self.auth_repository = DbAuthRepository(self.database_connector)
-        self.session_repository = DbSessionRepository(self.database_connector)
-        self.audit_repository = DbAuditRepository(self.database_connector)
-        self.feedback_repository = DbFeedbackRepository(self.database_connector)
-        self.runtime_log_repository = DbRuntimeLogRepository(self.database_connector)
-        self.evaluation_run_repository = DbEvaluationRunRepository(self.database_connector)
+        self.auth_repository = DbAuthRepository(self.runtime_database_connector)
+        self.session_repository = DbSessionRepository(self.runtime_database_connector)
+        self.audit_repository = DbAuditRepository(self.runtime_database_connector)
+        self.feedback_repository = DbFeedbackRepository(self.runtime_database_connector)
+        self.runtime_log_repository = DbRuntimeLogRepository(self.runtime_database_connector)
+        self.evaluation_run_repository = DbEvaluationRunRepository(self.runtime_database_connector)
 
         self.prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
         self.llm_client = LLMClient(
@@ -81,7 +89,7 @@ class AppContainer:
             default_limit=self.settings.default_sql_limit,
         )
         self.session_state_service = SessionStateService()
-        self.sql_executor = SqlExecutor(database_connector=self.database_connector)
+        self.sql_executor = SqlExecutor(database_connector=self.business_database_connector)
         self.sql_generator = SqlGenerator(semantic_runtime=self.semantic_runtime)
         self.sql_ast_validator = SqlAstValidator()
         self.sql_validator = SqlValidator(
