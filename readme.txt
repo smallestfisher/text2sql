@@ -1,5 +1,5 @@
 说明：
-1. p表和v表通过fgcode和product_mapping中进行关联，mapping中的Cell、Array、CF分别是不同阶段的product_ID
+1. p表和v表通过fgcode和product_mapping中进行关联，mapping中的FGCODE、Cell、Array、CF分别是不同阶段的product_ID
 并且当存在关联关系时通常与sales_financial_perf表进行关联
 
 2. daily_inventory表，通常是通过型号去查询库存数量

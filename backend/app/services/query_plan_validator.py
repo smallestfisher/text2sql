@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from backend.app.models.query_plan import QueryPlan
+from backend.app.services.semantic_runtime import SemanticRuntime
+
+
+class QueryPlanValidator:
+    def __init__(self, semantic_runtime: SemanticRuntime | None = None) -> None:
+        self.semantic_runtime = semantic_runtime
+
+    def validate(self, query_plan: QueryPlan, semantic_layer: dict) -> tuple[list[str], list[str]]:
+        errors: list[str] = []
+        warnings: list[str] = []
+
+        domain_names = {item["name"] for item in semantic_layer.get("domains", [])}
+        metric_names = {item["name"] for item in semantic_layer.get("metrics", [])}
+        graph_nodes = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
+        semantic_views = {
+            item["name"] for item in semantic_layer.get("semantic_views", [])
+        }
+        entity_names = {item["name"] for item in semantic_layer.get("entities", [])}
+
+        if query_plan.subject_domain not in domain_names and query_plan.subject_domain != "unknown":
+            errors.append(f"unknown subject domain: {query_plan.subject_domain}")
+
+        unknown_tables = [table for table in query_plan.tables if table not in graph_nodes]
+        if unknown_tables:
+            errors.append(f"unknown tables: {', '.join(unknown_tables)}")
+
+        unknown_views = [
+            view for view in query_plan.semantic_views if view not in semantic_views
+        ]
+        if unknown_views:
+            errors.append(f"unknown semantic views: {', '.join(unknown_views)}")
+
+        unknown_metrics = [
+            metric for metric in query_plan.metrics if metric not in metric_names
+        ]
+        if unknown_metrics:
+            errors.append(f"unknown metrics: {', '.join(unknown_metrics)}")
+
+        unknown_entities = [
+            entity for entity in query_plan.entities if entity not in entity_names
+        ]
+        if unknown_entities:
+            errors.append(f"unknown entities: {', '.join(unknown_entities)}")
+
+        if not query_plan.need_clarification:
+            if not query_plan.metrics:
+                warnings.append("query plan does not include metrics")
+            if not query_plan.tables and not query_plan.semantic_views:
+                errors.append("query plan must include at least one table or semantic view")
+
+        if query_plan.need_clarification and not query_plan.clarification_question:
+            warnings.append("clarification is required but no clarification question was provided")
+
+        if self.semantic_runtime is not None and query_plan.tables and not query_plan.semantic_views:
+            expected_join_path = self.semantic_runtime.resolve_join_path(query_plan.tables)
+            if expected_join_path and not query_plan.join_path:
+                warnings.append("query plan join path is empty; semantic runtime can provide a path")
+
+        if self.semantic_runtime is not None and query_plan.semantic_views:
+            allowed_fields = self.semantic_runtime.allowed_fields_for_plan(query_plan)
+            if allowed_fields:
+                unsupported_metrics = [
+                    metric
+                    for metric in query_plan.metrics
+                    if self.semantic_runtime.metric_column(metric) not in allowed_fields
+                ]
+                if unsupported_metrics:
+                    errors.append(
+                        f"query plan metrics are not supported by selected semantic views: {', '.join(unsupported_metrics)}"
+                    )
+
+                unknown_dimensions = [
+                    field for field in query_plan.dimensions if field not in allowed_fields
+                ]
+                if unknown_dimensions:
+                    errors.append(
+                        f"query plan references unsupported dimensions: {', '.join(unknown_dimensions)}"
+                    )
+
+                unknown_filter_fields = [
+                    item.field for item in query_plan.filters if item.field not in allowed_fields
+                ]
+                if unknown_filter_fields:
+                    errors.append(
+                        "query plan references unsupported filter fields: "
+                        + ", ".join(sorted(set(unknown_filter_fields)))
+                    )
+
+                unknown_sort_fields = [
+                    item.field for item in query_plan.sort if item.field not in allowed_fields
+                ]
+                if unknown_sort_fields:
+                    errors.append(
+                        f"query plan references unsupported sort fields: {', '.join(sorted(set(unknown_sort_fields)))}"
+                    )
+
+                if (
+                    query_plan.version_context is not None
+                    and query_plan.version_context.field
+                    and query_plan.version_context.field not in allowed_fields
+                ):
+                    errors.append(
+                        f"query plan references unsupported version field: {query_plan.version_context.field}"
+                    )
+
+        if (
+            self.semantic_runtime is not None
+            and self.semantic_runtime.warn_if_missing_time_filter(query_plan.subject_domain)
+        ):
+            time_fields = set(self.semantic_runtime.time_filter_fields(query_plan.subject_domain))
+            filter_fields = {item.field for item in query_plan.filters}
+            if time_fields and not time_fields.intersection(filter_fields):
+                warnings.append("query plan does not include a time filter; this may cause wide scans")
+
+        return errors, warnings

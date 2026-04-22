@@ -1,0 +1,44 @@
+[
+  {
+    "id": "eval_inventory_001",
+    "question": "查询2026年4月 A1_CELL 的库存",
+    "session_questions": [],
+    "expected_domain": "inventory",
+    "expected_question_type": "new",
+    "expected_metrics": ["inventory_qty"],
+    "expected_status": null,
+    "notes": "库存单轮查询基准样例。"
+  },
+  {
+    "id": "eval_inventory_clarification_001",
+    "question": "查询2026年4月 CELL 工厂库存",
+    "session_questions": [],
+    "expected_domain": "inventory",
+    "expected_question_type": "clarification_needed",
+    "expected_metrics": ["inventory_qty"],
+    "expected_status": "clarification_needed",
+    "notes": "库存域的工厂语义歧义样例。"
+  },
+  {
+    "id": "eval_demand_001",
+    "question": "换成V2版本 只看客户维度的需求",
+    "session_questions": [],
+    "expected_domain": "demand",
+    "expected_question_type": "new",
+    "expected_metrics": ["demand_qty"],
+    "expected_status": null,
+    "notes": "需求域版本语义与客户维度样例。"
+  },
+  {
+    "id": "eval_inventory_follow_up_001",
+    "question": "改成2026年5月 按factory_code看",
+    "session_questions": [
+      "查询2026年4月 A1_CELL 的库存"
+    ],
+    "expected_domain": "inventory",
+    "expected_question_type": "follow_up",
+    "expected_metrics": ["inventory_qty"],
+    "expected_status": null,
+    "notes": "多轮库存追问样例。"
+  }
+]

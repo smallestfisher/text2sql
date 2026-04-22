@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import calendar
+import re
+from typing import Any
+
+from backend.app.models.classification import SemanticParse
+from backend.app.models.query_plan import FilterItem, TimeContext, TimeRange
+from backend.app.models.session_state import SessionState
+from backend.app.services.semantic_runtime import SemanticRuntime
+
+
+class SemanticParser:
+    def __init__(
+        self,
+        semantic_layer: dict[str, Any],
+        semantic_runtime: SemanticRuntime | None = None,
+    ) -> None:
+        self.semantic_layer = semantic_layer
+        self.semantic_runtime = semantic_runtime or SemanticRuntime(semantic_layer)
+        self.metric_index = self._build_metric_index()
+        self.entity_index = self._build_entity_index()
+
+    def parse(self, question: str, session_state: SessionState | None = None) -> SemanticParse:
+        normalized_question = question.strip().lower()
+        matched_metrics = self._match_aliases(normalized_question, self.metric_index)
+        matched_entities = self._match_aliases(normalized_question, self.entity_index)
+        filters = self._extract_filters(question)
+        time_context = self._extract_time_context(question)
+        version_context = self.semantic_runtime.extract_version_context(question)
+        subject_domain = self.semantic_runtime.infer_domain(
+            matched_metrics=matched_metrics,
+            matched_entities=matched_entities,
+            filters=filters,
+            session_state=session_state,
+        )
+        has_follow_up_cue = any(
+            cue.lower() in normalized_question for cue in self.semantic_runtime.follow_up_cues()
+        )
+        has_explicit_slots = bool(
+            matched_metrics or filters or time_context.grain != "unknown" or version_context is not None
+        )
+
+        return SemanticParse(
+            normalized_question=normalized_question,
+            matched_metrics=matched_metrics,
+            matched_entities=matched_entities,
+            filters=filters,
+            time_context=time_context,
+            version_context=version_context,
+            subject_domain=subject_domain,
+            has_follow_up_cue=has_follow_up_cue,
+            has_explicit_slots=has_explicit_slots,
+        )
+
+    def _build_metric_index(self) -> dict[str, str]:
+        index: dict[str, str] = {}
+        for metric in self.semantic_layer.get("metrics", []):
+            index[metric["name"].lower()] = metric["name"]
+            for alias in metric.get("aliases", []):
+                index[alias.lower()] = metric["name"]
+        return index
+
+    def _build_entity_index(self) -> dict[str, str]:
+        index: dict[str, str] = {}
+        for entity in self.semantic_layer.get("entities", []):
+            index[entity["name"].lower()] = entity["name"]
+            for alias in entity.get("aliases", []):
+                index[alias.lower()] = entity["name"]
+        return index
+
+    def _match_aliases(self, question: str, alias_index: dict[str, str]) -> list[str]:
+        matched = {
+            target_name
+            for alias, target_name in alias_index.items()
+            if alias and alias in question
+        }
+        return sorted(matched)
+
+    def _extract_filters(self, question: str) -> list[FilterItem]:
+        filters: list[FilterItem] = []
+        month_match = re.search(r"(\d{4})年(\d{1,2})月(?!\d)", question)
+        day_match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", question)
+        iso_day_match = re.search(r"(\d{4}-\d{2}-\d{2})", question)
+
+        if day_match:
+            year, month, day = day_match.groups()
+            filters.append(
+                FilterItem(
+                    field="biz_date",
+                    op="=",
+                    value=f"{int(year):04d}-{int(month):02d}-{int(day):02d}",
+                )
+            )
+        elif iso_day_match:
+            filters.append(FilterItem(field="biz_date", op="=", value=iso_day_match.group(1)))
+        elif month_match:
+            year, month = month_match.groups()
+            month_end = calendar.monthrange(int(year), int(month))[1]
+            filters.append(
+                FilterItem(
+                    field="biz_month",
+                    op="between",
+                    value=[
+                        f"{int(year):04d}-{int(month):02d}-01",
+                        f"{int(year):04d}-{int(month):02d}-{month_end:02d}",
+                    ],
+                )
+            )
+
+        filters.extend(self.semantic_runtime.extract_filters(question))
+
+        return filters
+
+    def _extract_time_context(self, question: str) -> TimeContext:
+        day_match = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", question)
+        month_match = re.search(r"(\d{4})年(\d{1,2})月(?!\d)", question)
+        iso_day_match = re.search(r"(\d{4}-\d{2}-\d{2})", question)
+
+        if day_match:
+            year, month, day = day_match.groups()
+            value = f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+            return TimeContext(grain="day", range=TimeRange(start=value, end=value))
+
+        if iso_day_match:
+            value = iso_day_match.group(1)
+            return TimeContext(grain="day", range=TimeRange(start=value, end=value))
+
+        if month_match:
+            year, month = month_match.groups()
+            month_end = calendar.monthrange(int(year), int(month))[1]
+            return TimeContext(
+                grain="month",
+                range=TimeRange(
+                    start=f"{int(year):04d}-{int(month):02d}-01",
+                    end=f"{int(year):04d}-{int(month):02d}-{month_end:02d}",
+                ),
+            )
+
+        return TimeContext(grain="unknown", range=TimeRange())

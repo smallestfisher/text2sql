@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "query_plan.schema.json",
+  "title": "QueryPlan",
+  "type": "object",
+  "required": [
+    "question_type",
+    "subject_domain",
+    "tables",
+    "metrics",
+    "dimensions",
+    "filters",
+    "time_context",
+    "inherit_context",
+    "context_delta",
+    "limit"
+  ],
+  "properties": {
+    "question_type": {
+      "type": "string",
+      "enum": ["new", "follow_up", "new_related", "new_unrelated", "invalid", "clarification_needed"]
+    },
+    "subject_domain": {
+      "type": "string",
+      "enum": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"]
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 0
+    },
+    "semantic_views": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 0
+    },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "filters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/filter"
+      }
+    },
+    "join_path": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "time_context": {
+      "$ref": "#/$defs/time_context"
+    },
+    "version_context": {
+      "$ref": "#/$defs/version_context"
+    },
+    "inherit_context": {
+      "type": "boolean"
+    },
+    "context_delta": {
+      "$ref": "#/$defs/context_delta"
+    },
+    "need_clarification": {
+      "type": "boolean",
+      "default": false
+    },
+    "clarification_question": {
+      "type": ["string", "null"]
+    },
+    "sort": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sort"
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "reason": {
+      "type": ["string", "null"]
+    }
+  },
+  "$defs": {
+    "filter": {
+      "type": "object",
+      "required": ["field", "op", "value"],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "op": {
+          "type": "string",
+          "enum": ["=", "!=", ">", ">=", "<", "<=", "between", "in", "like", "is_null", "not_null"]
+        },
+        "value": {}
+      }
+    },
+    "time_context": {
+      "type": "object",
+      "required": ["grain", "range"],
+      "properties": {
+        "grain": {
+          "type": "string",
+          "enum": ["day", "week", "month", "version", "unknown"]
+        },
+        "range": {
+          "type": ["object", "null"],
+          "properties": {
+            "start": {
+              "type": ["string", "null"]
+            },
+            "end": {
+              "type": ["string", "null"]
+            }
+          }
+        }
+      }
+    },
+    "version_context": {
+      "type": ["object", "null"],
+      "properties": {
+        "field": {
+          "type": ["string", "null"]
+        },
+        "value": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "context_delta": {
+      "type": "object",
+      "required": ["add_filters", "remove_filters", "replace_metrics", "replace_dimensions", "replace_time_context"],
+      "properties": {
+        "add_filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/filter"
+          }
+        },
+        "remove_filters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "replace_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "replace_dimensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "replace_time_context": {
+          "$ref": "#/$defs/time_context"
+        }
+      }
+    },
+    "sort": {
+      "type": "object",
+      "required": ["field", "order"],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "order": {
+          "type": "string",
+          "enum": ["asc", "desc"]
+        }
+      }
+    }
+  }
+}

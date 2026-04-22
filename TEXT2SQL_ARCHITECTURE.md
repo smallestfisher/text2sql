@@ -77,10 +77,10 @@
 来自 `readme.txt` 和结构信息，建议沉淀为可计算的语义知识，而不是散落在 prompt 中的规则文本：
 
 - `p_demand`、`v_demand` 的核心业务实体是 `FGCODE`
-- `sales_financial_perf` 与需求域共享 `FGCODE` 和客户维度
+- `sales_financial_perf` 与需求域共享 `FGCODE` 和客户维度，适合作为需求与业绩对比的结果域
 - `daily_inventory`、`oms_inventory` 的核心业务实体是 `product_ID`
-- `daily_PLAN`、`monthly_plan_approved`、`production_actuals` 共享计划/实际分析语义
-- `product_mapping` 提供 `FGCODE` 到不同生产阶段编码的桥接能力
+- `daily_PLAN`、`monthly_plan_approved`、`production_actuals` 共享计划/实际分析语义，其中前两者偏计划投入，后者同时覆盖实际投入与实际产出
+- `product_mapping` 中的 `FGCODE`、`Cell No`、`Array No`、`CF No` 都表示不同阶段的 `product_ID`，用于跨阶段桥接
 - `product_attributes` 提供产品分类语义，而不是单纯 Join 目的表
 
 ## 3.3 设计约束
@@ -440,9 +440,10 @@ RAG 负责“召回”，语义层负责“解释、补全和约束”。
 - `sales_financial_perf.FGCODE = product_mapping.FGCODE`
 - 当需要生产阶段映射时：
   - `daily_PLAN.product_ID = product_mapping.Cell No|Array No|CF No`
+  - `monthly_plan_approved.product_ID = product_mapping.Cell No|Array No|CF No`
   - `production_actuals.product_ID = product_mapping.Cell No|Array No|CF No`
 
-注意：`Cell No / Array No / CF No` 属于不同阶段编码，建议通过语义边类型区分为“直接同一实体”“阶段映射”“派生口径”三类，而不是只用一条白名单字符串表达。
+注意：`FGCODE`、`Cell No`、`Array No`、`CF No` 都是不同阶段的 `product_ID`。建议通过语义边类型区分为“成品编码”“阶段编码”“阶段映射”“派生口径”四类，而不是只用一条字符串表达。
 
 ## 7.4 面向问答的语义视图
 
@@ -453,7 +454,7 @@ RAG 负责“召回”，语义层负责“解释、补全和约束”。
 - `semantic_inventory_view`
   - 统一 `daily_inventory` 与 `oms_inventory` 的常见库存口径
 - `semantic_plan_actual_view`
-  - 统一 `daily_PLAN`、`monthly_plan_approved`、`production_actuals` 的计划/实际分析口径
+  - 统一 `daily_PLAN`、`monthly_plan_approved`、`production_actuals` 的计划投入、实际投入、实际产出分析口径
 - `semantic_demand_perf_view`
   - 统一 `v_demand`、`p_demand`、`sales_financial_perf` 的需求/业绩比较口径
 - `semantic_demand_unpivot_view`

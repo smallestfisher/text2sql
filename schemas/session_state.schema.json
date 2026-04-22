@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "session_state.schema.json",
+  "title": "SessionState",
+  "type": "object",
+  "required": [
+    "session_id",
+    "topic",
+    "subject_domain",
+    "tables",
+    "semantic_views",
+    "metrics",
+    "dimensions",
+    "filters",
+    "time_context",
+    "version_context",
+    "last_question_type",
+    "last_query_plan"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "topic": {
+      "type": ["string", "null"]
+    },
+    "subject_domain": {
+      "type": "string",
+      "enum": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"]
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "semantic_views": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "filters": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "time_context": {
+      "type": ["object", "null"]
+    },
+    "version_context": {
+      "type": ["object", "null"]
+    },
+    "last_question_type": {
+      "type": ["string", "null"],
+      "enum": ["new", "follow_up", "new_related", "new_unrelated", "invalid", "clarification_needed", null]
+    },
+    "last_query_plan": {
+      "type": ["object", "null"]
+    },
+    "last_sql": {
+      "type": ["string", "null"]
+    },
+    "last_result_shape": {
+      "type": ["string", "null"]
+    }
+  }
+}
