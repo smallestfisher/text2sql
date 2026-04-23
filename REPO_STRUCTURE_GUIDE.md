@@ -234,6 +234,69 @@ HTTP API 层，负责把外部请求接入到后端容器和服务层。
 - `backend/app/services/feedback_service.py`：用户反馈写入与查询。
 - `backend/app/services/evaluation_service.py`：评测运行与结果汇总。
 
+## Runtime Flow
+
+这一节说明程序从启动到处理一次问题请求时，主要会经过哪些步骤。
+
+### 1. Service Startup Flow
+
+后端启动时的大致顺序如下：
+
+1. `uvicorn backend.app.main:app --reload --app-dir .` 加载 `backend/app/main.py`。
+2. `create_app()` 调用 `configure_logging()`，初始化终端日志格式、`request_id` 和 `trace_id` 注入能力。
+3. FastAPI 应用实例被创建，并挂载 `RequestTraceMiddleware`。
+4. 注册全局异常处理器 `register_error_handlers()`。
+5. 挂载 `health / auth / semantic / query / sessions / chat / admin` 等路由。
+6. 第一次进入依赖 `get_container()` 时，`backend/app/core/container.py` 会初始化 `AppContainer`。
+7. `AppContainer` 启动时会加载 `semantic/semantic_layer.json`，构建 `semantic_runtime`，并初始化业务库连接、运行时库连接、LLM client、retrieval service、planner、validator、permission service、orchestrator 等核心对象。
+8. `RuntimeStoreInitializer.ensure_schema()` 会确保运行时数据库中的基础表存在。
+
+可以把这一段理解为：`main.py` 负责把 HTTP 应用启动起来，`container.py` 负责把 Text2SQL 所需的全部运行时能力装配起来。
+
+### 2. Single Chat Request Flow
+
+以 `POST /api/chat/query` 为例，一次完整问题请求的大致链路如下：
+
+1. 请求先进入 `RequestTraceMiddleware`，生成或读取 `request_id`，并开始记录请求日志。
+2. 路由函数 `backend/app/api/routes/chat.py::chat_query()` 接收 `PlanRequest`。
+3. `resolve_request_user_context()` 从请求头解析 Bearer Token，补齐 `user_context`。
+4. 路由把请求交给 `container.orchestrator.chat(request)`。
+5. `ConversationOrchestrator` 创建新的 `trace`，写入 `trace_id`，后续所有关键步骤都围绕这条 trace 展开。
+6. 如果请求带了 `session_id` 且没有显式传入 `session_state`，会先通过 `session_service` 恢复多轮上下文状态。
+7. `query_planner.create_plan()` 开始规划：
+   - 先做语义解析。
+   - 再做问题分类。
+   - 然后生成初版 Query Plan。
+8. `retrieval_service.retrieve()` 根据语义解析结果补充检索信息，命中规则、示例、语义视图或向量召回结果。
+9. `prompt_builder.build_query_plan_prompt()` 构造 Query Plan 提示词，`llm_client.generate_query_plan_hint()` 生成规划 hint。
+10. 如果 LLM hint 可接受，`query_plan_compiler.apply_llm_hint()` 会把它并入计划；否则保留本地 planner 结果。
+11. `permission_service.apply_to_query_plan()` 把当前用户的数据权限、字段权限等限制压到 Query Plan 上。
+12. `query_plan_compiler.compile()` 把计划补全成更接近执行态的结构，比如 semantic views、tables、sort、limit。
+13. `query_plan_validator.validate()` 对 Query Plan 做结构和语义校验。
+14. 如果 Query Plan 通过，`prompt_builder.build_sql_prompt()` 和 `llm_client.generate_sql_hint()` 会尝试生成 SQL hint。
+15. `sql_generator.generate()` 生成最终 SQL。
+16. `sql_validator.validate()` 对 SQL 做只读、安全和语义校验；如果 LLM SQL 不合格，会回退到本地 SQL 生成结果。
+17. SQL 校验通过后，`sql_executor.execute()` 执行查询。
+18. `permission_service.apply_to_execution()` 对结果再次做可见性控制，例如隐藏 SQL 或裁剪结果。
+19. `answer_builder.build()` 根据分类、Query Plan、执行结果、校验结果组织最终回答。
+20. `session_state_service.build_next_state()` 生成下一轮会话状态，供后续多轮追问复用。
+21. 如果请求带 `session_id`，`session_service` 会把用户消息、助手消息和最新状态写回会话存储。
+22. `audit_service.finalize()`、`runtime_log_repository.log_retrieval()`、`log_sql_audit()`、`log_query()` 会把 trace、检索、SQL、执行摘要落到运行时日志里。
+23. 最终返回 `ChatResponse`，其中包含 `classification`、`semantic_parse`、`retrieval`、`query_plan`、`sql`、`execution`、`answer`、`next_session_state` 等结构化结果。
+24. 请求退出时，middleware 和 orchestrator 分别清理 `request_id` 与 `trace_id` 上下文。
+
+### 3. Key Flow Landmarks
+
+如果后面要排查问题，通常按下面顺序看最快：
+
+1. 看终端日志中的 `request_id` / `trace_id`。
+2. 看 `chat.py` 是否正确把请求送进 `orchestrator`。
+3. 看 `orchestrator.py` 当前卡在 `plan / retrieve / compile / validate / generate_sql / execute` 哪一步。
+4. 看 `query_planner.py`、`question_classifier.py`、`semantic_runtime.py` 是否把语义理解错了。
+5. 看 `prompt_builder.py` 和 `llm_client.py` 是否把提示词或 hint 结构带偏。
+6. 看 `sql_generator.py`、`sql_validator.py`、`sql_executor.py` 是生成错、拦截错，还是数据库执行错。
+7. 最后再去看 `runtime_log_repository`、trace 详情和管理台接口中的运行记录。
+
 ## Frontend Structure
 
 前端核心代码位于 `frontend/src/`。
