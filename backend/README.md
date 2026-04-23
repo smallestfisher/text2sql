@@ -16,6 +16,11 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 配置读取：
 
+- 终端日志默认输出到 stdout
+- 日志级别通过 `LOG_LEVEL` 控制，默认 `INFO`
+- 每条日志会附带 `request_id` 与 `trace_id`，便于串联请求链路与一次 chat 编排
+
+
 - 优先读取仓库根目录的 `.env`
 - 如果不存在，则读取仓库根目录的 `env`
 - 业务查询库优先读取 `BUSINESS_DATABASE_URL`
@@ -52,6 +57,13 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 提供 token 登录、bootstrap-admin、用户与角色骨架
 - 提供基础登录鉴权、管理员接口控制、用户会话归属与反馈管理
 - 提供评测 case / replay run 骨架
+
+当前阶段说明：
+
+- 当前主要以测试数据、测试问法和待收敛规则为主，不以最终生产口径为假设前提
+- 当前更强调“架构骨架、语义对象、结构化链路、可调试性”先搭起来，而不是过早做重型落库或性能优化
+- 语义视图当前以 `draft / logical_scaffold` 方式存在，既进入 retrieval / planner 链路，也保留 SQL 草案，但不要求已经是最终数据库对象
+- 语义视图脚手架说明见 [SEMANTIC_VIEW_SCAFFOLD_PLAN.md](/home/y/llm/new/SEMANTIC_VIEW_SCAFFOLD_PLAN.md)
 
 ## API
 

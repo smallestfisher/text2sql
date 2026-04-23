@@ -18,12 +18,34 @@ class SemanticLayerLoader:
 
     def summary(self) -> dict[str, Any]:
         semantic_layer = self.load()
+        semantic_views = semantic_layer.get("semantic_views", [])
         return {
             "version": semantic_layer["version"],
             "domains": [item["name"] for item in semantic_layer.get("domains", [])],
             "entities": [item["name"] for item in semantic_layer.get("entities", [])],
             "metrics": [item["name"] for item in semantic_layer.get("metrics", [])],
-            "semantic_views": [item["name"] for item in semantic_layer.get("semantic_views", [])],
+            "semantic_views": [item["name"] for item in semantic_views],
+            "semantic_view_details": [
+                {
+                    "name": item["name"],
+                    "purpose": item.get("purpose"),
+                    "status": item.get("status", "unspecified"),
+                    "implementation_stage": item.get("implementation_stage", "unspecified"),
+                    "serves_domains": item.get("serves_domains", []),
+                    "source_tables": item.get("source_tables", []),
+                    "output_fields": item.get("output_fields", []),
+                    "design_notes": item.get("design_notes", []),
+                }
+                for item in semantic_views
+            ],
+            "semantic_view_status": {
+                item["name"]: item.get("status", "unspecified")
+                for item in semantic_views
+            },
+            "semantic_view_stage": {
+                item["name"]: item.get("implementation_stage", "unspecified")
+                for item in semantic_views
+            },
             "tables": [
                 node for node in semantic_layer.get("semantic_graph", {}).get("nodes", [])
             ],

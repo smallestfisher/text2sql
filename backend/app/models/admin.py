@@ -20,6 +20,7 @@ class MetadataOverview(BaseModel):
     semantic_version: str | None
     semantic_domains: list[str]
     semantic_views: list[str]
+    semantic_view_status: dict[str, str] = Field(default_factory=dict)
     example_count: int
     trace_count: int
 

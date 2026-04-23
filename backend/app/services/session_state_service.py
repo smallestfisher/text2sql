@@ -19,7 +19,11 @@ class SessionStateService:
         state = previous_state.model_copy(deep=True)
         state.topic = query_plan.subject_domain
         state.subject_domain = query_plan.subject_domain
-        state.entities = query_plan.entities or state.entities
+        state.entities = (
+            query_plan.context_delta.replace_entities
+            or query_plan.entities
+            or state.entities
+        )
         state.tables = query_plan.tables or state.tables
         state.semantic_views = query_plan.semantic_views or state.semantic_views
         state.metrics = (
@@ -30,17 +34,23 @@ class SessionStateService:
             or query_plan.dimensions
             or state.dimensions
         )
+        current_filters = [] if query_plan.context_delta.clear_filters else state.filters
         state.filters = self._merge_filters(
-            state.filters,
+            current_filters,
             query_plan.context_delta.add_filters,
             remove_fields=query_plan.context_delta.remove_filters,
         )
+        state.sort = query_plan.context_delta.replace_sort or query_plan.sort or state.sort
+        state.limit = query_plan.context_delta.replace_limit or query_plan.limit or state.limit
         if query_plan.context_delta.replace_time_context.grain != "unknown":
             state.time_context = query_plan.context_delta.replace_time_context
         elif query_plan.time_context.grain != "unknown":
             state.time_context = query_plan.time_context
-
-        state.version_context = query_plan.version_context or state.version_context
+        state.version_context = (
+            query_plan.context_delta.replace_version_context
+            or query_plan.version_context
+            or state.version_context
+        )
         state.last_question_type = query_plan.question_type
         state.last_query_plan = query_plan
         state.last_sql = sql
@@ -64,6 +74,8 @@ class SessionStateService:
             metrics=query_plan.metrics,
             dimensions=query_plan.dimensions,
             filters=deepcopy(query_plan.filters),
+            sort=deepcopy(query_plan.sort),
+            limit=query_plan.limit,
             time_context=query_plan.time_context,
             version_context=query_plan.version_context,
             last_question_type=query_plan.question_type,

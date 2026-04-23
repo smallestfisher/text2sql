@@ -11,10 +11,12 @@ from backend.app.api.routes.query import router as query_router
 from backend.app.api.routes.semantic import router as semantic_router
 from backend.app.api.routes.sessions import router as sessions_router
 from backend.app.core.error_handlers import register_error_handlers
+from backend.app.logging_config import configure_logging
 from backend.app.core.settings import settings
 
 
 def create_app() -> FastAPI:
+    configure_logging(settings.log_level)
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,

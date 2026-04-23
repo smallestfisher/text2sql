@@ -62,9 +62,14 @@ class VersionContext(BaseModel):
 class ContextDelta(BaseModel):
     add_filters: list[FilterItem] = Field(default_factory=list)
     remove_filters: list[str] = Field(default_factory=list)
+    clear_filters: bool = False
+    replace_entities: list[str] = Field(default_factory=list)
     replace_metrics: list[str] = Field(default_factory=list)
     replace_dimensions: list[str] = Field(default_factory=list)
+    replace_sort: list[SortItem] = Field(default_factory=list)
     replace_time_context: TimeContext = Field(default_factory=TimeContext)
+    replace_version_context: VersionContext | None = None
+    replace_limit: int | None = None
 
 
 class SortItem(BaseModel):

@@ -60,6 +60,7 @@ class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Text2SQL Backend")
     app_version: str = os.getenv("APP_VERSION", "0.3.0")
     app_env: str = os.getenv("APP_ENV", "dev")
+    log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     enable_docs: bool = os.getenv("ENABLE_DOCS", "true").lower() == "true"
     business_database_url: str | None = _raw_business_database_url()
     runtime_database_url: str | None = _resolve_runtime_database_url()

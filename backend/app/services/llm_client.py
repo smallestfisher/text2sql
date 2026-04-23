@@ -96,9 +96,10 @@ class LLMClient:
             }
 
         system_prompt = (
-            "You classify user questions in a Text2SQL conversation. "
-            "Return only compact JSON. Do not add markdown or prose. "
-            "Only choose values explicitly allowed by the prompt."
+            "You are an arbitration model for Text2SQL conversation classification. "
+            "Do not freely reclassify from scratch. Instead, arbitrate among the structured local candidates and evidence provided in the prompt. "
+            "Your job is to pick the most coherent allowed classification and, when follow-up is selected, produce a minimal executable context_delta. "
+            "Return only compact JSON. Do not add markdown or prose. Only choose values explicitly allowed by the prompt."
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         messages = [

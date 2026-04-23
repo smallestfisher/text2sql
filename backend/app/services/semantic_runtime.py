@@ -315,9 +315,11 @@ class SemanticRuntime:
         return ContextDelta(
             add_filters=semantic_parse.filters,
             remove_filters=self._unique_strings(remove_filters),
+            replace_entities=semantic_parse.matched_entities,
             replace_metrics=semantic_parse.matched_metrics,
             replace_dimensions=[],
             replace_time_context=semantic_parse.time_context,
+            replace_version_context=semantic_parse.version_context,
         )
 
     def session_semantic_diff(
@@ -325,20 +327,80 @@ class SemanticRuntime:
         semantic_parse: SemanticParse,
         session_state: SessionState | None,
     ) -> dict:
+        current_filter_fields = {item.field for item in semantic_parse.filters}
+        parsed_domain_known = semantic_parse.subject_domain != "unknown"
+        current_has_time = semantic_parse.time_context.grain != "unknown"
+        current_has_version = bool(
+            semantic_parse.version_context is not None and semantic_parse.version_context.value
+        )
         if session_state is None:
             return {
                 "has_session": False,
-                "domain_changed": semantic_parse.subject_domain != "unknown",
+                "parsed_domain_known": parsed_domain_known,
+                "domain_changed": parsed_domain_known,
                 "new_metrics": semantic_parse.matched_metrics,
                 "new_entities": semantic_parse.matched_entities,
-                "new_filter_fields": [item.field for item in semantic_parse.filters],
+                "new_filter_fields": sorted(current_filter_fields),
+                "reused_filter_fields": [],
+                "only_updates_filters": False,
+                "only_updates_time": False,
+                "only_updates_version": False,
+                "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
+                "can_execute_without_context": bool(
+                    semantic_parse.matched_metrics
+                    and (parsed_domain_known or current_has_time or current_filter_fields)
+                ),
+                "is_short_followup_fragment": False,
+                "explicit_time_or_version_slot": current_has_time or current_has_version,
+                "metric_overlap_ratio": 0.0,
+                "entity_overlap_ratio": 0.0,
+                "filter_overlap_ratio": 0.0,
+                "metrics_missing_but_context_resolvable": False,
+                "introduces_new_topic_signal": parsed_domain_known and bool(semantic_parse.matched_metrics),
             }
 
-        current_filter_fields = {item.field for item in semantic_parse.filters}
         previous_filter_fields = {item.field for item in session_state.filters}
+        previous_metrics = set(session_state.metrics)
+        previous_entities = set(session_state.entities)
+        current_metrics = set(semantic_parse.matched_metrics)
+        current_entities = set(semantic_parse.matched_entities)
+        reused_metric_count = len(current_metrics.intersection(previous_metrics))
+        reused_entity_count = len(current_entities.intersection(previous_entities))
+        reused_filter_count = len(current_filter_fields.intersection(previous_filter_fields))
+        previous_has_time = bool(session_state.time_context and session_state.time_context.grain != "unknown")
+        previous_has_version = bool(
+            session_state.version_context is not None and session_state.version_context.value
+        )
+        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_entities and not current_has_time and not current_has_version
+        only_updates_time = current_has_time and not current_metrics and not current_entities and not current_filter_fields and not current_has_version
+        only_updates_version = current_has_version and not current_metrics and not current_entities and not current_filter_fields and not current_has_time
+        can_execute_without_context = bool(
+            semantic_parse.matched_metrics
+            and (parsed_domain_known or current_has_time or current_filter_fields or current_entities)
+        )
+        metrics_missing_but_context_resolvable = bool(
+            not semantic_parse.matched_metrics
+            and session_state.metrics
+            and (current_filter_fields or current_has_time or current_has_version or semantic_parse.has_follow_up_cue)
+        )
+        introduces_new_topic_signal = bool(
+            (parsed_domain_known and semantic_parse.subject_domain != session_state.subject_domain)
+            or (current_metrics and not reused_metric_count)
+            or (current_entities and not reused_entity_count and not semantic_parse.has_follow_up_cue)
+        )
+        is_short_followup_fragment = bool(
+            len(semantic_parse.normalized_question) <= 12
+            and (
+                semantic_parse.has_follow_up_cue
+                or only_updates_filters
+                or only_updates_time
+                or only_updates_version
+            )
+        )
         return {
             "has_session": True,
-            "domain_changed": semantic_parse.subject_domain != session_state.subject_domain,
+            "parsed_domain_known": parsed_domain_known,
+            "domain_changed": parsed_domain_known and semantic_parse.subject_domain != session_state.subject_domain,
             "new_metrics": [
                 item for item in semantic_parse.matched_metrics if item not in session_state.metrics
             ],
@@ -355,16 +417,30 @@ class SemanticRuntime:
             "reused_filter_fields": sorted(current_filter_fields.intersection(previous_filter_fields)),
             "has_follow_up_cue": semantic_parse.has_follow_up_cue,
             "has_explicit_slots": semantic_parse.has_explicit_slots,
+            "only_updates_filters": only_updates_filters,
+            "only_updates_time": only_updates_time,
+            "only_updates_version": only_updates_version,
+            "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
+            "can_execute_without_context": can_execute_without_context,
+            "is_short_followup_fragment": is_short_followup_fragment,
+            "explicit_time_or_version_slot": current_has_time or current_has_version,
+            "metric_overlap_ratio": round(reused_metric_count / max(1, len(current_metrics)), 3),
+            "entity_overlap_ratio": round(reused_entity_count / max(1, len(current_entities)), 3),
+            "filter_overlap_ratio": round(reused_filter_count / max(1, len(current_filter_fields)), 3),
+            "metrics_missing_but_context_resolvable": metrics_missing_but_context_resolvable,
+            "introduces_new_topic_signal": introduces_new_topic_signal,
             "time_grain_changed": (
-                session_state.time_context is not None
-                and semantic_parse.time_context.grain != "unknown"
+                previous_has_time
+                and current_has_time
                 and semantic_parse.time_context.grain != session_state.time_context.grain
             ),
             "version_changed": bool(
-                semantic_parse.version_context is not None
+                current_has_version
                 and semantic_parse.version_context.value
                 != (session_state.version_context.value if session_state.version_context else None)
             ),
+            "time_was_implicit": previous_has_time and not current_has_time,
+            "version_was_implicit": previous_has_version and not current_has_version,
         }
 
     def infer_domain(

@@ -1,6 +1,8 @@
 -- semantic_inventory_view
 -- 统一日库存和 OMS 库存的常见查询入口。
--- 说明：当前只给出草案，具体字段口径需要结合真实库字段类型和索引继续收敛。
+-- 状态：draft
+-- 阶段：logical_scaffold
+-- 说明：当前只给出草案，主要用于沉淀统一字段契约与未来落库方向，具体字段口径需要结合真实库字段类型和索引继续收敛。
 CREATE OR REPLACE VIEW semantic_inventory_view AS
 SELECT
     'daily_inventory' AS source_table,
@@ -47,6 +49,9 @@ LEFT JOIN product_attributes pa
 
 -- semantic_plan_actual_view
 -- 统一计划投入、实际投入、实际产出的分析入口。
+-- 状态：draft
+-- 阶段：logical_scaffold
+-- 说明：当前优先统一指标命名、时间字段与输出字段契约，不把测试阶段的口径差异提前固化。
 CREATE OR REPLACE VIEW semantic_plan_actual_view AS
 SELECT
     'daily_PLAN' AS source_table,
@@ -100,6 +105,9 @@ FROM production_actuals pa2;
 
 -- semantic_demand_unpivot_view
 -- 将横表需求转换为标准月明细，便于统一需求类查询。
+-- 状态：draft
+-- 阶段：logical_scaffold
+-- 说明：当前主要作为需求域统一月明细的草案定义，后续再根据真实字段补完整展开策略。
 CREATE OR REPLACE VIEW semantic_demand_unpivot_view AS
 SELECT
     'v_demand' AS source_table,
@@ -186,6 +194,9 @@ FROM p_demand pd;
 
 -- semantic_demand_perf_view
 -- 统一需求与销售财务表现比较。
+-- 状态：draft
+-- 阶段：logical_scaffold
+-- 说明：当前优先收敛统一输出字段和 join 方向，后续再根据真实数据验证时间与客户口径对齐。
 CREATE OR REPLACE VIEW semantic_demand_perf_view AS
 SELECT
     d.source_table AS demand_source,

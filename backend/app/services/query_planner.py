@@ -58,6 +58,8 @@ class QueryPlanner:
         filters = semantic_parse.filters
         time_context = semantic_parse.time_context
         version_context = semantic_parse.version_context
+        sort = []
+        limit = self.semantic_runtime.default_limit(classification.subject_domain)
         dimensions = self._infer_dimensions(
             subject_domain=classification.subject_domain,
             matched_entities=matched_entities,
@@ -79,6 +81,8 @@ class QueryPlanner:
                 version_context = session_state.version_context
             if not dimensions:
                 dimensions = session_state.dimensions
+            sort = classification.context_delta.replace_sort or session_state.sort
+            limit = classification.context_delta.replace_limit or session_state.limit or limit
 
         plan = QueryPlan(
             question_type=classification.question_type,
@@ -103,8 +107,8 @@ class QueryPlanner:
             need_clarification=classification.need_clarification,
             clarification_question=classification.clarification_question,
             reason_code=classification.reason_code,
-            sort=[],
-            limit=self.semantic_runtime.default_limit(classification.subject_domain),
+            sort=sort,
+            limit=limit,
             reason=classification.reason,
         )
         plan = self.semantic_runtime.sanitize_query_plan(plan)

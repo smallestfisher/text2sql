@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .query_plan import FilterItem, QueryPlan, SubjectDomain, TimeContext, VersionContext
+from .query_plan import FilterItem, QueryPlan, SortItem, SubjectDomain, TimeContext, VersionContext
 
 
 class SessionState(BaseModel):
@@ -15,6 +15,8 @@ class SessionState(BaseModel):
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     filters: list[FilterItem] = Field(default_factory=list)
+    sort: list[SortItem] = Field(default_factory=list)
+    limit: int | None = None
     time_context: TimeContext | None = None
     version_context: VersionContext | None = None
     last_question_type: str | None = None

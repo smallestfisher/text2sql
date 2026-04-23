@@ -98,24 +98,27 @@
 - [query_planner.py](/home/yang/code/text2sql/backend/app/services/query_planner.py)
 - [orchestrator.py](/home/yang/code/text2sql/backend/app/services/orchestrator.py)
 
-### 3.2 问题分类器已可用，但仍偏规则驱动
+### 3.2 问题分类器已可用，已转向“语义特征分析 + LLM 仲裁”，但稳定性仍需完善
 
 当前情况：
 
 - 已基于 `semantic_parse + session_state + semantic_diff` 工作
-- 已支持 `follow_up / clarification_needed / invalid / new` 等判定
-- 已支持受限 LLM 裁决
+- 已支持 `follow_up / new_related / new_unrelated / clarification_needed / invalid / new` 等判定
+- 已从“规则短路命中”改为“候选分类打分 + 规则加权 + 受限 LLM 仲裁”
+- classification prompt 已包含候选分数、冲突信号、`context_delta` 字段说明、业务化 few-shot 与继承目标摘要
+- 已支持在 `follow_up` 场景下让 LLM 仲裁更细的 `context_delta`
 
 仍需完善：
 
-- 减少残余启发式分支
-- 提升对跨域切题/跑题问题的稳定识别
-- 细化澄清原因标签与结构化 `context_delta`
-- 让分类器更接近设计文档中的“会话状态 + 语义差分 + LLM 判定”最终形态
+- 继续减少残余启发式打分偏差，尤其是边界 case 对 follow-up 与 new_related/new_unrelated 的区分
+- 用真实模型联调验证仲裁 prompt 的稳定性，而不只停留在本地结构检查
+- 扩充分类回归样本和业务化 few-shot，使 `context_delta` 输出更稳定覆盖版本、过滤、维度、排序、limit 等变更
+- 细化澄清原因标签，并补分类阶段效果评测与失败归因
 
 代码参考：
 
 - [question_classifier.py](/home/yang/code/text2sql/backend/app/services/question_classifier.py)
+- [prompt_builder.py](/home/yang/code/text2sql/backend/app/services/prompt_builder.py)
 
 ### 3.3 SQL 治理已具骨架，但企业级约束仍不足
 

@@ -25,6 +25,18 @@ export interface SemanticSummary {
   entities: string[];
   metrics: string[];
   semantic_views: string[];
+  semantic_view_status?: Record<string, string>;
+  semantic_view_stage?: Record<string, string>;
+  semantic_view_details?: Array<{
+    name: string;
+    purpose?: string;
+    status?: string;
+    implementation_stage?: string;
+    serves_domains?: string[];
+    source_tables?: string[];
+    output_fields?: string[];
+    design_notes?: string[];
+  }>;
   tables: string[];
 }
 
@@ -73,6 +85,30 @@ export interface QueryPlan {
   sort: SortItem[];
   limit: number;
   reason?: string | null;
+}
+
+export interface QuestionClassification {
+  question_type: string;
+  subject_domain: string;
+  inherit_context: boolean;
+  confidence: number;
+  reason?: string | null;
+  reason_code?: string | null;
+  need_clarification: boolean;
+  clarification_question?: string | null;
+  context_delta?: Record<string, unknown>;
+}
+
+export interface SemanticParse {
+  normalized_question: string;
+  matched_metrics: string[];
+  matched_entities: string[];
+  filters: FilterItem[];
+  time_context: TimeContext;
+  version_context?: VersionContext | null;
+  subject_domain: string;
+  has_follow_up_cue: boolean;
+  has_explicit_slots: boolean;
 }
 
 export interface RetrievalHit {
@@ -154,6 +190,8 @@ export interface SessionState {
 }
 
 export interface ChatResponse {
+  classification: QuestionClassification;
+  semantic_parse: SemanticParse;
   retrieval?: RetrievalContext | null;
   trace?: TraceRecord | null;
   answer?: AnswerPayload | null;
@@ -251,6 +289,7 @@ export interface MetadataOverview {
   semantic_version?: string | null;
   semantic_domains: string[];
   semantic_views: string[];
+  semantic_view_status: Record<string, string>;
   example_count: number;
   trace_count: number;
 }

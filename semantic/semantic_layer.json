@@ -690,6 +690,13 @@
     {
       "name": "semantic_inventory_view",
       "purpose": "统一库存查询口径，屏蔽日库存与 OMS 库存底层差异。",
+      "status": "draft",
+      "implementation_stage": "logical_scaffold",
+      "serves_domains": ["inventory"],
+      "design_notes": [
+        "当前阶段主要作为 planner 和 retrieval 的统一分析对象，不要求已在真实数据库中落库。",
+        "真实数据接入后，需要重新核对 daily_inventory 与 oms_inventory 的字段口径、时间粒度和客户维度差异。"
+      ],
       "source_tables": ["daily_inventory", "oms_inventory", "product_attributes"],
       "output_fields": [
         "source_table",
@@ -712,6 +719,13 @@
     {
       "name": "semantic_plan_actual_view",
       "purpose": "统一计划投入、实际投入、实际产出分析口径。",
+      "status": "draft",
+      "implementation_stage": "logical_scaffold",
+      "serves_domains": ["plan_actual"],
+      "design_notes": [
+        "当前阶段主要承载统一指标命名和字段契约，复杂口径以后续真实数据联调为准。",
+        "真实落库前需要确认 daily_PLAN、monthly_plan_approved、production_actuals 的时间字段和工厂字段是否可直接对齐。"
+      ],
       "source_tables": ["daily_PLAN", "monthly_plan_approved", "production_actuals", "product_mapping", "product_attributes"],
       "output_fields": [
         "source_table",
@@ -731,6 +745,13 @@
     {
       "name": "semantic_demand_perf_view",
       "purpose": "统一需求与销售财务表现的比较分析。",
+      "status": "draft",
+      "implementation_stage": "logical_scaffold",
+      "serves_domains": ["demand", "sales_financial"],
+      "design_notes": [
+        "当前阶段优先统一 demand 与 sales/financial 的输出字段，而不是提前做重型性能优化。",
+        "真实落库前需要确认 demand_month 与 report_month 的对齐规则，以及 CUSTOMER / BU / SBU 的实际字段可用性。"
+      ],
       "source_tables": ["v_demand", "p_demand", "sales_financial_perf", "product_mapping"],
       "output_fields": [
         "demand_source",
@@ -753,6 +774,13 @@
     {
       "name": "semantic_demand_unpivot_view",
       "purpose": "将横表需求字段转换为标准月份明细。",
+      "status": "draft",
+      "implementation_stage": "logical_scaffold",
+      "serves_domains": ["demand"],
+      "design_notes": [
+        "当前阶段优先作为需求域统一明细接口的草案定义。",
+        "真实数据接入后，需要确认 REQUIREMENT_QTY / NEXT_REQUIREMENT / LAST_REQUIREMENT 以及更多月份字段的完整展开策略。"
+      ],
       "source_tables": ["v_demand", "p_demand"],
       "output_fields": [
         "source_table",

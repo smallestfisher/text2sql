@@ -30,6 +30,7 @@ class MetadataService:
             semantic_version=summary.get("version"),
             semantic_domains=summary.get("domains", []),
             semantic_views=summary.get("semantic_views", []),
+            semantic_view_status=summary.get("semantic_view_status", {}),
             example_count=len(examples),
             trace_count=len(self.audit_repository.list_records()),
         )

@@ -1410,6 +1410,26 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       )}
 
       <div className="detail-card">
+        <div className="detail-title">分类摘要</div>
+        <div className="meta-stack">
+          <MetaRow label="问题类型" value={props.latestResponse.classification.question_type || "-"} />
+          <MetaRow label="业务域" value={props.latestResponse.classification.subject_domain || "-"} />
+          <MetaRow label="继承上下文" value={String(props.latestResponse.classification.inherit_context)} />
+          <MetaRow label="原因码" value={props.latestResponse.classification.reason_code || "-"} />
+        </div>
+      </div>
+
+      <div className="detail-card">
+        <div className="detail-title">语义解析</div>
+        <div className="meta-stack">
+          <MetaRow label="命中指标" value={props.latestResponse.semantic_parse.matched_metrics.join(", ") || "-"} />
+          <MetaRow label="命中实体" value={props.latestResponse.semantic_parse.matched_entities.join(", ") || "-"} />
+          <MetaRow label="显式槽位" value={String(props.latestResponse.semantic_parse.has_explicit_slots)} />
+          <MetaRow label="续问提示词" value={String(props.latestResponse.semantic_parse.has_follow_up_cue)} />
+        </div>
+      </div>
+
+      <div className="detail-card">
         <div className="detail-title">检索摘要</div>
         <div className="meta-stack">
           <MetaRow label="规划校验" value={props.latestResponse.plan_validation.valid ? "通过" : "未通过"} />
@@ -1513,6 +1533,9 @@ function TracePanel(props: {
                 <div className="trace-step-status">{step.status}</div>
               </div>
               {step.detail ? <div className="trace-step-copy">{step.detail}</div> : null}
+              {step.metadata && Object.keys(step.metadata).length ? (
+                <pre className="json-block">{JSON.stringify(step.metadata, null, 2)}</pre>
+              ) : null}
             </div>
           ))}
         </div>

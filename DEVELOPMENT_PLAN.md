@@ -182,6 +182,8 @@
 - 需求/业绩语义视图
 - 需求横表转明细视图
 
+当前阶段的落地方式参考：[SEMANTIC_VIEW_SCAFFOLD_PLAN.md](/home/y/llm/new/SEMANTIC_VIEW_SCAFFOLD_PLAN.md)
+
 输出：
 
 - 视图定义草案
@@ -349,17 +351,20 @@
 
 - 让问题分类更接近“会话状态 + 语义差分 + LLM 判定”的架构设计
 - 降低当前分类器对启发式分支的依赖
+- 让 LLM 更像基于本地候选与结构化证据的仲裁器，而不是自由重算分类
 
 交付物：
 
 - 更完整的 classification prompt/input
 - 结构化语义差分输入
 - 更细的澄清策略与会话切换判定
+- `context_delta` 字段语义说明、业务化 few-shot、继承目标摘要与仲裁检查清单
 
 验收标准：
 
 - 能更稳定地区分 follow_up / new_related / new_unrelated / invalid
 - classification 与 planner 共享统一语义输入
+- 在 follow_up 场景下，分类结果不仅输出 `question_type`，还要尽量输出可执行的结构化 `context_delta`
 
 ### R4：持久化治理层
 
