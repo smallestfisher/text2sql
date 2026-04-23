@@ -4,6 +4,8 @@
     "question": "查询 2026 年 4 月 1 日 CELL 工厂某型号的库存量",
     "normalized_question": "按日查询某工厂某型号库存量",
     "intent": "inventory_lookup",
+    "scenario": "baseline_lookup",
+    "coverage_tags": ["inventory", "day_level", "baseline"],
     "subject_domain": "inventory",
     "question_type": "new",
     "tables": [
@@ -51,6 +53,8 @@
     "question": "查询 2026 年 4 月 CELL 工厂计划投入和实际产出对比",
     "normalized_question": "按月查询工厂计划投入与实际产出对比",
     "intent": "plan_vs_actual_compare",
+    "scenario": "compare_metrics",
+    "coverage_tags": ["plan_actual", "compare", "factory_scope"],
     "subject_domain": "plan_actual",
     "question_type": "new",
     "tables": [
@@ -102,6 +106,8 @@
     "question": "查询某月份 V 版需求与销售业绩对比",
     "normalized_question": "按月查询 V 版需求和销售业绩对比",
     "intent": "demand_vs_sales_compare",
+    "scenario": "cross_domain_compare",
+    "coverage_tags": ["demand", "sales_financial", "compare", "versioned"],
     "subject_domain": "demand",
     "question_type": "new",
     "tables": [
@@ -153,6 +159,8 @@
     "question": "改成 2026 年 5 月，按 factory_code 看",
     "normalized_question": "在继承上一轮库存指标的前提下替换时间并增加按工厂代码分组",
     "intent": "inventory_follow_up",
+    "scenario": "follow_up_time_replace",
+    "coverage_tags": ["inventory", "follow_up", "time_replace"],
     "subject_domain": "inventory",
     "question_type": "follow_up",
     "tables": [
@@ -191,6 +199,8 @@
     "question": "那改成看实际投入，按工厂拆分",
     "normalized_question": "在继承计划实际主题的前提下替换指标为实际投入并按工厂分组",
     "intent": "plan_actual_follow_up",
+    "scenario": "follow_up_metric_replace",
+    "coverage_tags": ["plan_actual", "follow_up", "metric_replace"],
     "subject_domain": "plan_actual",
     "question_type": "follow_up",
     "tables": [
@@ -219,6 +229,8 @@
     "question": "换成 V2 版本，只看客户维度",
     "normalized_question": "在继承需求主题的前提下替换版本并按客户维度查看",
     "intent": "demand_version_follow_up",
+    "scenario": "follow_up_version_replace",
+    "coverage_tags": ["demand", "follow_up", "version_replace"],
     "subject_domain": "demand",
     "question_type": "follow_up",
     "tables": [
@@ -251,5 +263,293 @@
     "sql": "SELECT customer, PM_VERSION, SUM(demand_qty) AS demand_qty FROM semantic_demand_perf_view WHERE PM_VERSION = 'V2' GROUP BY customer, PM_VERSION;",
     "result_shape": "demand_by_customer_version",
     "notes": "补充问题模板，强调版本替换和维度调整。"
+  },
+  {
+    "id": "sales_dimension_fragment_follow_up_001",
+    "question": "按客户拆分",
+    "normalized_question": "在继承销售主题和时间范围的前提下切换为客户分组",
+    "intent": "sales_dimension_fragment_follow_up",
+    "scenario": "follow_up_dimension_replace",
+    "coverage_tags": ["sales_financial", "follow_up", "dimension_fragment"],
+    "subject_domain": "sales_financial",
+    "question_type": "follow_up",
+    "tables": [
+      "sales_financial_perf"
+    ],
+    "semantic_views": [
+      "semantic_demand_perf_view"
+    ],
+    "entities": [
+      "customer"
+    ],
+    "metrics": [
+      "sales_qty"
+    ],
+    "dimensions": [
+      "customer"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-04-01",
+          "2026-04-30"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT customer, SUM(sales_qty) AS sales_qty FROM semantic_demand_perf_view WHERE biz_month BETWEEN '2026-04-01' AND '2026-04-30' GROUP BY customer;",
+    "result_shape": "sales_by_customer",
+    "notes": "补充纯维度追问模板，避免把 customer 误判成过滤条件或 demand 域切换。"
+  },
+  {
+    "id": "inventory_customer_monthly_001",
+    "question": "查询 2026 年 4 月库存量，按客户拆分",
+    "normalized_question": "按月查询库存量并按客户维度拆分",
+    "intent": "inventory_by_customer",
+    "scenario": "independent_new_related",
+    "coverage_tags": ["inventory", "month_level", "customer_dimension"],
+    "subject_domain": "inventory",
+    "question_type": "new_related",
+    "tables": [
+      "oms_inventory"
+    ],
+    "semantic_views": [
+      "semantic_inventory_view"
+    ],
+    "entities": [
+      "customer"
+    ],
+    "metrics": [
+      "inventory_qty"
+    ],
+    "dimensions": [
+      "biz_month",
+      "customer"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-04-01",
+          "2026-04-30"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT biz_month, customer, SUM(inventory_qty) AS inventory_qty FROM semantic_inventory_view WHERE biz_month BETWEEN '2026-04-01' AND '2026-04-30' GROUP BY biz_month, customer;",
+    "result_shape": "inventory_by_customer_month",
+    "notes": "同域独立可执行问句，适合区分 new_related 与 follow_up。"
+  },
+  {
+    "id": "plan_actual_factory_output_001",
+    "question": "查询 2026 年 4 月各工厂实际产出",
+    "normalized_question": "按月查询各工厂实际产出",
+    "intent": "plan_actual_output_by_factory",
+    "scenario": "independent_new_related",
+    "coverage_tags": ["plan_actual", "new_related", "factory_dimension"],
+    "subject_domain": "plan_actual",
+    "question_type": "new_related",
+    "tables": [
+      "production_actuals"
+    ],
+    "semantic_views": [
+      "semantic_plan_actual_view"
+    ],
+    "entities": [
+      "factory"
+    ],
+    "metrics": [
+      "actual_output_qty"
+    ],
+    "dimensions": [
+      "factory"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-04-01",
+          "2026-04-30"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT factory, SUM(actual_output_qty) AS actual_output_qty FROM semantic_plan_actual_view WHERE biz_month BETWEEN '2026-04-01' AND '2026-04-30' GROUP BY factory;",
+    "result_shape": "actual_output_by_factory",
+    "notes": "同域独立句式，强调无需继承上轮上下文。"
+  },
+  {
+    "id": "sales_financial_customer_001",
+    "question": "查询 2026 年 5 月财务业绩，按客户拆分",
+    "normalized_question": "按月查询财务业绩并按客户拆分",
+    "intent": "financial_by_customer",
+    "scenario": "independent_new_related",
+    "coverage_tags": ["sales_financial", "new_related", "customer_dimension"],
+    "subject_domain": "sales_financial",
+    "question_type": "new_related",
+    "tables": [
+      "sales_financial_perf"
+    ],
+    "semantic_views": [
+      "semantic_demand_perf_view"
+    ],
+    "entities": [
+      "customer"
+    ],
+    "metrics": [
+      "financial_qty"
+    ],
+    "dimensions": [
+      "biz_month",
+      "customer"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-05-01",
+          "2026-05-31"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT biz_month, customer, SUM(financial_qty) AS financial_qty FROM semantic_demand_perf_view WHERE biz_month BETWEEN '2026-05-01' AND '2026-05-31' GROUP BY biz_month, customer;",
+    "result_shape": "financial_by_customer_month",
+    "notes": "销售财务域独立问法模板。"
+  },
+  {
+    "id": "inventory_permission_factory_001",
+    "question": "查询 2026 年 4 月库存量",
+    "normalized_question": "按月查询库存量并等待权限收敛工厂范围",
+    "intent": "inventory_permission_scope",
+    "scenario": "permission_filter_injection",
+    "coverage_tags": ["inventory", "permission", "factory_scope"],
+    "subject_domain": "inventory",
+    "question_type": "new",
+    "tables": [
+      "oms_inventory"
+    ],
+    "semantic_views": [
+      "semantic_inventory_view"
+    ],
+    "entities": [],
+    "metrics": [
+      "inventory_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-04-01",
+          "2026-04-30"
+        ]
+      },
+      {
+        "field": "factory_code",
+        "op": "in",
+        "value": [
+          "<authorized_factory_code>"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT biz_month, SUM(inventory_qty) AS inventory_qty FROM semantic_inventory_view WHERE biz_month BETWEEN '2026-04-01' AND '2026-04-30' AND factory_code IN ('<authorized_factory_code>') GROUP BY biz_month;",
+    "result_shape": "inventory_metric_only_scoped",
+    "notes": "权限型模板，用于检索和回放时识别工厂范围注入。"
+  },
+  {
+    "id": "demand_missing_version_001",
+    "question": "查询 2026 年 4 月需求",
+    "normalized_question": "需求查询缺少版本语义需要澄清",
+    "intent": "demand_missing_version",
+    "scenario": "clarification_needed",
+    "coverage_tags": ["demand", "clarification", "version_required"],
+    "subject_domain": "demand",
+    "question_type": "clarification_needed",
+    "tables": [
+      "v_demand",
+      "p_demand"
+    ],
+    "semantic_views": [
+      "semantic_demand_perf_view",
+      "semantic_demand_unpivot_view"
+    ],
+    "entities": [
+      "plan_time"
+    ],
+    "metrics": [
+      "demand_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-04-01",
+          "2026-04-30"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT biz_month, SUM(demand_qty) AS demand_qty FROM semantic_demand_perf_view WHERE biz_month BETWEEN '2026-04-01' AND '2026-04-30' GROUP BY biz_month;",
+    "result_shape": "clarification_pending",
+    "notes": "澄清型模板，强调需求问题缺版本时不应直接稳定执行。"
+  },
+  {
+    "id": "sales_to_plan_unrelated_001",
+    "question": "查询 2026 年 4 月 CELL 工厂计划投入",
+    "normalized_question": "从销售主题切换到计划投入的新主题问题",
+    "intent": "cross_domain_new_unrelated",
+    "scenario": "cross_domain_new_unrelated",
+    "coverage_tags": ["sales_financial", "plan_actual", "new_unrelated"],
+    "subject_domain": "plan_actual",
+    "question_type": "new_unrelated",
+    "tables": [
+      "daily_PLAN"
+    ],
+    "semantic_views": [
+      "semantic_plan_actual_view"
+    ],
+    "entities": [
+      "factory"
+    ],
+    "metrics": [
+      "plan_input_qty"
+    ],
+    "dimensions": [
+      "biz_month",
+      "factory"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "2026-04-01",
+          "2026-04-30"
+        ]
+      },
+      {
+        "field": "factory",
+        "op": "=",
+        "value": "CELL"
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT biz_month, factory, SUM(plan_input_qty) AS plan_input_qty FROM semantic_plan_actual_view WHERE biz_month BETWEEN '2026-04-01' AND '2026-04-30' AND factory = 'CELL' GROUP BY biz_month, factory;",
+    "result_shape": "plan_input_by_factory_month",
+    "notes": "跨域新主题模板，帮助 retrieval 和分类器区分 unrelated 切换。"
   }
 ]

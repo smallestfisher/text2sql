@@ -34,6 +34,7 @@ class SemanticRuntime:
         extractors = semantic_layer.get("extractors", {})
         self.time_extractors = extractors.get("time", [])
         self.filter_extractors = extractors.get("filters", [])
+        self.dimension_extractors = extractors.get("dimensions", [])
         self.version_extractors = extractors.get("version", [])
         self.graph_nodes = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
         self.graph_edges = semantic_layer.get("semantic_graph", {}).get("edges", [])
@@ -317,7 +318,7 @@ class SemanticRuntime:
             remove_filters=self._unique_strings(remove_filters),
             replace_entities=semantic_parse.matched_entities,
             replace_metrics=semantic_parse.matched_metrics,
-            replace_dimensions=[],
+            replace_dimensions=semantic_parse.requested_dimensions,
             replace_time_context=semantic_parse.time_context,
             replace_version_context=semantic_parse.version_context,
         )
@@ -329,6 +330,7 @@ class SemanticRuntime:
     ) -> dict:
         current_filter_fields = {item.field for item in semantic_parse.filters}
         parsed_domain_known = semantic_parse.subject_domain != "unknown"
+        current_has_dimensions = bool(semantic_parse.requested_dimensions)
         current_has_time = semantic_parse.time_context.grain != "unknown"
         current_has_version = bool(
             semantic_parse.version_context is not None and semantic_parse.version_context.value
@@ -340,9 +342,11 @@ class SemanticRuntime:
                 "domain_changed": parsed_domain_known,
                 "new_metrics": semantic_parse.matched_metrics,
                 "new_entities": semantic_parse.matched_entities,
+                "requested_dimensions": semantic_parse.requested_dimensions,
                 "new_filter_fields": sorted(current_filter_fields),
                 "reused_filter_fields": [],
                 "only_updates_filters": False,
+                "only_updates_dimensions": current_has_dimensions,
                 "only_updates_time": False,
                 "only_updates_version": False,
                 "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
@@ -371,7 +375,8 @@ class SemanticRuntime:
         previous_has_version = bool(
             session_state.version_context is not None and session_state.version_context.value
         )
-        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_entities and not current_has_time and not current_has_version
+        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_has_dimensions and not current_has_time and not current_has_version
+        only_updates_dimensions = current_has_dimensions and not current_metrics and not current_filter_fields and not current_has_time and not current_has_version
         only_updates_time = current_has_time and not current_metrics and not current_entities and not current_filter_fields and not current_has_version
         only_updates_version = current_has_version and not current_metrics and not current_entities and not current_filter_fields and not current_has_time
         can_execute_without_context = bool(
@@ -381,7 +386,13 @@ class SemanticRuntime:
         metrics_missing_but_context_resolvable = bool(
             not semantic_parse.matched_metrics
             and session_state.metrics
-            and (current_filter_fields or current_has_time or current_has_version or semantic_parse.has_follow_up_cue)
+            and (
+                current_filter_fields
+                or current_has_dimensions
+                or current_has_time
+                or current_has_version
+                or semantic_parse.has_follow_up_cue
+            )
         )
         introduces_new_topic_signal = bool(
             (parsed_domain_known and semantic_parse.subject_domain != session_state.subject_domain)
@@ -393,6 +404,7 @@ class SemanticRuntime:
             and (
                 semantic_parse.has_follow_up_cue
                 or only_updates_filters
+                or only_updates_dimensions
                 or only_updates_time
                 or only_updates_version
             )
@@ -410,6 +422,7 @@ class SemanticRuntime:
             "new_entities": [
                 item for item in semantic_parse.matched_entities if item not in session_state.entities
             ],
+            "requested_dimensions": semantic_parse.requested_dimensions,
             "reused_entities": [
                 item for item in semantic_parse.matched_entities if item in session_state.entities
             ],
@@ -418,6 +431,7 @@ class SemanticRuntime:
             "has_follow_up_cue": semantic_parse.has_follow_up_cue,
             "has_explicit_slots": semantic_parse.has_explicit_slots,
             "only_updates_filters": only_updates_filters,
+            "only_updates_dimensions": only_updates_dimensions,
             "only_updates_time": only_updates_time,
             "only_updates_version": only_updates_version,
             "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
@@ -447,7 +461,9 @@ class SemanticRuntime:
         self,
         matched_metrics: list[str],
         matched_entities: list[str],
+        requested_dimensions: list[str] | None = None,
         filters: list[FilterItem] | None = None,
+        question: str | None = None,
         session_state: SessionState | None = None,
     ) -> str:
         metric_to_domain = self.domain_inference.get("metric_to_domain", {})
@@ -464,10 +480,23 @@ class SemanticRuntime:
                 continue
             hint_entities = set(hint.get("entities", []))
             hint_filter_fields = set(hint.get("filter_fields", []))
-            if hint_entities.intersection(entity_set) or hint_filter_fields.intersection(filter_fields):
+            hint_keywords = [str(item).lower() for item in hint.get("keywords", []) if item]
+            keyword_match = bool(question and any(keyword in question for keyword in hint_keywords))
+            if (
+                hint_entities.intersection(entity_set)
+                or hint_filter_fields.intersection(filter_fields)
+                or keyword_match
+            ):
                 hint_counter[domain] += int(hint.get("weight", 1))
 
         if hint_counter:
+            if (
+                session_state is not None
+                and requested_dimensions
+                and not matched_metrics
+                and not filters
+            ):
+                return session_state.subject_domain
             return hint_counter.most_common(1)[0][0]
 
         if session_state and self.domain_inference.get("fallback_to_session", True):
@@ -478,31 +507,41 @@ class SemanticRuntime:
     def suggest_dimensions(
         self,
         subject_domain: str,
+        requested_dimensions: list[str],
         matched_entities: list[str],
         filter_fields: set[str],
         time_grain: str,
     ) -> list[str]:
         profile = self.query_profiles.get(subject_domain, {})
         preferences = profile.get("dimension_preferences", [])
-        dimensions: list[str] = []
+        dimensions = self._unique_strings(requested_dimensions)
         entities = set(matched_entities)
 
         for rule in preferences:
             required_entities = set(rule.get("entities", []))
             excluded_filter_fields = set(rule.get("exclude_filter_fields", []))
             rule_time_grain = rule.get("time_grain")
+            add_dimensions = [item for item in rule.get("add_dimensions", []) if item]
 
             if required_entities and not required_entities.issubset(entities):
                 continue
             if rule_time_grain and rule_time_grain != time_grain:
                 continue
-            if excluded_filter_fields.intersection(filter_fields):
+            if excluded_filter_fields.intersection(filter_fields) and not set(add_dimensions).intersection(dimensions):
                 continue
 
-            for dimension in rule.get("add_dimensions", []):
+            for dimension in add_dimensions:
                 if dimension not in dimensions:
                     dimensions.append(dimension)
 
+        return dimensions
+
+    def extract_dimensions(self, question: str) -> list[str]:
+        dimensions: list[str] = []
+        for rule in self.dimension_extractors:
+            dimension = self._extract_dimension(question, rule)
+            if dimension and dimension not in dimensions:
+                dimensions.append(dimension)
         return dimensions
 
     def extract_filters(self, question: str) -> list[FilterItem]:
@@ -562,15 +601,21 @@ class SemanticRuntime:
         entities = set(compiled.entities)
         filter_fields = {item.field for item in compiled.filters}
         for rule in profile.get("clarification_rules", []):
+            required_metrics = set(rule.get("metrics", []))
             required_entities = set(rule.get("entities", []))
             excluded_entities = set(rule.get("exclude_entities", []))
             excluded_filter_fields = set(rule.get("exclude_filter_fields", []))
+            missing_version_context = bool(rule.get("missing_version_context", False))
 
+            if required_metrics and not required_metrics.intersection(compiled.metrics):
+                continue
             if required_entities and not required_entities.issubset(entities):
                 continue
             if excluded_entities.intersection(entities):
                 continue
             if excluded_filter_fields.intersection(filter_fields):
+                continue
+            if missing_version_context and compiled.version_context is not None:
                 continue
 
             compiled.need_clarification = True
@@ -752,6 +797,29 @@ class SemanticRuntime:
                         op=rule.get("op", "="),
                         value=candidate,
                     )
+        return None
+
+    def _extract_dimension(self, question: str, rule: dict) -> str | None:
+        field = rule.get("field")
+        if not field:
+            return None
+
+        rule_type = rule.get("type", "regex")
+        if rule_type == "regex":
+            flags = 0
+            if "ignorecase" in rule.get("flags", []):
+                flags |= re.IGNORECASE
+            source = self._prepare_text(question, rule)
+            if re.search(rule.get("pattern", ""), source, flags):
+                return field
+
+        if rule_type == "keyword":
+            source = self._prepare_text(question, rule)
+            for candidate in rule.get("candidates", []):
+                normalized_candidate = candidate.upper() if "uppercase" in rule.get("flags", []) else candidate
+                if self._contains_candidate(source, normalized_candidate):
+                    return field
+
         return None
 
     def _extract_regex_value(self, question: str, rule: dict) -> str | None:

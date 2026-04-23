@@ -42,7 +42,7 @@ class SqlInspection:
 
 class SqlAstValidator:
     AGGREGATE_FUNCTIONS = {"SUM", "COUNT", "AVG", "MIN", "MAX"}
-    NON_FUNCTION_TOKENS = {"IN"}
+    NON_FUNCTION_TOKENS = {"IN", "AND", "OR"}
     SQL_KEYWORDS = {
         "SELECT",
         "FROM",

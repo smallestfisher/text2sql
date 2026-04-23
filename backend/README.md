@@ -131,6 +131,38 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
   -d '{"question":"查询2026年4月CELL工厂计划投入量"}'
 ```
 
+## Offline Regression
+
+在没有运行时 MySQL、业务库或真实执行环境的情况下，可以直接跑离线回归，
+覆盖 `classification / query_plan / permission_filter / sql_validation` 这几层：
+
+```bash
+.venv/bin/python backend/offline_regression.py --failures-only
+```
+
+只跑指定 case：
+
+```bash
+.venv/bin/python backend/offline_regression.py \
+  --case-id eval_plan_actual_follow_up_001 \
+  --case-id eval_demand_follow_up_001
+```
+
+输出 JSON：
+
+```bash
+.venv/bin/python backend/offline_regression.py --json
+```
+
+说明：
+
+- 离线回归不会连接数据库，也不会写 runtime 审计表
+- 当前会复用 `eval/evaluation_cases.json`
+- 当前主要用于收敛分类、规划、权限注入和 SQL 校验，不用于验证真实执行结果
+- 仓库已补 `.github/workflows/offline-regression.yml`
+- `push` / `pull_request` 时会自动执行 JSON 校验、`compileall` 和离线回归
+- 这条流水线不依赖 MySQL 或业务数据连接，适合做规则层回归门禁
+
 当前还未接入：
 
 - 稳定可达的数据库网络环境

@@ -13,10 +13,19 @@ class EvaluationCase(BaseModel):
     id: str
     question: str
     session_questions: list[str] = Field(default_factory=list)
+    scenario: str | None = None
+    coverage_tags: list[str] = Field(default_factory=list)
     expected_domain: str | None = None
     expected_question_type: str | None = None
     expected_metrics: list[str] = Field(default_factory=list)
+    unexpected_metrics: list[str] = Field(default_factory=list)
+    expected_dimensions: list[str] = Field(default_factory=list)
+    expected_filter_fields: list[str] = Field(default_factory=list)
+    expected_semantic_views: list[str] = Field(default_factory=list)
     expected_status: str | None = None
+    expected_reason_code: str | None = None
+    expected_warnings_contains: list[str] = Field(default_factory=list)
+    user_context: UserContext | None = None
     notes: str | None = None
 
 
@@ -33,9 +42,18 @@ class EvaluationRunRequest(BaseModel):
 class EvaluationResultItem(BaseModel):
     case_id: str
     question: str
+    scenario: str | None = None
+    coverage_tags: list[str] = Field(default_factory=list)
+    effective_user_id: str | None = None
     classification_question_type: str | None = None
     classification_domain: str | None = None
     answer_status: str | None = None
+    actual_reason_code: str | None = None
+    actual_metrics: list[str] = Field(default_factory=list)
+    actual_dimensions: list[str] = Field(default_factory=list)
+    actual_filter_fields: list[str] = Field(default_factory=list)
+    actual_semantic_views: list[str] = Field(default_factory=list)
+    actual_warnings: list[str] = Field(default_factory=list)
     plan_valid: bool = False
     sql_valid: bool = False
     executed: bool = False

@@ -82,8 +82,11 @@ class SqlValidator:
 
             expected_dimension_fields = set(query_plan.dimensions)
             if expected_dimension_fields:
+                actual_group_by_fields = {field.lower() for field in inspection.group_by_fields}
                 missing_group_by_fields = [
-                    field for field in expected_dimension_fields if field not in inspection.group_by_fields
+                    field
+                    for field in expected_dimension_fields
+                    if field.lower() not in actual_group_by_fields
                 ]
                 if missing_group_by_fields and inspection.functions:
                     errors.append(
@@ -93,8 +96,11 @@ class SqlValidator:
 
             expected_sort_fields = [item.field for item in query_plan.sort]
             if expected_sort_fields:
+                actual_order_by_fields = {field.lower() for field in inspection.order_by_fields}
                 missing_sort_fields = [
-                    field for field in expected_sort_fields if field not in inspection.order_by_fields
+                    field
+                    for field in expected_sort_fields
+                    if field.lower() not in actual_order_by_fields
                 ]
                 if missing_sort_fields:
                     warnings.append(

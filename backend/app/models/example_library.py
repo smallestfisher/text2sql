@@ -10,6 +10,8 @@ class ExampleRecord(BaseModel):
     question: str
     normalized_question: str
     intent: str
+    scenario: str | None = None
+    coverage_tags: list[str] = Field(default_factory=list)
     subject_domain: SubjectDomain
     question_type: QuestionType
     tables: list[str] = Field(default_factory=list)

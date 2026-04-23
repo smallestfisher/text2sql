@@ -54,6 +54,12 @@ class QueryPlanValidator:
         if query_plan.need_clarification and not query_plan.clarification_question:
             warnings.append("clarification is required but no clarification question was provided")
 
+        if query_plan.question_type == "follow_up":
+            if not query_plan.inherit_context:
+                errors.append("follow-up query plan must inherit context")
+            elif not self._context_delta_has_updates(query_plan):
+                warnings.append("follow-up query plan does not include explicit context delta updates")
+
         if self.semantic_runtime is not None and query_plan.tables and not query_plan.semantic_views:
             expected_join_path = self.semantic_runtime.resolve_join_path(query_plan.tables)
             if expected_join_path and not query_plan.join_path:
@@ -115,4 +121,37 @@ class QueryPlanValidator:
             if time_fields and not time_fields.intersection(filter_fields):
                 warnings.append("query plan does not include a time filter; this may cause wide scans")
 
+        if self.semantic_runtime is not None:
+            version_field = self.semantic_runtime.query_profile(query_plan.subject_domain).get("version_field")
+            filter_fields = {item.field for item in query_plan.filters}
+            if (
+                query_plan.subject_domain == "demand"
+                and not query_plan.need_clarification
+                and "demand_qty" in query_plan.metrics
+                and version_field
+                and query_plan.version_context is None
+                and version_field not in filter_fields
+            ):
+                warnings.append(
+                    "demand query plan does not include a version filter; verify whether V/P version is required"
+                )
+
+        if len(query_plan.metrics) > 1 and not query_plan.dimensions and not query_plan.filters:
+            warnings.append("multi-metric query plan has no dimensions or filters; verify aggregation scope")
+
         return errors, warnings
+
+    def _context_delta_has_updates(self, query_plan: QueryPlan) -> bool:
+        context_delta = query_plan.context_delta
+        return bool(
+            context_delta.add_filters
+            or context_delta.remove_filters
+            or context_delta.clear_filters
+            or context_delta.replace_entities
+            or context_delta.replace_metrics
+            or context_delta.replace_dimensions
+            or context_delta.replace_sort
+            or context_delta.replace_version_context is not None
+            or context_delta.replace_limit is not None
+            or context_delta.replace_time_context.grain != "unknown"
+        )

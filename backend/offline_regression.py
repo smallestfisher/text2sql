@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backend.app.config import EVAL_CASES_PATH
+from backend.app.models.api import ValidationResponse
+from backend.app.models.evaluation import EvaluationCase
+from backend.app.models.session_state import SessionState
+from backend.app.services.answer_builder import AnswerBuilder
+from backend.app.services.permission_service import PermissionService
+from backend.app.services.policy_engine import PolicyEngine
+from backend.app.services.query_plan_compiler import QueryPlanCompiler
+from backend.app.services.query_plan_validator import QueryPlanValidator
+from backend.app.services.query_planner import QueryPlanner
+from backend.app.services.semantic_loader import SemanticLayerLoader
+from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.session_state_service import SessionStateService
+from backend.app.services.sql_generator import SqlGenerator
+from backend.app.services.sql_validator import SqlValidator
+
+
+def load_cases(path: Path) -> list[EvaluationCase]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return [EvaluationCase(**item) for item in payload]
+
+
+def build_components() -> dict[str, Any]:
+    semantic_layer = SemanticLayerLoader().load()
+    semantic_runtime = SemanticRuntime(semantic_layer)
+    return {
+        "semantic_layer": semantic_layer,
+        "semantic_runtime": semantic_runtime,
+        "query_planner": QueryPlanner(
+            semantic_layer=semantic_layer,
+            semantic_runtime=semantic_runtime,
+            classification_llm_enabled=False,
+        ),
+        "query_plan_compiler": QueryPlanCompiler(semantic_runtime=semantic_runtime),
+        "query_plan_validator": QueryPlanValidator(semantic_runtime=semantic_runtime),
+        "permission_service": PermissionService(policy_engine=PolicyEngine(semantic_runtime=semantic_runtime)),
+        "session_state_service": SessionStateService(),
+        "sql_generator": SqlGenerator(semantic_runtime=semantic_runtime),
+        "sql_validator": SqlValidator(semantic_runtime=semantic_runtime),
+        "answer_builder": AnswerBuilder(),
+    }
+
+
+def run_question(
+    question: str,
+    session_state: SessionState | None,
+    user_context,
+    components: dict[str, Any],
+) -> dict[str, Any]:
+    semantic_layer = components["semantic_layer"]
+    query_planner = components["query_planner"]
+    query_plan_compiler = components["query_plan_compiler"]
+    query_plan_validator = components["query_plan_validator"]
+    permission_service = components["permission_service"]
+    session_state_service = components["session_state_service"]
+    sql_generator = components["sql_generator"]
+    sql_validator = components["sql_validator"]
+    answer_builder = components["answer_builder"]
+
+    semantic_parse, classification, query_plan, planner_warnings = query_planner.create_plan(
+        question=question,
+        session_state=session_state,
+    )
+    query_plan, permission_warnings = permission_service.apply_to_query_plan(
+        query_plan=query_plan,
+        user_context=user_context,
+    )
+    query_plan = query_plan_compiler.compile(query_plan=query_plan, retrieval=None)
+
+    plan_errors, plan_warnings = query_plan_validator.validate(
+        query_plan=query_plan,
+        semantic_layer=semantic_layer,
+    )
+    plan_validation = ValidationResponse(
+        valid=not plan_errors,
+        errors=plan_errors,
+        warnings=planner_warnings + permission_warnings + plan_warnings,
+    )
+
+    sql = None if plan_errors else sql_generator.generate(query_plan)
+    required_filter_fields = permission_service.required_filter_fields(
+        query_plan=query_plan,
+        user_context=user_context,
+    )
+    sql_errors, sql_warnings = (
+        (["sql is empty"], [])
+        if sql is None and not plan_errors
+        else (
+            sql_validator.validate(
+                sql,
+                semantic_layer,
+                query_plan=query_plan,
+                required_filter_fields=required_filter_fields,
+            )
+            if sql is not None
+            else ([], [])
+        )
+    )
+    sql_validation = ValidationResponse(
+        valid=not sql_errors,
+        errors=sql_errors,
+        warnings=sql_warnings,
+    )
+    answer = answer_builder.build(
+        classification=classification,
+        query_plan=query_plan,
+        execution=None,
+        plan_validation=plan_validation,
+        sql_validation=sql_validation,
+    )
+    next_session_state = session_state_service.build_next_state(
+        query_plan=query_plan,
+        previous_state=session_state,
+        sql=sql,
+    )
+    return {
+        "semantic_parse": semantic_parse,
+        "classification": classification,
+        "query_plan": query_plan,
+        "sql": sql,
+        "plan_validation": plan_validation,
+        "sql_validation": sql_validation,
+        "answer": answer,
+        "next_session_state": next_session_state,
+    }
+
+
+def evaluate_case(case: EvaluationCase, result: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    classification = result["classification"]
+    query_plan = result["query_plan"]
+    answer = result["answer"]
+    plan_validation = result["plan_validation"]
+    sql_validation = result["sql_validation"]
+    actual_metrics = list(query_plan.metrics)
+    actual_dimensions = list(query_plan.dimensions)
+    actual_filter_fields = unique([item.field for item in query_plan.filters])
+    actual_semantic_views = list(query_plan.semantic_views)
+    actual_warnings = unique(plan_validation.warnings + sql_validation.warnings)
+
+    if case.expected_domain and classification.subject_domain != case.expected_domain:
+        failures.append(f"expected_domain={case.expected_domain}, actual={classification.subject_domain}")
+    if case.expected_question_type and classification.question_type != case.expected_question_type:
+        failures.append(
+            f"expected_question_type={case.expected_question_type}, actual={classification.question_type}"
+        )
+    if case.expected_status and answer.status != case.expected_status:
+        failures.append(f"expected_status={case.expected_status}, actual={answer.status}")
+    if case.expected_reason_code and classification.reason_code != case.expected_reason_code:
+        failures.append(
+            f"expected_reason_code={case.expected_reason_code}, actual={classification.reason_code}"
+        )
+    if case.expected_metrics:
+        missing_metrics = [item for item in case.expected_metrics if item not in actual_metrics]
+        if missing_metrics:
+            failures.append("missing_metrics=" + ",".join(missing_metrics))
+    if case.unexpected_metrics:
+        unexpected_metrics = [item for item in case.unexpected_metrics if item in actual_metrics]
+        if unexpected_metrics:
+            failures.append("unexpected_metrics=" + ",".join(unexpected_metrics))
+    if case.expected_dimensions:
+        missing_dimensions = [item for item in case.expected_dimensions if item not in actual_dimensions]
+        if missing_dimensions:
+            failures.append("missing_dimensions=" + ",".join(missing_dimensions))
+    if case.expected_filter_fields:
+        missing_filter_fields = [item for item in case.expected_filter_fields if item not in actual_filter_fields]
+        if missing_filter_fields:
+            failures.append("missing_filter_fields=" + ",".join(missing_filter_fields))
+    if case.expected_semantic_views:
+        missing_semantic_views = [item for item in case.expected_semantic_views if item not in actual_semantic_views]
+        if missing_semantic_views:
+            failures.append("missing_semantic_views=" + ",".join(missing_semantic_views))
+    if case.expected_warnings_contains:
+        for expected_warning in case.expected_warnings_contains:
+            if not any(expected_warning in warning for warning in actual_warnings):
+                failures.append(f"missing_warning_substring={expected_warning}")
+
+    terminal_non_sql_statuses = {"clarification_needed", "invalid"}
+    should_require_sql = answer.status not in terminal_non_sql_statuses
+    if not plan_validation.valid and should_require_sql:
+        failures.append("plan_validation_failed")
+    if not sql_validation.valid and should_require_sql:
+        failures.append("sql_validation_failed")
+    return failures
+
+
+def build_session_state(case: EvaluationCase, components: dict[str, Any]) -> SessionState | None:
+    state = None
+    for seed_question in case.session_questions:
+        result = run_question(
+            question=seed_question,
+            session_state=state,
+            user_context=case.user_context,
+            components=components,
+        )
+        state = result["next_session_state"]
+    return state
+
+
+def unique(items: list[str]) -> list[str]:
+    values: list[str] = []
+    for item in items:
+        if item not in values:
+            values.append(item)
+    return values
+
+
+def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
+    passed = sum(1 for item in results if item["passed"])
+    failed = len(results) - passed
+    by_question_type: dict[str, dict[str, int]] = {}
+    for item in results:
+        bucket = by_question_type.setdefault(item["classification_question_type"], {"total": 0, "failed": 0})
+        bucket["total"] += 1
+        if not item["passed"]:
+            bucket["failed"] += 1
+    return {
+        "case_count": len(results),
+        "passed_count": passed,
+        "failed_count": failed,
+        "by_question_type": by_question_type,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run offline Text2SQL regression without database access.")
+    parser.add_argument(
+        "--cases-path",
+        default=str(EVAL_CASES_PATH),
+        help="Path to evaluation cases JSON file.",
+    )
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case id to run. Repeatable.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Optional max number of cases to run after filtering.",
+    )
+    parser.add_argument(
+        "--failures-only",
+        action="store_true",
+        help="Print only failed cases.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON output.",
+    )
+    args = parser.parse_args()
+
+    components = build_components()
+    cases = load_cases(Path(args.cases_path))
+    if args.case_id:
+        selected = {item for item in args.case_id}
+        cases = [item for item in cases if item.id in selected]
+    if args.limit > 0:
+        cases = cases[: args.limit]
+
+    results: list[dict[str, Any]] = []
+    for case in cases:
+        session_state = build_session_state(case, components)
+        result = run_question(
+            question=case.question,
+            session_state=session_state,
+            user_context=case.user_context,
+            components=components,
+        )
+        failures = evaluate_case(case, result)
+        results.append(
+            {
+                "case_id": case.id,
+                "scenario": case.scenario,
+                "coverage_tags": case.coverage_tags,
+                "classification_question_type": result["classification"].question_type,
+                "classification_domain": result["classification"].subject_domain,
+                "answer_status": result["answer"].status,
+                "actual_reason_code": result["classification"].reason_code,
+                "actual_metrics": list(result["query_plan"].metrics),
+                "actual_dimensions": list(result["query_plan"].dimensions),
+                "actual_filter_fields": unique([item.field for item in result["query_plan"].filters]),
+                "actual_semantic_views": list(result["query_plan"].semantic_views),
+                "plan_valid": result["plan_validation"].valid,
+                "sql_valid": result["sql_validation"].valid,
+                "passed": not failures,
+                "failures": failures,
+                "warnings": unique(result["plan_validation"].warnings + result["sql_validation"].warnings),
+            }
+        )
+
+    summary = summarize(results)
+    if args.json:
+        print(json.dumps({"summary": summary, "items": results}, ensure_ascii=False, indent=2))
+        return
+
+    print(
+        f"offline regression: {summary['passed_count']}/{summary['case_count']} passed, "
+        f"{summary['failed_count']} failed"
+    )
+    for question_type, bucket in sorted(summary["by_question_type"].items()):
+        print(
+            f"- {question_type}: total={bucket['total']} failed={bucket['failed']}"
+        )
+    for item in results:
+        if args.failures_only and item["passed"]:
+            continue
+        status = "PASS" if item["passed"] else "FAIL"
+        print(
+            f"{status} {item['case_id']} "
+            f"type={item['classification_question_type']} "
+            f"domain={item['classification_domain']} "
+            f"status={item['answer_status']}"
+        )
+        if item["failures"]:
+            print("  failures:", "; ".join(item["failures"]))
+        if item["warnings"]:
+            print("  warnings:", "; ".join(item["warnings"]))
+
+
+if __name__ == "__main__":
+    main()

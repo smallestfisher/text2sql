@@ -55,6 +55,21 @@ class QuestionClassifier:
                 ),
             ), warnings
 
+        if not semantic_parse.matched_metrics and session_state is None:
+            return QuestionClassification(
+                question_type="clarification_needed",
+                subject_domain=semantic_parse.subject_domain,
+                inherit_context=False,
+                confidence=0.9,
+                reason="识别到业务域，但缺少稳定执行所需的核心指标。",
+                reason_code="missing_metric",
+                need_clarification=True,
+                clarification_question=self._clarification_message(
+                    "missing_metric",
+                    "请补充要查询的指标，例如库存量、计划投入量、实际产出或销售业绩。",
+                ),
+            ), warnings
+
         if session_state is None:
             return QuestionClassification(
                 question_type="new",
@@ -165,18 +180,31 @@ class QuestionClassifier:
             return
 
         score = 0.0
+        has_strong_follow_up_cue = self._has_strong_follow_up_cue(semantic_parse.normalized_question)
         if semantic_parse.has_follow_up_cue:
             score += 0.28
+        if has_strong_follow_up_cue:
+            score += 0.18
         if semantic_diff.get("is_short_followup_fragment"):
             score += 0.22
         if semantic_parse.has_follow_up_cue and semantic_diff.get("has_explicit_slots"):
             score += 0.1
+        if has_strong_follow_up_cue and semantic_diff.get("can_execute_without_context"):
+            score += 0.08
         if semantic_diff.get("only_updates_filters"):
             score += 0.22
+        if semantic_diff.get("only_updates_dimensions"):
+            score += 0.26
         if semantic_diff.get("only_updates_time"):
             score += 0.2
         if semantic_diff.get("only_updates_version"):
             score += 0.2
+        if has_strong_follow_up_cue and (
+            semantic_diff.get("version_changed")
+            or semantic_diff.get("time_grain_changed")
+            or semantic_diff.get("new_filter_fields")
+        ):
+            score += 0.08
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
             score += 0.24
         if semantic_parse.subject_domain == "unknown":
@@ -210,6 +238,7 @@ class QuestionClassifier:
             return
 
         score = 0.0
+        has_strong_follow_up_cue = self._has_strong_follow_up_cue(semantic_parse.normalized_question)
         if semantic_parse.subject_domain == session_state.subject_domain and semantic_parse.subject_domain != "unknown":
             score += 0.3
         if semantic_diff.get("can_execute_without_context"):
@@ -222,9 +251,16 @@ class QuestionClassifier:
             score += 0.12
         if semantic_parse.has_follow_up_cue:
             score -= 0.08
+        if has_strong_follow_up_cue:
+            score -= 0.22
         if semantic_diff.get("is_short_followup_fragment"):
             score -= 0.12
-        if semantic_diff.get("only_updates_filters") or semantic_diff.get("only_updates_time") or semantic_diff.get("only_updates_version"):
+        if (
+            semantic_diff.get("only_updates_filters")
+            or semantic_diff.get("only_updates_dimensions")
+            or semantic_diff.get("only_updates_time")
+            or semantic_diff.get("only_updates_version")
+        ):
             score -= 0.18
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
             score -= 0.2
@@ -367,6 +403,12 @@ class QuestionClassifier:
         if self.semantic_runtime is None:
             return default
         return self.semantic_runtime.clarification_message(key, default)
+
+    def _has_strong_follow_up_cue(self, normalized_question: str) -> bool:
+        strong_cues = ("换成", "改成", "只看", "再看", "继续", "然后", "那")
+        return normalized_question.startswith(strong_cues) or any(
+            cue in normalized_question for cue in strong_cues
+        )
 
     def _build_context_delta(self, semantic_parse: SemanticParse) -> ContextDelta:
         if self.semantic_runtime is not None:

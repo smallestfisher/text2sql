@@ -9,6 +9,7 @@ class SemanticParse(BaseModel):
     normalized_question: str
     matched_metrics: list[str] = Field(default_factory=list)
     matched_entities: list[str] = Field(default_factory=list)
+    requested_dimensions: list[str] = Field(default_factory=list)
     filters: list[FilterItem] = Field(default_factory=list)
     time_context: TimeContext = Field(default_factory=TimeContext)
     version_context: VersionContext | None = None

@@ -98,7 +98,7 @@ class EvaluationService:
 
     def replay_case(self, case_id: str, request: EvaluationReplayRequest) -> EvaluationReplayResult:
         case = self._get_case(case_id)
-        replay_user = self._resolve_replay_user(request.user_id)
+        replay_user = self._resolve_replay_user(request.user_id) or case.user_context
         response = self._run_question(
             question=case.question,
             session_questions=case.session_questions,
@@ -155,21 +155,32 @@ class EvaluationService:
 
         items: list[EvaluationResultItem] = []
         for case in selected:
-            response = self._run_case(case, request)
+            effective_user_context = request.user_context if request.user_context is not None else case.user_context
+            response = self._run_case(case, request, user_context=effective_user_context)
             failures = self._evaluate_case(case, response)
+            actual_warnings = self._collect_response_warnings(response)
             items.append(
                 EvaluationResultItem(
                     case_id=case.id,
                     question=case.question,
+                    scenario=case.scenario,
+                    coverage_tags=list(case.coverage_tags),
+                    effective_user_id=effective_user_context.user_id if effective_user_context else None,
                     classification_question_type=response.classification.question_type,
                     classification_domain=response.classification.subject_domain,
                     answer_status=response.answer.status if response.answer else None,
+                    actual_reason_code=response.classification.reason_code,
+                    actual_metrics=list(response.query_plan.metrics),
+                    actual_dimensions=list(response.query_plan.dimensions),
+                    actual_filter_fields=self._extract_filter_fields(response),
+                    actual_semantic_views=list(response.query_plan.semantic_views),
+                    actual_warnings=actual_warnings,
                     plan_valid=response.plan_validation.valid,
                     sql_valid=response.sql_validation.valid,
                     executed=bool(response.execution and response.execution.executed),
                     passed=not failures,
                     failures=failures,
-                    warnings=list(response.plan_validation.warnings) + list(response.sql_validation.warnings),
+                    warnings=actual_warnings,
                 )
             )
 
@@ -209,17 +220,28 @@ class EvaluationService:
             )
         )
 
-    def _run_case(self, case: EvaluationCase, request: EvaluationRunRequest):
+    def _run_case(
+        self,
+        case: EvaluationCase,
+        request: EvaluationRunRequest,
+        user_context: UserContext | None = None,
+    ):
         return self._run_question(
             question=case.question,
             session_questions=case.session_questions,
-            user_context=request.user_context,
+            user_context=user_context if user_context is not None else request.user_context,
         )
 
     def _evaluate_case(self, case: EvaluationCase, response) -> list[str]:
         failures: list[str] = []
         answer_status = response.answer.status if response.answer else None
         terminal_non_sql_statuses = {"clarification_needed", "invalid"}
+        actual_metrics = list(response.query_plan.metrics)
+        actual_dimensions = list(response.query_plan.dimensions)
+        actual_filter_fields = self._extract_filter_fields(response)
+        actual_semantic_views = list(response.query_plan.semantic_views)
+        actual_reason_code = response.classification.reason_code
+        actual_warnings = self._collect_response_warnings(response)
         if case.expected_domain and response.classification.subject_domain != case.expected_domain:
             failures.append(
                 f"expected_domain={case.expected_domain}, actual={response.classification.subject_domain}"
@@ -233,16 +255,61 @@ class EvaluationService:
                 f"expected_status={case.expected_status}, actual={answer_status}"
             )
         if case.expected_metrics:
-            actual_metrics = set(response.query_plan.metrics)
             missing_metrics = [item for item in case.expected_metrics if item not in actual_metrics]
             if missing_metrics:
                 failures.append("missing_metrics=" + ",".join(missing_metrics))
+        if case.unexpected_metrics:
+            unexpected_metrics = [item for item in case.unexpected_metrics if item in actual_metrics]
+            if unexpected_metrics:
+                failures.append("unexpected_metrics=" + ",".join(unexpected_metrics))
+        if case.expected_dimensions:
+            missing_dimensions = [item for item in case.expected_dimensions if item not in actual_dimensions]
+            if missing_dimensions:
+                failures.append("missing_dimensions=" + ",".join(missing_dimensions))
+        if case.expected_filter_fields:
+            missing_filter_fields = [
+                item for item in case.expected_filter_fields if item not in actual_filter_fields
+            ]
+            if missing_filter_fields:
+                failures.append("missing_filter_fields=" + ",".join(missing_filter_fields))
+        if case.expected_semantic_views:
+            missing_semantic_views = [
+                item for item in case.expected_semantic_views if item not in actual_semantic_views
+            ]
+            if missing_semantic_views:
+                failures.append("missing_semantic_views=" + ",".join(missing_semantic_views))
+        if case.expected_reason_code and actual_reason_code != case.expected_reason_code:
+            failures.append(
+                f"expected_reason_code={case.expected_reason_code}, actual={actual_reason_code}"
+            )
+        if case.expected_warnings_contains:
+            for expected_warning in case.expected_warnings_contains:
+                if not any(expected_warning in warning for warning in actual_warnings):
+                    failures.append(f"missing_warning_substring={expected_warning}")
         should_require_sql = answer_status not in terminal_non_sql_statuses
         if not response.plan_validation.valid and should_require_sql:
             failures.append("plan_validation_failed")
         if not response.sql_validation.valid and should_require_sql:
             failures.append("sql_validation_failed")
         return failures
+
+    def _extract_filter_fields(self, response) -> list[str]:
+        fields: list[str] = []
+        for item in response.query_plan.filters:
+            if item.field not in fields:
+                fields.append(item.field)
+        return fields
+
+    def _collect_response_warnings(self, response) -> list[str]:
+        warnings: list[str] = []
+        for warning in list(response.plan_validation.warnings) + list(response.sql_validation.warnings):
+            if warning not in warnings:
+                warnings.append(warning)
+        if response.execution is not None:
+            for warning in response.execution.warnings:
+                if warning not in warnings:
+                    warnings.append(warning)
+        return warnings
 
     def _get_case(self, case_id: str) -> EvaluationCase:
         for item in self._load_cases():

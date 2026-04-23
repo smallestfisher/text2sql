@@ -283,3 +283,175 @@
 
 - 企业认证，包括 `SSO / OAuth2 / OIDC / 用户目录同步`
 - 组织/部门模型
+
+## 6. 近期可先做的事项
+
+这部分只列“不依赖真实生产数据、可以先推进”的工作，目标是继续提升系统的可回归性、可解释性和可维护性。
+
+### 6.1 P0：结构化意图继续前移
+
+建议优先做：
+
+- 排序意图抽取：例如 `按客户降序`、`按库存从高到低`、`Top 10 客户`
+- 趋势/对比/占比类意图抽取：例如 `趋势`、`环比`、`同比`、`占比`
+- 纯排序/纯 limit/纯时间替换的 follow-up 追问增强
+- `context_delta` 对 `replace_sort / replace_limit / replace_dimensions` 的稳定覆盖
+
+为什么先做：
+
+- 这些能力仍主要停留在 planner 推断层，用户问法一变就容易漂移
+- 它们和“按客户拆分”属于同一类结构化意图问题，适合一起前移到 parser + semantic layer
+
+建议交付物：
+
+- `semantic/semantic_layer.json` 新增或扩充 intent extractors
+- `backend/app/services/semantic_parser.py`
+- `backend/app/services/semantic_runtime.py`
+- `backend/app/services/question_classifier.py`
+- 对应的 `eval/evaluation_cases.json` 回归样本
+
+验收标准：
+
+- 至少新增一批 `sort / topn / trend / compare` 的离线 case
+- follow-up 场景下能稳定输出 `replace_sort / replace_limit`
+- 相关能力不通过 prompt 补丁实现，而是优先沉淀到语义层配置
+
+### 6.2 P0：离线回归继续做厚
+
+建议优先做：
+
+- 将 `offline_regression.py` 输出补成按场景分组的失败报告
+- 补 `--output`/`--report-dir`，把 JSON 报告固化到文件
+- CI 里上传 regression artifact，方便比较前后版本
+- 对新增 case 增加 `scenario / coverage_tags` 的统计看板
+
+为什么先做：
+
+- 当前已经有离线回归和 CI 门禁，继续做厚的收益很高
+- 在没有真实生产数据时，离线回归就是最核心的质量抓手
+
+建议交付物：
+
+- `backend/offline_regression.py`
+- `.github/workflows/offline-regression.yml`
+- `backend/README.md`
+
+验收标准：
+
+- 本地和 CI 都能拿到结构化回归报告
+- 能快速看出失败集中在哪一类场景，而不是只看到总通过率
+
+### 6.3 P0：语义层配置治理补强
+
+建议优先做：
+
+- 给 `semantic_layer.json` 增加更强的 schema 校验
+- 增加语义层 lint，检查字段名、域名、视图字段、权限字段、dimension 配置是否互相一致
+- 把容易写错的配置做成离线检查，而不是运行时才暴露
+
+为什么先做：
+
+- 现在越来越多能力在往语义层下沉，配置质量已经开始成为主风险
+- 没有真实线上数据时，配置一致性问题更适合提前在 CI 阶段挡住
+
+建议交付物：
+
+- `schemas/` 下新增或扩充 schema
+- 一个轻量的 semantic lint 脚本
+- CI 中新增配置校验步骤
+
+验收标准：
+
+- 字段不存在、domain/view 不匹配、permission_scope_fields 漏配等问题能在本地和 CI 提前报错
+
+### 6.4 P1：Query Plan 与 SQL 一致性再收紧一层
+
+建议优先做：
+
+- 加强 `QueryPlan -> SQL` 一致性校验
+- 增加对 `join / group by / order by / limit / version filter / permission filter` 的逐项核对
+- 增加“风险级别”而不只是 `valid/invalid`
+
+为什么先做：
+
+- 现在主链已经能跑，下一步最值得做的是减少“能跑但不够稳”的灰区
+- 这类增强仍然不依赖真实生产数据，完全可以用离线 case 驱动
+
+建议交付物：
+
+- `backend/app/services/query_plan_validator.py`
+- `backend/app/services/sql_validator.py`
+- `backend/app/services/sql_ast_validator.py`
+
+验收标准：
+
+- 能区分 `hard error / risky but executable / acceptable`
+- 对时间过滤缺失、排序缺失、join 可疑等问题给出更清晰的分类
+
+### 6.5 P1：失败回放与差异分析工具
+
+建议优先做：
+
+- 对 replay/run 增加阶段差异对比：`classification / query_plan / sql / warnings`
+- 让一次失败可以直接沉淀成评测样本或示例样本
+- 为 regression/replay 结果增加“失败原因聚类”
+
+为什么先做：
+
+- 当前已经有 replay 和 eval run 骨架，但失败定位成本还偏高
+- 这是把离线回归真正变成日常工程工具的关键一步
+
+建议交付物：
+
+- `backend/app/services/evaluation_service.py`
+- 管理端 replay / eval 相关接口
+- 一个简单的 diff 输出格式
+
+验收标准：
+
+- 一条失败样本能快速看到“到底是分类错、规划错、还是 SQL 校验错”
+
+### 6.6 P1：示例库与评测样本按场景继续扩充
+
+建议优先做：
+
+- 扩大 `follow_up / clarification / new_related / new_unrelated / permission` 这些高价值样本
+- 增加更多边界样本：短问句、只改时间、只改排序、只改版本、只改维度
+- 把最近修过的问题都转成固定资产，而不是只停留在代码里
+
+为什么先做：
+
+- 在没有真实生产问法时，最靠谱的办法就是持续把“已知失败模式”转成样本
+- 样本规模上来后，后续接真实数据时也更容易做差异分析
+
+建议交付物：
+
+- `examples/nl2sql_examples.template.json`
+- `eval/evaluation_cases.json`
+
+验收标准：
+
+- 每修一个边界问题，都至少补一条 example 或 eval case
+- 样本能覆盖结构化追问、澄清原因、权限注入和跨域切题
+
+### 6.7 P2：管理端与运行时可观测性增强
+
+建议后续做：
+
+- 管理端补回归结果浏览、失败筛选、case 级复跑
+- 为下载、replay、eval run 增加更细的审计记录
+- 运行时日志增加索引和保留策略
+
+为什么后置：
+
+- 这部分有价值，但不如主链路稳定性和离线资产建设来得直接
+- 适合在规则层基本收敛后补
+
+## 7. 推荐执行顺序
+
+如果按最近两到三轮迭代来排，建议顺序如下：
+
+1. 先做 `排序 / TopN / trend / compare` 的结构化意图抽取。
+2. 紧接着补厚离线回归报告和 semantic lint，把新能力纳入门禁。
+3. 再收紧 `QueryPlan / SQL` 一致性校验，减少灰区输出。
+4. 最后补 replay 差异分析和管理端可观测性。

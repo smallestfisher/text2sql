@@ -23,26 +23,34 @@ class SemanticParser:
         normalized_question = question.strip().lower()
         matched_metrics = self._match_aliases(normalized_question, self.metric_index)
         matched_entities = self._match_aliases(normalized_question, self.entity_index)
+        requested_dimensions = self.semantic_runtime.extract_dimensions(question)
         filters = self._extract_filters(question)
         time_context = self._extract_time_context(question)
         version_context = self.semantic_runtime.extract_version_context(question)
         subject_domain = self.semantic_runtime.infer_domain(
             matched_metrics=matched_metrics,
             matched_entities=matched_entities,
+            requested_dimensions=requested_dimensions,
             filters=filters,
+            question=normalized_question,
             session_state=session_state,
         )
         has_follow_up_cue = any(
             cue.lower() in normalized_question for cue in self.semantic_runtime.follow_up_cues()
         )
         has_explicit_slots = bool(
-            matched_metrics or filters or time_context.grain != "unknown" or version_context is not None
+            matched_metrics
+            or requested_dimensions
+            or filters
+            or time_context.grain != "unknown"
+            or version_context is not None
         )
 
         return SemanticParse(
             normalized_question=normalized_question,
             matched_metrics=matched_metrics,
             matched_entities=matched_entities,
+            requested_dimensions=requested_dimensions,
             filters=filters,
             time_context=time_context,
             version_context=version_context,

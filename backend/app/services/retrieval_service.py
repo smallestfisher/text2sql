@@ -140,6 +140,8 @@ class RetrievalService:
                     summary=example.normalized_question,
                     metadata={
                         "intent": example.intent,
+                        "scenario": example.scenario,
+                        "coverage_tags": example.coverage_tags,
                         "question_type": example.question_type,
                         "semantic_views": example.semantic_views,
                         "tables": example.tables,
@@ -148,6 +150,8 @@ class RetrievalService:
                         example.question,
                         example.normalized_question,
                         example.intent,
+                        example.scenario or "",
+                        " ".join(example.coverage_tags),
                         " ".join(example.metrics),
                         " ".join(example.entities),
                         " ".join(example.dimensions),
@@ -312,6 +316,8 @@ class RetrievalService:
                     matched_features=matched_features,
                     metadata={
                         "intent": example.intent,
+                        "scenario": example.scenario,
+                        "coverage_tags": example.coverage_tags,
                         "question_type": example.question_type,
                         "semantic_views": example.semantic_views,
                         "tables": example.tables,

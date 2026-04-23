@@ -62,6 +62,7 @@ class QueryPlanner:
         limit = self.semantic_runtime.default_limit(classification.subject_domain)
         dimensions = self._infer_dimensions(
             subject_domain=classification.subject_domain,
+            requested_dimensions=semantic_parse.requested_dimensions,
             matched_entities=matched_entities,
             filters=filters,
             time_context=time_context,
@@ -147,10 +148,18 @@ class QueryPlanner:
     def _pick_tables(self, subject_domain: str, matched_metrics: list[str]) -> list[str]:
         return self.semantic_runtime.resolve_tables_for_plan(subject_domain, matched_metrics)
 
-    def _infer_dimensions(self, subject_domain: str, matched_entities: list[str], filters, time_context) -> list[str]:
+    def _infer_dimensions(
+        self,
+        subject_domain: str,
+        requested_dimensions: list[str],
+        matched_entities: list[str],
+        filters,
+        time_context,
+    ) -> list[str]:
         filter_fields = {item.field for item in filters}
         return self.semantic_runtime.suggest_dimensions(
             subject_domain=subject_domain,
+            requested_dimensions=requested_dimensions,
             matched_entities=matched_entities,
             filter_fields=filter_fields,
             time_grain=time_context.grain,

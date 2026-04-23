@@ -7,6 +7,11 @@
       "primary_entities": ["fg_product", "customer"]
     },
     {
+      "name": "sales_financial",
+      "tables": ["sales_financial_perf"],
+      "primary_entities": ["fg_product", "customer"]
+    },
+    {
       "name": "inventory",
       "tables": ["daily_inventory", "oms_inventory"],
       "primary_entities": ["stage_product"]
@@ -81,7 +86,7 @@
   ],
   "question_understanding": {
     "invalid_exact_patterns": ["你好", "hello", "hi", "谢谢", "thanks"],
-    "follow_up_cues": ["只看", "换成", "那", "再看", "改成", "分别", "按", "继续", "然后"],
+    "follow_up_cues": ["只看", "换成", "那", "再看", "改成", "分别", "继续", "然后"],
     "context_management": {
       "replace_filter_groups": {
         "time": ["biz_date", "biz_month"],
@@ -196,7 +201,8 @@
       {
         "domain": "plan_actual",
         "entities": ["factory"],
-        "filter_fields": ["factory", "stage_product_id"]
+        "filter_fields": ["factory", "stage_product_id"],
+        "keywords": ["计划", "实际", "产出", "投入"]
       },
       {
         "domain": "demand",
@@ -285,7 +291,72 @@
         "type": "regex",
         "field": "customer",
         "op": "=",
-        "pattern": "(?:CUSTOMER|customer|客户)\\s*[:：]?\\s*([A-Za-z0-9._\\-\\u4e00-\\u9fa5]+)",
+        "pattern": "(?:CUSTOMER|customer|客户)\\s*(?:[:：=]|为|是)\\s*([A-Za-z0-9._\\-\\u4e00-\\u9fa5]+)",
+        "flags": ["ignorecase"]
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "group_by_customer",
+        "type": "regex",
+        "field": "customer",
+        "pattern": "(?:按|按照|只看)\\s*(?:CUSTOMER|customer|客户)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_factory_code",
+        "type": "regex",
+        "field": "factory_code",
+        "pattern": "(?:按|按照|只看)\\s*factory_code(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_factory",
+        "type": "regex",
+        "field": "factory",
+        "pattern": "(?:按|按照|只看)\\s*(?:FACTORY|factory|工厂)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_erp_factory",
+        "type": "regex",
+        "field": "ERP_FACTORY",
+        "pattern": "(?:按|按照|只看)\\s*(?:ERP_FACTORY|ERP工厂)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_stage_product",
+        "type": "regex",
+        "field": "product_ID",
+        "pattern": "(?:按|按照|只看)\\s*(?:product_ID|型号|产品型号|产品编码)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_fgcode",
+        "type": "regex",
+        "field": "FGCODE",
+        "pattern": "(?:按|按照|只看)\\s*(?:FGCODE|成品型号|成品编码|需求型号|销售型号)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_date",
+        "type": "regex",
+        "field": "biz_date",
+        "pattern": "(?:按|按照|只看)\\s*(?:日|天|日期)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_month",
+        "type": "regex",
+        "field": "biz_month",
+        "pattern": "(?:按|按照|只看)\\s*(?:月|月份)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "group_by_version",
+        "type": "regex",
+        "field": "PM_VERSION",
+        "pattern": "(?:按|按照|只看)\\s*(?:版本|PM_VERSION)(?:维度)?(?:拆分|分组|查看|统计|看)?",
         "flags": ["ignorecase"]
       }
     ],
@@ -554,6 +625,16 @@
         {
           "exclude_filter_fields": ["PM_VERSION"],
           "add_dimensions": ["PM_VERSION"]
+        }
+      ],
+      "clarification_rules": [
+        {
+          "metrics": ["demand_qty"],
+          "missing_version_context": true,
+          "reason_code": "missing_version",
+          "question_type": "clarification_needed",
+          "reason": "需求查询缺少稳定版本上下文。",
+          "clarification_question": "请明确需求版本，例如 V1、V2 或 P10。"
         }
       ]
     },
