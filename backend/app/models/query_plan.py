@@ -70,6 +70,7 @@ class ContextDelta(BaseModel):
     replace_time_context: TimeContext = Field(default_factory=TimeContext)
     replace_version_context: VersionContext | None = None
     replace_limit: int | None = None
+    replace_analysis_mode: str | None = None
 
 
 class SortItem(BaseModel):
@@ -94,6 +95,7 @@ class QueryPlan(BaseModel):
     need_clarification: bool = False
     clarification_question: str | None = None
     reason_code: str | None = None
+    analysis_mode: str | None = None
     sort: list[SortItem] = Field(default_factory=list)
     limit: int = 200
     reason: str | None = None

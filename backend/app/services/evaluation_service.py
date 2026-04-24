@@ -13,6 +13,7 @@ from backend.app.models.evaluation import (
     EvaluationCase,
     EvaluationCaseCollection,
     EvaluationDimensionSummary,
+    EvaluationReplayDiff,
     EvaluationResultItem,
     EvaluationReplayRequest,
     EvaluationReplayResult,
@@ -110,6 +111,8 @@ class EvaluationService:
             question=case.question,
             session_questions=list(case.session_questions),
             replay_user=replay_user,
+            original_response=None,
+            diff=None,
             response=response,
         )
 
@@ -133,6 +136,7 @@ class EvaluationService:
             session_questions=session_questions,
             user_context=replay_user,
         )
+        original_response = self._build_original_response_snapshot(trace_id)
         return EvaluationReplayResult(
             source_type="runtime_query_log",
             source_id=trace_id,
@@ -142,6 +146,8 @@ class EvaluationService:
             original_trace_id=trace_id,
             original_session_id=record.session_id,
             original_user_id=record.user_id,
+            original_response=original_response,
+            diff=self._build_replay_diff(original_response, response),
             response=response,
         )
 
@@ -346,6 +352,154 @@ class EvaluationService:
             if message.role == "user" and message.content.strip():
                 session_questions.append(message.content.strip())
         return session_questions
+
+    def _build_original_response_snapshot(self, trace_id: str):
+        if self.runtime_log_repository is None or not hasattr(self.orchestrator, "audit_service"):
+            return None
+        trace = self.orchestrator.audit_service.get_trace(trace_id)
+        sql_audit = self.runtime_log_repository.get_sql_audit(trace_id)
+        query_log = self.runtime_log_repository.get_query_log(trace_id)
+        if trace is None or query_log is None:
+            return None
+
+        classification_metadata = self._step_metadata(trace, "plan")
+        compile_metadata = self._step_metadata(trace, "compile_plan")
+        validate_plan_metadata = self._step_metadata(trace, "validate_plan")
+
+        from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
+        from backend.app.models.answer import AnswerPayload
+        from backend.app.models.classification import QuestionClassification, SemanticParse
+        from backend.app.models.query_plan import QueryPlan
+        from backend.app.models.retrieval import RetrievalContext
+        from backend.app.models.session_state import SessionState
+
+        classification_payload = classification_metadata.get("classification") or {}
+        semantic_parse_payload = classification_metadata.get("semantic_parse") or {}
+        compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
+
+        classification = QuestionClassification(**{
+            "question_type": classification_payload.get("question_type", query_log.question_type or "new"),
+            "subject_domain": classification_payload.get("subject_domain", query_log.subject_domain or "unknown"),
+            "inherit_context": classification_payload.get("inherit_context", False),
+            "need_clarification": classification_payload.get("need_clarification", False),
+            "reason": classification_payload.get("reason"),
+            "reason_code": classification_payload.get("reason_code"),
+            "clarification_question": classification_payload.get("clarification_question"),
+            "context_delta": classification_payload.get("context_delta", {}),
+            "confidence": classification_payload.get("confidence", 0.0),
+        })
+        semantic_parse = SemanticParse(**{
+            "normalized_question": semantic_parse_payload.get("normalized_question", query_log.question or ""),
+            "matched_metrics": semantic_parse_payload.get("matched_metrics", []),
+            "matched_entities": semantic_parse_payload.get("matched_entities", []),
+            "requested_dimensions": semantic_parse_payload.get("requested_dimensions", []),
+            "filters": semantic_parse_payload.get("filters", []),
+            "time_context": semantic_parse_payload.get("time_context", {}),
+            "version_context": semantic_parse_payload.get("version_context"),
+            "subject_domain": semantic_parse_payload.get("subject_domain", query_log.subject_domain or "unknown"),
+            "has_follow_up_cue": semantic_parse_payload.get("has_follow_up_cue", False),
+            "has_explicit_slots": semantic_parse_payload.get("has_explicit_slots", False),
+        })
+        query_plan = QueryPlan(**{
+            "question_type": compiled_plan_payload.get("question_type", classification.question_type),
+            "subject_domain": compiled_plan_payload.get("subject_domain", classification.subject_domain),
+            "tables": compiled_plan_payload.get("tables", []),
+            "semantic_views": compiled_plan_payload.get("semantic_views", []),
+            "entities": compiled_plan_payload.get("entities", []),
+            "metrics": compiled_plan_payload.get("metrics", []),
+            "dimensions": compiled_plan_payload.get("dimensions", []),
+            "filters": compiled_plan_payload.get("filters", []),
+            "join_path": compiled_plan_payload.get("join_path", []),
+            "time_context": compiled_plan_payload.get("time_context", {}),
+            "version_context": compiled_plan_payload.get("version_context"),
+            "inherit_context": compiled_plan_payload.get("inherit_context", classification.inherit_context),
+            "context_delta": compiled_plan_payload.get("context_delta", {}),
+            "need_clarification": compiled_plan_payload.get("need_clarification", classification.need_clarification),
+            "clarification_question": compiled_plan_payload.get("clarification_question", classification.clarification_question),
+            "reason_code": compiled_plan_payload.get("reason_code", classification.reason_code),
+            "sort": compiled_plan_payload.get("sort", []),
+            "limit": compiled_plan_payload.get("limit", 200),
+            "reason": compiled_plan_payload.get("reason", classification.reason),
+        })
+        plan_validation = ValidationResponse(
+            valid=bool(query_log.plan_valid),
+            errors=validate_plan_metadata.get("errors", []),
+            warnings=validate_plan_metadata.get("warnings", []),
+            risk_level=query_log.plan_risk_level or "low",
+            risk_flags=query_log.plan_risk_flags,
+        )
+        sql_validation = ValidationResponse(
+            valid=bool(query_log.sql_valid),
+            errors=sql_audit.errors if sql_audit is not None else [],
+            warnings=sql_audit.warnings if sql_audit is not None else [],
+            risk_level=sql_audit.sql_risk_level if sql_audit is not None and sql_audit.sql_risk_level else "low",
+            risk_flags=sql_audit.sql_risk_flags if sql_audit is not None else [],
+        )
+        execution = None
+        answer = AnswerPayload(status=query_log.answer_status or "stub", summary=query_log.answer_status or "")
+        return ChatResponse(
+            classification=classification,
+            semantic_parse=semantic_parse,
+            retrieval=RetrievalContext(hits=[]),
+            trace=trace,
+            answer=answer,
+            query_plan=query_plan,
+            sql=sql_audit.sql_text if sql_audit is not None else None,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+            execution=execution,
+            next_session_state=SessionState(session_id=query_log.session_id),
+        )
+
+    def _build_replay_diff(self, original_response, replay_response) -> EvaluationReplayDiff | None:
+        if original_response is None:
+            return None
+        original_metrics = set(original_response.query_plan.metrics)
+        replay_metrics = set(replay_response.query_plan.metrics)
+        original_dimensions = set(original_response.query_plan.dimensions)
+        replay_dimensions = set(replay_response.query_plan.dimensions)
+        original_filters = set(self._extract_filter_fields(original_response))
+        replay_filters = set(self._extract_filter_fields(replay_response))
+        original_views = set(original_response.query_plan.semantic_views)
+        replay_views = set(replay_response.query_plan.semantic_views)
+        original_plan_flags = set(original_response.plan_validation.risk_flags)
+        replay_plan_flags = set(replay_response.plan_validation.risk_flags)
+        original_sql_flags = set(original_response.sql_validation.risk_flags)
+        replay_sql_flags = set(replay_response.sql_validation.risk_flags)
+
+        return EvaluationReplayDiff(
+            classification_changed=(
+                original_response.classification.question_type != replay_response.classification.question_type
+                or original_response.classification.subject_domain != replay_response.classification.subject_domain
+            ),
+            question_type_changed=original_response.classification.question_type != replay_response.classification.question_type,
+            subject_domain_changed=original_response.classification.subject_domain != replay_response.classification.subject_domain,
+            answer_status_changed=(original_response.answer.status if original_response.answer else None) != (replay_response.answer.status if replay_response.answer else None),
+            plan_valid_changed=original_response.plan_validation.valid != replay_response.plan_validation.valid,
+            plan_risk_level_changed=original_response.plan_validation.risk_level != replay_response.plan_validation.risk_level,
+            sql_valid_changed=original_response.sql_validation.valid != replay_response.sql_validation.valid,
+            sql_risk_level_changed=original_response.sql_validation.risk_level != replay_response.sql_validation.risk_level,
+            execution_status_changed=(original_response.execution.status if original_response.execution else None) != (replay_response.execution.status if replay_response.execution else None),
+            sql_changed=(original_response.sql or "") != (replay_response.sql or ""),
+            metrics_added=sorted(replay_metrics - original_metrics),
+            metrics_removed=sorted(original_metrics - replay_metrics),
+            dimensions_added=sorted(replay_dimensions - original_dimensions),
+            dimensions_removed=sorted(original_dimensions - replay_dimensions),
+            filter_fields_added=sorted(replay_filters - original_filters),
+            filter_fields_removed=sorted(original_filters - replay_filters),
+            semantic_views_added=sorted(replay_views - original_views),
+            semantic_views_removed=sorted(original_views - replay_views),
+            plan_risk_flags_added=sorted(replay_plan_flags - original_plan_flags),
+            plan_risk_flags_removed=sorted(original_plan_flags - replay_plan_flags),
+            sql_risk_flags_added=sorted(replay_sql_flags - original_sql_flags),
+            sql_risk_flags_removed=sorted(original_sql_flags - replay_sql_flags),
+        )
+
+    def _step_metadata(self, trace, step_name: str) -> dict:
+        for step in trace.steps:
+            if step.name == step_name and step.metadata:
+                return step.metadata
+        return {}
 
     def _load_cases(self) -> list[EvaluationCase]:
         payload = json.loads(self.eval_cases_path.read_text(encoding='utf-8'))

@@ -75,11 +75,17 @@ def validate_query_plan(
     request: PlanValidationRequest,
     container: AppContainer = Depends(get_container),
 ) -> ValidationResponse:
-    errors, warnings = container.query_plan_validator.validate(
+    result = container.query_plan_validator.validate_detailed(
         query_plan=request.query_plan,
         semantic_layer=container.semantic_layer,
     )
-    return ValidationResponse(valid=not errors, errors=errors, warnings=warnings)
+    return ValidationResponse(
+        valid=not result.errors,
+        errors=result.errors,
+        warnings=result.warnings,
+        risk_level=result.risk_level,
+        risk_flags=result.risk_flags,
+    )
 
 
 @router.post("/sql", response_model=SqlResponse)
@@ -97,10 +103,12 @@ def generate_sql(
         query_plan=request.query_plan,
         user_context=request.user_context,
     )
-    plan_errors, plan_warnings = container.query_plan_validator.validate(
+    plan_result = container.query_plan_validator.validate_detailed(
         query_plan=query_plan,
         semantic_layer=container.semantic_layer,
     )
+    plan_errors = plan_result.errors
+    plan_warnings = plan_result.warnings
     generated_sql = None if plan_errors else container.sql_generator.generate(query_plan)
     visible_sql = (
         generated_sql if container.permission_service.can_view_sql(request.user_context) else None
@@ -109,24 +117,29 @@ def generate_sql(
         query_plan=query_plan,
         user_context=request.user_context,
     )
-    sql_errors, sql_warnings = (
-        (["sql is empty"], [])
-        if generated_sql is None and not plan_errors
-        else (
-            container.sql_validator.validate(
-                generated_sql,
-                container.semantic_layer,
-                query_plan=query_plan,
-                required_filter_fields=required_filter_fields,
-            )
-            if generated_sql is not None
-            else ([], [])
+    sql_errors: list[str] = []
+    sql_warnings: list[str] = []
+    sql_risk_level = "low"
+    sql_risk_flags: list[str] = []
+    if generated_sql is None and not plan_errors:
+        sql_errors = ["sql is empty"]
+    elif generated_sql is not None:
+        sql_result = container.sql_validator.validate_detailed(
+            generated_sql,
+            container.semantic_layer,
+            query_plan=query_plan,
+            required_filter_fields=required_filter_fields,
         )
-    )
+        sql_errors = sql_result.errors
+        sql_warnings = sql_result.warnings
+        sql_risk_level = sql_result.risk_level
+        sql_risk_flags = sql_result.risk_flags
     validation = ValidationResponse(
         valid=not (plan_errors or sql_errors),
         errors=plan_errors + sql_errors,
         warnings=permission_warnings + plan_warnings + sql_warnings,
+        risk_level=sql_risk_level,
+        risk_flags=sql_risk_flags,
     )
     return SqlResponse(query_plan=query_plan, sql=visible_sql, validation=validation)
 
@@ -142,11 +155,11 @@ def execute_sql(
         container,
         fallback=request.user_context,
     )
-    sql_errors, sql_warnings = container.sql_validator.validate(
+    sql_result = container.sql_validator.validate_detailed(
         request.sql,
         container.semantic_layer,
     )
-    if sql_errors:
+    if sql_result.errors:
         return ExecutionResponse(
             executed=False,
             status="db_error",
@@ -154,8 +167,8 @@ def execute_sql(
             row_count=0,
             columns=[],
             rows=[],
-            errors=sql_errors,
-            warnings=sql_warnings,
+            errors=sql_result.errors,
+            warnings=sql_result.warnings,
             elapsed_ms=None,
             error_category="validation",
             truncated=False,
@@ -165,7 +178,7 @@ def execute_sql(
         execution=execution,
         user_context=request.user_context,
     )
-    execution.warnings.extend(sql_warnings)
+    execution.warnings.extend(sql_result.warnings)
     if not container.permission_service.can_view_sql(request.user_context):
         execution.sql = None
     return execution

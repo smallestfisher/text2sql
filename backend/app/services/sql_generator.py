@@ -9,6 +9,9 @@ class SqlGenerator:
         self.semantic_runtime = semantic_runtime
 
     def generate(self, query_plan: QueryPlan, llm_sql: str | None = None) -> str | None:
+        if self.semantic_runtime is not None:
+            query_plan = self.semantic_runtime.sanitize_query_plan(query_plan)
+
         if query_plan.need_clarification:
             return None
 

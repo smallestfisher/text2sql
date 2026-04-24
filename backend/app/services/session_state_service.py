@@ -51,6 +51,11 @@ class SessionStateService:
             or query_plan.version_context
             or state.version_context
         )
+        state.analysis_mode = (
+            query_plan.context_delta.replace_analysis_mode
+            or query_plan.analysis_mode
+            or state.analysis_mode
+        )
         state.last_question_type = query_plan.question_type
         state.last_query_plan = query_plan
         state.last_sql = sql
@@ -78,6 +83,7 @@ class SessionStateService:
             limit=query_plan.limit,
             time_context=query_plan.time_context,
             version_context=query_plan.version_context,
+            analysis_mode=query_plan.analysis_mode,
             last_question_type=query_plan.question_type,
             last_query_plan=query_plan,
             last_sql=sql,

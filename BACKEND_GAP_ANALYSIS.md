@@ -288,81 +288,48 @@
 
 这部分只列“不依赖真实生产数据、可以先推进”的工作，目标是继续提升系统的可回归性、可解释性和可维护性。
 
-### 6.1 P0：结构化意图继续前移
+### 6.1 P0：结构化意图前移
 
-建议优先做：
+当前状态：
 
-- 排序意图抽取：例如 `按客户降序`、`按库存从高到低`、`Top 10 客户`
-- 趋势/对比/占比类意图抽取：例如 `趋势`、`环比`、`同比`、`占比`
-- 纯排序/纯 limit/纯时间替换的 follow-up 追问增强
-- `context_delta` 对 `replace_sort / replace_limit / replace_dimensions` 的稳定覆盖
+- 已完成一轮高价值结构化前移
+- 已落地 `sort / topN / trend / compare`
+- 已补 follow-up 场景下的 `analysis_mode / sort / limit` 继承
+- 对应离线 case 已补到 [eval/evaluation_cases.json](/home/y/llm/new/eval/evaluation_cases.json)
 
-为什么先做：
+当前结论：
 
-- 这些能力仍主要停留在 planner 推断层，用户问法一变就容易漂移
-- 它们和“按客户拆分”属于同一类结构化意图问题，适合一起前移到 parser + semantic layer
-
-建议交付物：
-
-- `semantic/semantic_layer.json` 新增或扩充 intent extractors
-- `backend/app/services/semantic_parser.py`
-- `backend/app/services/semantic_runtime.py`
-- `backend/app/services/question_classifier.py`
-- 对应的 `eval/evaluation_cases.json` 回归样本
-
-验收标准：
-
-- 至少新增一批 `sort / topn / trend / compare` 的离线 case
-- follow-up 场景下能稳定输出 `replace_sort / replace_limit`
-- 相关能力不通过 prompt 补丁实现，而是优先沉淀到语义层配置
+- 这部分已经不再是最优先的纯离线补强项
+- 后续继续深挖的边际收益开始下降
+- 下一步更适合用真实问题样本验证现有结构化链路，而不是继续凭空扩规则
 
 ### 6.2 P0：离线回归继续做厚
 
-建议优先做：
+当前状态：
 
-- 将 `offline_regression.py` 输出补成按场景分组的失败报告
-- 补 `--output`/`--report-dir`，把 JSON 报告固化到文件
-- CI 里上传 regression artifact，方便比较前后版本
-- 对新增 case 增加 `scenario / coverage_tags` 的统计看板
+- 已补 `--output` / `--report-dir`
+- 已支持 `scenario / coverage_tags / failure_types` 聚合统计
+- CI 已上传 regression artifact
+- README 已补使用说明
 
-为什么先做：
+当前结论：
 
-- 当前已经有离线回归和 CI 门禁，继续做厚的收益很高
-- 在没有真实生产数据时，离线回归就是最核心的质量抓手
-
-建议交付物：
-
-- `backend/offline_regression.py`
-- `.github/workflows/offline-regression.yml`
-- `backend/README.md`
-
-验收标准：
-
-- 本地和 CI 都能拿到结构化回归报告
-- 能快速看出失败集中在哪一类场景，而不是只看到总通过率
+- 离线回归已经达到“可作为日常门禁”的程度
+- 后续可以继续增强，但优先级已经低于真实数据联调
+- 下一步应更多用真实样本扩回归，而不是继续只做报告形态增强
 
 ### 6.3 P0：语义层配置治理补强
 
-建议优先做：
+当前状态：
 
-- 给 `semantic_layer.json` 增加更强的 schema 校验
-- 增加语义层 lint，检查字段名、域名、视图字段、权限字段、dimension 配置是否互相一致
-- 把容易写错的配置做成离线检查，而不是运行时才暴露
+- 已补轻量 semantic lint 脚本 [backend/semantic_lint.py](/home/y/llm/new/backend/semantic_lint.py)
+- 已覆盖 domain / semantic_view / query_profile / extractor 的关键一致性检查
+- CI 已接入 semantic lint
 
-为什么先做：
+当前结论：
 
-- 现在越来越多能力在往语义层下沉，配置质量已经开始成为主风险
-- 没有真实线上数据时，配置一致性问题更适合提前在 CI 阶段挡住
-
-建议交付物：
-
-- `schemas/` 下新增或扩充 schema
-- 一个轻量的 semantic lint 脚本
-- CI 中新增配置校验步骤
-
-验收标准：
-
-- 字段不存在、domain/view 不匹配、permission_scope_fields 漏配等问题能在本地和 CI 提前报错
+- 这一轮配置治理已经能提前拦下大部分低级配置错误
+- 后续如果继续增强，更值得结合真实字段结构做针对性收敛，而不是先堆重型 schema 工程
 
 ### 6.4 P1：Query Plan 与 SQL 一致性再收紧一层
 
@@ -449,9 +416,10 @@
 
 ## 7. 推荐执行顺序
 
-如果按最近两到三轮迭代来排，建议顺序如下：
+如果按当前阶段来排，建议顺序如下：
 
-1. 先做 `排序 / TopN / trend / compare` 的结构化意图抽取。
-2. 紧接着补厚离线回归报告和 semantic lint，把新能力纳入门禁。
-3. 再收紧 `QueryPlan / SQL` 一致性校验，减少灰区输出。
-4. 最后补 replay 差异分析和管理端可观测性。
+1. 先进入真实数据与真实问题联调阶段，参考 [REAL_DATA_TUNING_PLAYBOOK.md](/home/y/llm/new/REAL_DATA_TUNING_PLAYBOOK.md)。
+2. 先校准真实表结构、字段类型、时间字段和版本字段。
+3. 再补真实高频问题样本，并把样本沉淀到回归和 example 库。
+4. 之后再根据真实结果收紧 `retrieval / QueryPlan / SQL` 三段链路。
+5. 最后再决定是否需要更重的检索、视图落库和执行治理优化。

@@ -10,9 +10,14 @@ from backend.app.models.admin import (
     ExampleMutationResponse,
     MetadataDocument,
     MetadataOverview,
+    SemanticViewBootstrapResponse,
+    SemanticViewDraftCollectionResponse,
+    SemanticViewValidationResponse,
     RuntimeQueryLogCollectionResponse,
     RuntimeQueryLogRecord,
     RuntimeRetrievalLogRecord,
+    RuntimeRetentionResponse,
+    RuntimeRiskSummaryResponse,
     RuntimeSessionCollectionResponse,
     RuntimeSqlAuditRecord,
     SessionSnapshotRecord,
@@ -67,6 +72,10 @@ class EvaluationCaseUpsertRequest(BaseModel):
 
 class RoleUpdateRequest(RoleUpsertRequest):
     pass
+
+
+class RuntimeRetentionRequest(BaseModel):
+    retention_days: int = 30
 
 
 @router.get("/metadata/overview", response_model=MetadataOverview)
@@ -253,13 +262,37 @@ def list_runtime_query_logs(
     limit: int = 50,
     session_id: str | None = None,
     user_id: str | None = None,
+    sql_risk_level: str | None = None,
+    subject_domain: str | None = None,
+    risk_flag: str | None = None,
     container: AppContainer = Depends(get_container),
 ) -> RuntimeQueryLogCollectionResponse:
     return container.runtime_admin_service.list_query_logs(
         limit=limit,
         session_id=session_id,
         user_id=user_id,
+        sql_risk_level=sql_risk_level,
+        subject_domain=subject_domain,
+        risk_flag=risk_flag,
     )
+
+
+@router.get("/runtime/query-logs/risk-summary", response_model=RuntimeRiskSummaryResponse)
+def summarize_runtime_query_risks(
+    limit: int = 200,
+    container: AppContainer = Depends(get_container),
+) -> RuntimeRiskSummaryResponse:
+    return container.runtime_admin_service.summarize_query_risks(limit=limit)
+
+
+@router.post("/runtime/retention/purge", response_model=RuntimeRetentionResponse)
+def purge_runtime_retention(
+    request: RuntimeRetentionRequest,
+    container: AppContainer = Depends(get_container),
+) -> RuntimeRetentionResponse:
+    if request.retention_days < 1:
+        raise HTTPException(status_code=400, detail="retention_days must be >= 1")
+    return container.runtime_admin_service.purge_runtime_data(retention_days=request.retention_days)
 
 
 @router.get("/runtime/query-logs/{trace_id}", response_model=RuntimeQueryLogRecord)
@@ -310,6 +343,35 @@ def replay_runtime_query_log(
 def bootstrap_semantic_views(container: AppContainer = Depends(get_container)) -> dict:
     sql_script = SEMANTIC_VIEW_DRAFTS_PATH.read_text(encoding="utf-8")
     return container.business_database_connector.execute_script(sql_script)
+
+
+@router.get("/database/semantic-views/drafts", response_model=SemanticViewDraftCollectionResponse)
+def list_semantic_view_drafts(
+    container: AppContainer = Depends(get_container),
+) -> SemanticViewDraftCollectionResponse:
+    return container.semantic_view_service.list_drafts()
+
+
+@router.get("/database/semantic-views/{view_name}/validate", response_model=SemanticViewValidationResponse)
+def validate_single_semantic_view(
+    view_name: str,
+    container: AppContainer = Depends(get_container),
+) -> SemanticViewValidationResponse:
+    try:
+        return container.semantic_view_service.validate_view(view_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="semantic view draft not found") from exc
+
+
+@router.post("/database/semantic-views/{view_name}/bootstrap", response_model=SemanticViewBootstrapResponse)
+def bootstrap_single_semantic_view(
+    view_name: str,
+    container: AppContainer = Depends(get_container),
+) -> SemanticViewBootstrapResponse:
+    try:
+        return container.semantic_view_service.bootstrap_view(view_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="semantic view draft not found") from exc
 
 
 @router.get("/users", response_model=list[UserContext])

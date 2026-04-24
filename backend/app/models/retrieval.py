@@ -8,6 +8,8 @@ class RetrievalHit(BaseModel):
     source_id: str
     score: float
     summary: str
+    retrieval_channel: str = "structured"
+    source_score: float | None = None
     matched_features: list[str] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
 
@@ -20,3 +22,4 @@ class RetrievalContext(BaseModel):
     retrieval_channels: list[str] = Field(default_factory=list)
     hits: list[RetrievalHit] = Field(default_factory=list)
     hit_count_by_source: dict[str, int] = Field(default_factory=dict)
+    hit_count_by_channel: dict[str, int] = Field(default_factory=dict)

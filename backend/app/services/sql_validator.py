@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import re
 
 from backend.app.models.query_plan import QueryPlan
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.sql_ast_validator import SqlAstValidator
+
+
+@dataclass
+class SqlValidationResult:
+    errors: list[str]
+    warnings: list[str]
+    risk_level: str = "low"
+    risk_flags: list[str] = field(default_factory=list)
 
 
 class SqlValidator:
@@ -23,10 +32,12 @@ class SqlValidator:
         ast_validator: SqlAstValidator | None = None,
         semantic_runtime: SemanticRuntime | None = None,
         max_limit: int = 200,
+        high_risk_limit: int = 1000,
     ) -> None:
         self.ast_validator = ast_validator or SqlAstValidator()
         self.semantic_runtime = semantic_runtime
         self.max_limit = max_limit
+        self.high_risk_limit = max(high_risk_limit, max_limit)
 
     def validate(
         self,
@@ -35,8 +46,23 @@ class SqlValidator:
         query_plan: QueryPlan | None = None,
         required_filter_fields: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
+        result = self.validate_detailed(
+            sql,
+            semantic_layer,
+            query_plan=query_plan,
+            required_filter_fields=required_filter_fields,
+        )
+        return result.errors, result.warnings
+
+    def validate_detailed(
+        self,
+        sql: str | None,
+        semantic_layer: dict,
+        query_plan: QueryPlan | None = None,
+        required_filter_fields: list[str] | None = None,
+    ) -> SqlValidationResult:
         if sql is None:
-            return ["sql is empty"], []
+            return SqlValidationResult(errors=["sql is empty"], warnings=[])
 
         errors: list[str] = []
         warnings: list[str] = []
@@ -69,11 +95,16 @@ class SqlValidator:
             if unexpected_sources:
                 errors.append(f"sql references sources outside query plan: {', '.join(unexpected_sources)}")
 
+            primary_source = self._primary_source(query_plan)
+
             missing_plan_filters = [
                 filter_item.field
                 for filter_item in query_plan.filters
                 if filter_item.field
-                and not self._contains_field_reference(inspection.where_clause, filter_item.field)
+                and not self._contains_any_field_reference(
+                    inspection.where_clause,
+                    self._field_candidates(primary_source, filter_item.field),
+                )
             ]
             if missing_plan_filters:
                 warnings.append(
@@ -86,7 +117,7 @@ class SqlValidator:
                 missing_group_by_fields = [
                     field
                     for field in expected_dimension_fields
-                    if field.lower() not in actual_group_by_fields
+                    if not self._field_candidates(primary_source, field).intersection(actual_group_by_fields)
                 ]
                 if missing_group_by_fields and inspection.functions:
                     errors.append(
@@ -100,21 +131,32 @@ class SqlValidator:
                 missing_sort_fields = [
                     field
                     for field in expected_sort_fields
-                    if field.lower() not in actual_order_by_fields
+                    if not self._field_candidates(primary_source, field).intersection(actual_order_by_fields)
                 ]
                 if missing_sort_fields:
                     warnings.append(
                         "sql does not preserve query plan sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
                     )
 
+            time_filter_errors = self._validate_time_context(query_plan, inspection.where_clause, primary_source)
+            errors.extend(time_filter_errors)
+
+            version_errors = self._validate_version_context(query_plan, inspection.where_clause, primary_source)
+            errors.extend(version_errors)
+
+            limit_errors = self._validate_limit_consistency(query_plan, inspection.limit_value, inspection.has_limit)
+            errors.extend(limit_errors)
+
+            if query_plan.metrics and not query_plan.dimensions and inspection.functions and inspection.group_by_fields:
+                warnings.append("sql groups aggregated metrics by extra fields not present in query plan")
+
+            select_dimension_errors = self._validate_selected_dimensions(query_plan, inspection, primary_source)
+            errors.extend(select_dimension_errors)
+
         if self.semantic_runtime is not None and used_sources:
             known_view_sources = [source for source in used_sources if source in semantic_view_names]
             if known_view_sources:
-                allowed_fields: set[str] = set()
-                for source in known_view_sources:
-                    allowed_fields.update(self.semantic_runtime.semantic_view_fields(source))
-                    for logical_field in self.semantic_runtime.semantic_view_fields(source):
-                        allowed_fields.add(self.semantic_runtime.resolve_field(source, logical_field))
+                allowed_fields = self._allowed_fields_for_sources(known_view_sources)
                 unknown_field_refs = [
                     field for field in inspection.referenced_fields if field not in allowed_fields
                 ]
@@ -128,7 +170,10 @@ class SqlValidator:
             missing_filter_fields = [
                 field
                 for field in required_filter_fields
-                if not self._contains_field_reference(inspection.where_clause, field)
+                if not self._contains_any_field_reference(
+                    inspection.where_clause,
+                    self._field_candidates(query_plan.semantic_views[0] if query_plan and query_plan.semantic_views else None, field),
+                )
             ]
             if missing_filter_fields:
                 errors.append(
@@ -148,13 +193,18 @@ class SqlValidator:
             if self.semantic_runtime.warn_if_missing_time_filter(query_plan.subject_domain):
                 time_fields = self.semantic_runtime.time_filter_fields(query_plan.subject_domain)
                 if time_fields and not any(
-                    self._contains_field_reference(inspection.where_clause, field)
+                    self._contains_any_field_reference(
+                        inspection.where_clause,
+                        self._field_candidates(self._primary_source(query_plan), field),
+                    )
                     for field in time_fields
                 ):
                     warning_message = "sql does not include a time filter; this may cause wide scans"
                     if len(used_sources) > 1:
                         warning_message += " across multiple sources"
                     warnings.append(warning_message)
+
+        warnings.extend(self._build_risk_warnings(inspection, used_sources))
 
         if not inspection.has_limit:
             warnings.append("sql does not include LIMIT")
@@ -167,9 +217,180 @@ class SqlValidator:
         errors.extend(ast_errors)
         warnings.extend(ast_warnings)
 
-        return errors, warnings
+        risk_flags = self._collect_risk_flags(errors, warnings)
+        return SqlValidationResult(
+            errors=errors,
+            warnings=warnings,
+            risk_level=self._risk_level_for_flags(risk_flags),
+            risk_flags=risk_flags,
+        )
 
     def _contains_field_reference(self, sql_fragment: str, field: str) -> bool:
         if not sql_fragment:
             return False
         return re.search(rf"\b{re.escape(field)}\b", sql_fragment, re.IGNORECASE) is not None
+
+    def _contains_any_field_reference(self, sql_fragment: str, fields: set[str]) -> bool:
+        return any(self._contains_field_reference(sql_fragment, field) for field in fields)
+
+    def _field_candidates(self, source_name: str | None, logical_field: str) -> set[str]:
+        candidates = {logical_field.lower()}
+        if self.semantic_runtime is None:
+            return candidates
+        resolved = self.semantic_runtime.resolve_field(source_name, logical_field)
+        if resolved:
+            candidates.add(resolved.lower())
+        return candidates
+
+    def _primary_source(self, query_plan: QueryPlan) -> str | None:
+        if query_plan.semantic_views:
+            return query_plan.semantic_views[0]
+        if query_plan.tables:
+            return query_plan.tables[0]
+        return None
+
+    def _validate_time_context(
+        self,
+        query_plan: QueryPlan,
+        where_clause: str,
+        source_name: str | None,
+    ) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+        if query_plan.time_context.grain == "unknown":
+            return []
+
+        time_fields = self.semantic_runtime.time_filter_fields(query_plan.subject_domain)
+        if not time_fields:
+            return []
+
+        supported_fields = [
+            field
+            for field in time_fields
+            if not query_plan.semantic_views
+            or self.semantic_runtime.semantic_views_support_field(query_plan.semantic_views, field)
+        ]
+        if not supported_fields:
+            supported_fields = time_fields
+
+        if not any(
+            self._contains_any_field_reference(where_clause, self._field_candidates(source_name, field))
+            for field in supported_fields
+        ):
+            return ["sql is missing required time filter from query plan"]
+        return []
+
+    def _validate_version_context(
+        self,
+        query_plan: QueryPlan,
+        where_clause: str,
+        source_name: str | None,
+    ) -> list[str]:
+        if query_plan.version_context is None or not query_plan.version_context.field:
+            return []
+        if self._contains_any_field_reference(
+            where_clause,
+            self._field_candidates(source_name, query_plan.version_context.field),
+        ):
+            return []
+        return ["sql is missing required version filter from query plan"]
+
+    def _validate_limit_consistency(
+        self,
+        query_plan: QueryPlan,
+        sql_limit: int | None,
+        has_limit: bool,
+    ) -> list[str]:
+        if not has_limit:
+            return []
+        if sql_limit is None:
+            return []
+        if sql_limit > query_plan.limit:
+            return [f"sql limit {sql_limit} exceeds query plan limit {query_plan.limit}"]
+        return []
+
+    def _validate_selected_dimensions(
+        self,
+        query_plan: QueryPlan,
+        inspection,
+        source_name: str | None,
+    ) -> list[str]:
+        if not query_plan.dimensions:
+            return []
+        select_fields = {field.lower() for field in inspection.select_fields}
+        missing_dimensions = [
+            field
+            for field in query_plan.dimensions
+            if not self._field_candidates(source_name, field).intersection(select_fields)
+        ]
+        if missing_dimensions:
+            return [
+                "sql does not project required dimensions from query plan: "
+                + ", ".join(sorted(set(missing_dimensions)))
+            ]
+        return []
+
+    def _build_risk_warnings(self, inspection, used_sources: list[str]) -> list[str]:
+        warnings: list[str] = []
+        if inspection.has_wildcard_select:
+            warnings.append("sql uses SELECT *; review result size and sensitive field exposure")
+        if inspection.has_distinct:
+            warnings.append("sql uses DISTINCT; verify whether deduplication changes business semantics")
+        if inspection.has_having:
+            warnings.append("sql uses HAVING; review aggregate filter semantics carefully")
+        if inspection.has_subquery and len(used_sources) > 1:
+            warnings.append("sql combines subquery and multiple sources; execution complexity may be high")
+        if len(used_sources) >= 3:
+            warnings.append("sql touches three or more sources; review join cardinality and execution risk")
+        if len(inspection.functions) >= 4:
+            warnings.append("sql contains many function calls; review complexity and semantic stability")
+        if inspection.limit_value is not None and inspection.limit_value >= self.high_risk_limit:
+            warnings.append(f"sql limit {inspection.limit_value} is high; review result size governance")
+        if not inspection.has_limit and not inspection.has_where:
+            warnings.append("sql has neither WHERE nor LIMIT; high full-scan risk")
+        return warnings
+
+    def _allowed_fields_for_sources(self, source_names: list[str]) -> set[str]:
+        allowed_fields: set[str] = set()
+        if self.semantic_runtime is None:
+            return allowed_fields
+        for source in source_names:
+            for logical_field in self.semantic_runtime.semantic_view_fields(source):
+                allowed_fields.add(logical_field)
+                resolved = self.semantic_runtime.resolve_field(source, logical_field)
+                if resolved:
+                    allowed_fields.add(resolved)
+        return allowed_fields
+
+    def _collect_risk_flags(self, errors: list[str], warnings: list[str]) -> list[str]:
+        flags: list[str] = []
+        for message in errors + warnings:
+            lowered = message.lower()
+            if "join" in lowered and "risk" in lowered:
+                flags.append("join_risk")
+            if "time filter" in lowered or "full-scan" in lowered or "wide scan" in lowered:
+                flags.append("scan_risk")
+            if "limit" in lowered and ("high" in lowered or "exceeds" in lowered):
+                flags.append("result_size_risk")
+            if "select *" in lowered or "sensitive field" in lowered:
+                flags.append("exposure_risk")
+            if "distinct" in lowered or "having" in lowered:
+                flags.append("semantic_risk")
+            if "subquery" in lowered or "complexity" in lowered or "many function calls" in lowered:
+                flags.append("complexity_risk")
+            if "permission filters" in lowered:
+                flags.append("permission_risk")
+            if "sources outside query plan" in lowered or "unsupported fields" in lowered:
+                flags.append("plan_mismatch_risk")
+        deduped: list[str] = []
+        for flag in flags:
+            if flag not in deduped:
+                deduped.append(flag)
+        return deduped
+
+    def _risk_level_for_flags(self, risk_flags: list[str]) -> str:
+        if any(flag in risk_flags for flag in ["permission_risk", "plan_mismatch_risk", "scan_risk", "join_risk"]):
+            return "high"
+        if risk_flags:
+            return "medium"
+        return "low"

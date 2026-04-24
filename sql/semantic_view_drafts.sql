@@ -113,9 +113,9 @@ SELECT
     'v_demand' AS source_table,
     vd.PM_VERSION,
     vd.FGCODE,
-    vd.SBU_DESC,
-    NULL AS BU_DESC,
-    vd.CUSTOMER,
+    vd.SBU_DESC AS sbu_desc,
+    NULL AS bu_desc,
+    vd.CUSTOMER AS customer,
     vd.MONTH AS demand_month,
     vd.REQUIREMENT_QTY AS demand_qty,
     0 AS month_offset
@@ -127,9 +127,9 @@ SELECT
     'v_demand' AS source_table,
     vd.PM_VERSION,
     vd.FGCODE,
-    vd.SBU_DESC,
-    NULL AS BU_DESC,
-    vd.CUSTOMER,
+    vd.SBU_DESC AS sbu_desc,
+    NULL AS bu_desc,
+    vd.CUSTOMER AS customer,
     DATE_ADD(vd.MONTH, INTERVAL 1 MONTH) AS demand_month,
     vd.NEXT_REQUIREMENT AS demand_qty,
     1 AS month_offset
@@ -141,9 +141,9 @@ SELECT
     'v_demand' AS source_table,
     vd.PM_VERSION,
     vd.FGCODE,
-    vd.SBU_DESC,
-    NULL AS BU_DESC,
-    vd.CUSTOMER,
+    vd.SBU_DESC AS sbu_desc,
+    NULL AS bu_desc,
+    vd.CUSTOMER AS customer,
     DATE_ADD(vd.MONTH, INTERVAL 2 MONTH) AS demand_month,
     vd.LAST_REQUIREMENT AS demand_qty,
     2 AS month_offset
@@ -155,9 +155,9 @@ SELECT
     'p_demand' AS source_table,
     pd.PM_VERSION,
     pd.FGCODE,
-    pd.SBU_DESC,
-    pd.BU_DESC,
-    pd.CUSTOMER,
+    pd.SBU_DESC AS sbu_desc,
+    pd.BU_DESC AS bu_desc,
+    pd.CUSTOMER AS customer,
     pd.MONTH AS demand_month,
     pd.REQUIREMENT_QTY AS demand_qty,
     0 AS month_offset
@@ -169,9 +169,9 @@ SELECT
     'p_demand' AS source_table,
     pd.PM_VERSION,
     pd.FGCODE,
-    pd.SBU_DESC,
-    pd.BU_DESC,
-    pd.CUSTOMER,
+    pd.SBU_DESC AS sbu_desc,
+    pd.BU_DESC AS bu_desc,
+    pd.CUSTOMER AS customer,
     DATE_ADD(pd.MONTH, INTERVAL 1 MONTH) AS demand_month,
     pd.NEXT_REQUIREMENT AS demand_qty,
     1 AS month_offset
@@ -183,9 +183,9 @@ SELECT
     'p_demand' AS source_table,
     pd.PM_VERSION,
     pd.FGCODE,
-    pd.SBU_DESC,
-    pd.BU_DESC,
-    pd.CUSTOMER,
+    pd.SBU_DESC AS sbu_desc,
+    pd.BU_DESC AS bu_desc,
+    pd.CUSTOMER AS customer,
     DATE_ADD(pd.MONTH, INTERVAL 2 MONTH) AS demand_month,
     pd.LAST_REQUIREMENT AS demand_qty,
     2 AS month_offset
@@ -202,9 +202,9 @@ SELECT
     d.source_table AS demand_source,
     d.PM_VERSION,
     d.FGCODE,
-    d.SBU_DESC,
-    COALESCE(d.BU_DESC, sfp.BU_DESC) AS BU_DESC,
-    d.CUSTOMER,
+    d.sbu_desc,
+    COALESCE(d.bu_desc, sfp.BU_DESC) AS bu_desc,
+    d.customer,
     d.demand_month AS biz_month,
     d.demand_qty,
     sfp.sales_qty,
@@ -212,5 +212,5 @@ SELECT
 FROM semantic_demand_unpivot_view d
 LEFT JOIN sales_financial_perf sfp
     ON d.FGCODE = sfp.FGCODE
-   AND d.CUSTOMER = sfp.CUSTOMER
+   AND d.customer = sfp.CUSTOMER
    AND d.demand_month = sfp.report_month;

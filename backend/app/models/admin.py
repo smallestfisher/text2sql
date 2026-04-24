@@ -25,6 +25,52 @@ class MetadataOverview(BaseModel):
     trace_count: int
 
 
+class SemanticViewDraftRecord(BaseModel):
+    name: str
+    sql: str
+    declared_output_fields: list[str] = Field(default_factory=list)
+    semantic_output_fields: list[str] = Field(default_factory=list)
+    semantic_status: str | None = None
+    semantic_stage: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    extra_fields: list[str] = Field(default_factory=list)
+    contract_aligned: bool = False
+
+
+class SemanticViewDraftCollectionResponse(BaseModel):
+    views: list[SemanticViewDraftRecord] = Field(default_factory=list)
+    count: int = 0
+
+
+class SemanticViewDependencyRecord(BaseModel):
+    name: str
+    dependency_type: str
+    exists_in_drafts: bool = False
+    exists_in_database: bool | None = None
+    database_status: str | None = None
+    database_warning: str | None = None
+
+
+class SemanticViewValidationResponse(BaseModel):
+    view: SemanticViewDraftRecord
+    dependencies: list[SemanticViewDependencyRecord] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    database_connected: bool = False
+    bootstrap_ready: bool = False
+
+
+class SemanticViewBootstrapResponse(BaseModel):
+    view: str
+    contract_aligned: bool = False
+    database_connected: bool = False
+    bootstrap_ready: bool = False
+    dependencies: list[SemanticViewDependencyRecord] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    executed: bool = False
+    statements: int | None = None
+    error: str | None = None
+
+
 class ExampleCollectionResponse(BaseModel):
     examples: list[ExampleRecord]
     count: int
@@ -59,7 +105,11 @@ class RuntimeQueryLogRecord(BaseModel):
     subject_domain: str | None = None
     answer_status: str | None = None
     plan_valid: bool | None = None
+    plan_risk_level: str | None = None
+    plan_risk_flags: list[str] = Field(default_factory=list)
     sql_valid: bool | None = None
+    sql_risk_level: str | None = None
+    sql_risk_flags: list[str] = Field(default_factory=list)
     executed: bool | None = None
     row_count: int | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -69,6 +119,18 @@ class RuntimeQueryLogRecord(BaseModel):
 class RuntimeQueryLogCollectionResponse(BaseModel):
     query_logs: list[RuntimeQueryLogRecord]
     count: int
+
+
+class RuntimeRiskSummaryResponse(BaseModel):
+    total_queries: int
+    by_risk_level: dict[str, int] = Field(default_factory=dict)
+    by_risk_flag: dict[str, int] = Field(default_factory=dict)
+    by_subject_domain: dict[str, int] = Field(default_factory=dict)
+
+
+class RuntimeRetentionResponse(BaseModel):
+    cutoff_iso: str
+    deleted_rows: dict[str, int] = Field(default_factory=dict)
 
 
 class RuntimeRetrievalLogRecord(BaseModel):
@@ -88,7 +150,11 @@ class RuntimeSqlAuditRecord(BaseModel):
     trace_id: str
     sql_text: str | None = None
     plan_valid: bool
+    plan_risk_level: str | None = None
+    plan_risk_flags: list[str] = Field(default_factory=list)
     sql_valid: bool
+    sql_risk_level: str | None = None
+    sql_risk_flags: list[str] = Field(default_factory=list)
     executed: bool
     row_count: int | None = None
     warnings: list[str] = Field(default_factory=list)

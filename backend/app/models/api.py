@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 
 from .answer import AnswerPayload
@@ -52,10 +52,15 @@ class RetrievalPreviewResponse(BaseModel):
     retrieval: RetrievalContext
 
 
+RiskLevel = Literal["low", "medium", "high"]
+
+
 class ValidationResponse(BaseModel):
     valid: bool
     errors: list[str]
     warnings: list[str]
+    risk_level: RiskLevel = "low"
+    risk_flags: list[str] = Field(default_factory=list)
 
 
 class SqlResponse(BaseModel):

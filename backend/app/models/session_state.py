@@ -19,6 +19,7 @@ class SessionState(BaseModel):
     limit: int | None = None
     time_context: TimeContext | None = None
     version_context: VersionContext | None = None
+    analysis_mode: str | None = None
     last_question_type: str | None = None
     last_query_plan: QueryPlan | None = None
     last_sql: str | None = None

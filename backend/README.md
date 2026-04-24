@@ -148,10 +148,28 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
   --case-id eval_demand_follow_up_001
 ```
 
+语义层配置 lint：
+
+```bash
+.venv/bin/python backend/semantic_lint.py
+```
+
 输出 JSON：
 
 ```bash
 .venv/bin/python backend/offline_regression.py --json
+```
+
+把完整报告写到文件：
+
+```bash
+.venv/bin/python backend/offline_regression.py   --output tmp/offline-regression.json
+```
+
+把摘要和失败项分别落盘：
+
+```bash
+.venv/bin/python backend/offline_regression.py   --report-dir tmp/offline-regression
 ```
 
 说明：
@@ -159,14 +177,19 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 - 离线回归不会连接数据库，也不会写 runtime 审计表
 - 当前会复用 `eval/evaluation_cases.json`
 - 当前主要用于收敛分类、规划、权限注入和 SQL 校验，不用于验证真实执行结果
+- 控制台输出现在会包含 `question_type / scenario / failure_types` 的聚合统计
+- `--report-dir` 会输出 `summary.json` 和 `failures.json`，方便在本地或 CI 比较回归结果
+- `backend/semantic_lint.py` 会提前检查 domain / semantic_view / query_profile / extractor 的关键一致性，避免把配置错误拖到运行时
 - 仓库已补 `.github/workflows/offline-regression.yml`
-- `push` / `pull_request` 时会自动执行 JSON 校验、`compileall` 和离线回归
+- `push` / `pull_request` 时会自动执行 JSON 校验、semantic lint、`compileall`、离线回归，并上传回归 artifact
 - 这条流水线不依赖 MySQL 或业务数据连接，适合做规则层回归门禁
 
 当前还未接入：
 
 - 稳定可达的数据库网络环境
 - 真实向量库与更完整的向量索引基础设施
+
+进入真实数据与真实问题联调前，建议先阅读 [REAL_DATA_TUNING_PLAYBOOK.md](/home/y/llm/new/REAL_DATA_TUNING_PLAYBOOK.md)。
 
 当前已补一版前端工作台，见 [frontend/README.md](/home/y/llm/new/frontend/README.md)：
 

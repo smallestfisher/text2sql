@@ -27,6 +27,7 @@ class SqlInspection:
     joins: list[JoinInspection] = field(default_factory=list)
     functions: list[str] = field(default_factory=list)
     referenced_fields: list[str] = field(default_factory=list)
+    select_fields: list[str] = field(default_factory=list)
     group_by_fields: list[str] = field(default_factory=list)
     order_by_fields: list[str] = field(default_factory=list)
     has_select: bool = False
@@ -35,6 +36,9 @@ class SqlInspection:
     has_limit: bool = False
     limit_value: int | None = None
     has_subquery: bool = False
+    has_distinct: bool = False
+    has_having: bool = False
+    has_wildcard_select: bool = False
     normalized_sql: str = ""
     parser_backend: str = "regex"
     parse_errors: list[str] = field(default_factory=list)
@@ -135,6 +139,7 @@ class SqlAstValidator:
         where_clause = self._extract_where_clause(normalized)
         limit_match = re.search(r"\bLIMIT\s+(\d+)", normalized, re.IGNORECASE)
         sources = re.findall(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", normalized, re.IGNORECASE)
+        aliases = self._extract_source_aliases(normalized)
         functions = sorted(set(re.findall(r"\b([A-Z_]+)\s*\(", normalized.upper())))
 
         return SqlInspection(
@@ -142,7 +147,8 @@ class SqlAstValidator:
             sources=sources,
             joins=self._extract_joins(normalized),
             functions=functions,
-            referenced_fields=self._extract_referenced_fields(normalized, sources, functions),
+            referenced_fields=self._extract_referenced_fields(normalized, sources, aliases, functions),
+            select_fields=self._extract_select_fields(normalized),
             group_by_fields=self._extract_group_by_fields(normalized),
             order_by_fields=self._extract_order_by_fields(normalized),
             has_select=re.search(r"\bSELECT\b", normalized, re.IGNORECASE) is not None,
@@ -151,6 +157,9 @@ class SqlAstValidator:
             has_limit=limit_match is not None,
             limit_value=int(limit_match.group(1)) if limit_match else None,
             has_subquery=re.search(r"\(\s*SELECT\b", normalized, re.IGNORECASE) is not None,
+            has_distinct=re.search(r"\bSELECT\s+DISTINCT\b", normalized, re.IGNORECASE) is not None,
+            has_having=re.search(r"\bHAVING\b", normalized, re.IGNORECASE) is not None,
+            has_wildcard_select=re.search(r"\bSELECT\s+.*\*", normalized, re.IGNORECASE | re.DOTALL) is not None,
             normalized_sql=lowered,
             parser_backend="regex",
         )
@@ -205,6 +214,7 @@ class SqlAstValidator:
             joins=self._extract_sqlglot_joins(root),
             functions=functions,
             referenced_fields=referenced_fields,
+            select_fields=self._extract_sqlglot_select_fields(root),
             group_by_fields=self._extract_sqlglot_group_by_fields(root),
             order_by_fields=self._extract_sqlglot_order_by_fields(root),
             has_select=root.find(exp.Select) is not None or isinstance(root, exp.Select),
@@ -213,9 +223,22 @@ class SqlAstValidator:
             has_limit=limit_node is not None,
             limit_value=self._extract_limit_value(limit_node),
             has_subquery=any(True for _ in root.find_all(exp.Subquery)),
+            has_distinct=bool(getattr(root, "args", {}).get("distinct")),
+            has_having=root.args.get("having") is not None if hasattr(root, "args") else False,
+            has_wildcard_select=any(True for _ in root.find_all(exp.Star)),
             normalized_sql=root.sql(dialect="mysql").lower(),
             parser_backend="sqlglot",
         )
+
+    def _extract_select_fields(self, sql: str) -> list[str]:
+        match = re.search(
+            r"\bSELECT\b(.*?)(?:\bFROM\b|$)",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        return self._extract_fields_from_clause(match.group(1))
 
     def _extract_where_clause(self, sql: str) -> str:
         match = re.search(
@@ -280,6 +303,7 @@ class SqlAstValidator:
         self,
         sql: str,
         sources: list[str],
+        aliases: list[str],
         functions: list[str],
     ) -> list[str]:
         stripped = re.sub(r"'(?:''|[^'])*'", " ", sql)
@@ -289,6 +313,7 @@ class SqlAstValidator:
             stripped,
         )
         ignored = {item.upper() for item in sources}
+        ignored.update(item.upper() for item in aliases)
         ignored.update(functions)
         ignored.update(self.SQL_KEYWORDS)
 
@@ -305,6 +330,14 @@ class SqlAstValidator:
             seen.add(candidate)
             referenced.append(candidate)
         return referenced
+
+    def _extract_source_aliases(self, sql: str) -> list[str]:
+        aliases = re.findall(
+            r"\b(?:FROM|JOIN)\s+[A-Za-z_][A-Za-z0-9_]*\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b",
+            sql,
+            re.IGNORECASE,
+        )
+        return self._unique_strings(aliases)
 
     def _extract_sqlglot_joins(self, root: Any) -> list[JoinInspection]:
         joins: list[JoinInspection] = []
@@ -341,6 +374,16 @@ class SqlAstValidator:
         return self._unique_strings([
             item.name
             for item in order.find_all(exp.Column)
+            if getattr(item, "name", None)
+        ])
+
+    def _extract_sqlglot_select_fields(self, root: Any) -> list[str]:
+        select = root.find(exp.Select) if not isinstance(root, exp.Select) else root
+        if select is None:
+            return []
+        return self._unique_strings([
+            item.name
+            for item in select.find_all(exp.Column)
             if getattr(item, "name", None)
         ])
 

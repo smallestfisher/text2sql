@@ -203,26 +203,31 @@ class ConversationOrchestrator:
                 },
             )
 
-            plan_errors, plan_warnings = self.query_plan_validator.validate(
+            plan_result = self.query_plan_validator.validate_detailed(
                 query_plan=query_plan,
                 semantic_layer=self.semantic_layer,
             )
+            plan_errors = plan_result.errors
+            plan_warnings = plan_result.warnings
             if plan_errors and llm_plan_hint.get("mode") == "live":
                 fallback_plan, fallback_permission_warnings = self.permission_service.apply_to_query_plan(
                     query_plan=base_query_plan.model_copy(deep=True),
                     user_context=request.user_context,
                 )
                 fallback_plan = self.query_plan_compiler.compile(query_plan=fallback_plan, retrieval=retrieval)
-                fallback_errors, fallback_warnings = self.query_plan_validator.validate(
+                fallback_result = self.query_plan_validator.validate_detailed(
                     query_plan=fallback_plan,
                     semantic_layer=self.semantic_layer,
                 )
+                fallback_errors = fallback_result.errors
+                fallback_warnings = fallback_result.warnings
                 if not fallback_errors:
                     warnings.append("llm query plan hint rejected; fallback to local planner result")
                     query_plan = fallback_plan
                     permission_warnings = fallback_permission_warnings
                     plan_errors = []
                     plan_warnings = fallback_warnings
+                    plan_result = fallback_result
             warnings.extend(plan_warnings)
             logger.info(
                 "plan validation trace_id=%s valid=%s errors=%s warnings=%s",
@@ -290,28 +295,33 @@ class ConversationOrchestrator:
                 query_plan=query_plan,
                 user_context=request.user_context,
             )
-            sql_errors, sql_warnings = (["sql is empty"], []) if sql is None and not plan_errors else (
-                self.sql_validator.validate(
+            sql_result = (
+                self.sql_validator.validate_detailed(
                     sql,
                     self.semantic_layer,
                     query_plan=query_plan,
                     required_filter_fields=required_filter_fields,
                 )
                 if sql is not None
-                else ([], [])
+                else None
             )
+            sql_errors = ["sql is empty"] if sql is None and not plan_errors else (sql_result.errors if sql_result else [])
+            sql_warnings = sql_result.warnings if sql_result is not None else []
+            sql_risk_level = sql_result.risk_level if sql_result is not None else "low"
+            sql_risk_flags = sql_result.risk_flags if sql_result is not None else []
             if sql_errors and llm_sql and not plan_errors:
                 local_sql = self.sql_generator.generate(query_plan, llm_sql=None)
-                local_sql_errors, local_sql_warnings = (
-                    self.sql_validator.validate(
+                local_sql_result = (
+                    self.sql_validator.validate_detailed(
                         local_sql,
                         self.semantic_layer,
                         query_plan=query_plan,
                         required_filter_fields=required_filter_fields,
                     )
                     if local_sql is not None
-                    else (["sql is empty"], [])
+                    else None
                 )
+                local_sql_errors = ["sql is empty"] if local_sql is None else (local_sql_result.errors if local_sql_result else [])
                 if not local_sql_errors:
                     warnings.append("llm sql hint rejected; fallback to local sql generator")
                     sql_hint_metadata["used"] = False
@@ -319,7 +329,9 @@ class ConversationOrchestrator:
                     sql = local_sql
                     visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
                     sql_errors = []
-                    sql_warnings = local_sql_warnings
+                    sql_warnings = local_sql_result.warnings if local_sql_result is not None else []
+                    sql_risk_level = local_sql_result.risk_level if local_sql_result is not None else "low"
+                    sql_risk_flags = local_sql_result.risk_flags if local_sql_result is not None else []
             self.audit_service.append_step(
                 trace,
                 "validate_sql",
@@ -375,11 +387,15 @@ class ConversationOrchestrator:
                 valid=not plan_errors,
                 errors=plan_errors,
                 warnings=warnings,
+                risk_level=plan_result.risk_level,
+                risk_flags=plan_result.risk_flags,
             )
             sql_validation = ValidationResponse(
                 valid=not sql_errors,
                 errors=sql_errors,
                 warnings=sql_warnings,
+                risk_level=sql_risk_level,
+                risk_flags=sql_risk_flags,
             )
             answer = self.answer_builder.build(
                 classification=classification,

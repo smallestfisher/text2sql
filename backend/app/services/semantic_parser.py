@@ -27,6 +27,9 @@ class SemanticParser:
         filters = self._extract_filters(question)
         time_context = self._extract_time_context(question)
         version_context = self.semantic_runtime.extract_version_context(question)
+        requested_sort = self.semantic_runtime.extract_sort(question, matched_metrics)
+        requested_limit = self.semantic_runtime.extract_limit(question)
+        analysis_mode = self.semantic_runtime.extract_analysis_mode(question)
         subject_domain = self.semantic_runtime.infer_domain(
             matched_metrics=matched_metrics,
             matched_entities=matched_entities,
@@ -44,6 +47,9 @@ class SemanticParser:
             or filters
             or time_context.grain != "unknown"
             or version_context is not None
+            or bool(requested_sort)
+            or requested_limit is not None
+            or analysis_mode is not None
         )
 
         return SemanticParse(
@@ -54,6 +60,9 @@ class SemanticParser:
             filters=filters,
             time_context=time_context,
             version_context=version_context,
+            requested_sort=requested_sort,
+            requested_limit=requested_limit,
+            analysis_mode=analysis_mode,
             subject_domain=subject_domain,
             has_follow_up_cue=has_follow_up_cue,
             has_explicit_slots=has_explicit_slots,

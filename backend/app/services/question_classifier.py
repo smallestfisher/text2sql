@@ -199,6 +199,10 @@ class QuestionClassifier:
             score += 0.2
         if semantic_diff.get("only_updates_version"):
             score += 0.2
+        if semantic_diff.get("only_updates_sort"):
+            score += 0.22
+        if semantic_diff.get("only_updates_limit"):
+            score += 0.2
         if has_strong_follow_up_cue and (
             semantic_diff.get("version_changed")
             or semantic_diff.get("time_grain_changed")
@@ -260,6 +264,8 @@ class QuestionClassifier:
             or semantic_diff.get("only_updates_dimensions")
             or semantic_diff.get("only_updates_time")
             or semantic_diff.get("only_updates_version")
+            or semantic_diff.get("only_updates_sort")
+            or semantic_diff.get("only_updates_limit")
         ):
             score -= 0.18
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
@@ -682,5 +688,6 @@ class QuestionClassifier:
             or context_delta.replace_sort
             or context_delta.replace_version_context is not None
             or context_delta.replace_limit is not None
+            or context_delta.replace_analysis_mode is not None
             or context_delta.replace_time_context.grain != "unknown"
         )

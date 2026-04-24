@@ -371,6 +371,80 @@
         "pattern": "([A-Za-z0-9._-]+)\\s*(?:版本|version)",
         "flags": ["ignorecase"]
       }
+    ],
+    "analysis": [
+      {
+        "mode": "trend",
+        "pattern": "趋势|走势|变化趋势",
+        "flags": ["ignorecase"]
+      },
+      {
+        "mode": "compare",
+        "pattern": "对比|比较|对照",
+        "flags": ["ignorecase"]
+      }
+    ],
+    "sort": [
+      {
+        "field": "sales_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?销售(?:业绩|量)?(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "financial_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?财务(?:业绩|量)?(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "inventory_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?库存(?:量|数量)?(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "demand_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?需求(?:量)?(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "actual_output_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?实际产出(?:量)?(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "plan_input_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?计划投入(?:量)?(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "customer",
+        "order": "desc",
+        "pattern": "(?:按|依)?客户(?:从高到低|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "biz_month",
+        "order": "desc",
+        "pattern": "(?:按|依)?月份?(?:从新到旧|降序|倒序)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "field": "biz_date",
+        "order": "desc",
+        "pattern": "(?:按|依)?日期(?:从新到旧|降序|倒序)",
+        "flags": ["ignorecase"]
+      }
+    ],
+    "limit": [
+      {
+        "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
+        "flags": ["ignorecase"]
+      }
     ]
   },
   "metrics": [

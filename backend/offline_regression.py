@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import sys
@@ -79,14 +80,18 @@ def run_question(
     )
     query_plan = query_plan_compiler.compile(query_plan=query_plan, retrieval=None)
 
-    plan_errors, plan_warnings = query_plan_validator.validate(
+    plan_result = query_plan_validator.validate_detailed(
         query_plan=query_plan,
         semantic_layer=semantic_layer,
     )
+    plan_errors = plan_result.errors
+    plan_warnings = plan_result.warnings
     plan_validation = ValidationResponse(
         valid=not plan_errors,
         errors=plan_errors,
         warnings=planner_warnings + permission_warnings + plan_warnings,
+        risk_level=plan_result.risk_level,
+        risk_flags=plan_result.risk_flags,
     )
 
     sql = None if plan_errors else sql_generator.generate(query_plan)
@@ -94,24 +99,29 @@ def run_question(
         query_plan=query_plan,
         user_context=user_context,
     )
-    sql_errors, sql_warnings = (
-        (["sql is empty"], [])
-        if sql is None and not plan_errors
-        else (
-            sql_validator.validate(
-                sql,
-                semantic_layer,
-                query_plan=query_plan,
-                required_filter_fields=required_filter_fields,
-            )
-            if sql is not None
-            else ([], [])
+    sql_errors: list[str] = []
+    sql_warnings: list[str] = []
+    sql_risk_level = "low"
+    sql_risk_flags: list[str] = []
+    if sql is None and not plan_errors:
+        sql_errors = ["sql is empty"]
+    elif sql is not None:
+        sql_result = sql_validator.validate_detailed(
+            sql,
+            semantic_layer,
+            query_plan=query_plan,
+            required_filter_fields=required_filter_fields,
         )
-    )
+        sql_errors = sql_result.errors
+        sql_warnings = sql_result.warnings
+        sql_risk_level = sql_result.risk_level
+        sql_risk_flags = sql_result.risk_flags
     sql_validation = ValidationResponse(
         valid=not sql_errors,
         errors=sql_errors,
         warnings=sql_warnings,
+        risk_level=sql_risk_level,
+        risk_flags=sql_risk_flags,
     )
     answer = answer_builder.build(
         classification=classification,
@@ -146,6 +156,7 @@ def evaluate_case(case: EvaluationCase, result: dict[str, Any]) -> list[str]:
     sql_validation = result["sql_validation"]
     actual_metrics = list(query_plan.metrics)
     actual_dimensions = list(query_plan.dimensions)
+    actual_sort_fields = unique([item.field for item in query_plan.sort])
     actual_filter_fields = unique([item.field for item in query_plan.filters])
     actual_semantic_views = list(query_plan.semantic_views)
     actual_warnings = unique(plan_validation.warnings + sql_validation.warnings)
@@ -174,6 +185,18 @@ def evaluate_case(case: EvaluationCase, result: dict[str, Any]) -> list[str]:
         missing_dimensions = [item for item in case.expected_dimensions if item not in actual_dimensions]
         if missing_dimensions:
             failures.append("missing_dimensions=" + ",".join(missing_dimensions))
+    if case.unexpected_dimensions:
+        unexpected_dimensions = [item for item in case.unexpected_dimensions if item in actual_dimensions]
+        if unexpected_dimensions:
+            failures.append("unexpected_dimensions=" + ",".join(unexpected_dimensions))
+    if case.expected_sort_fields:
+        missing_sort_fields = [item for item in case.expected_sort_fields if item not in actual_sort_fields]
+        if missing_sort_fields:
+            failures.append("missing_sort_fields=" + ",".join(missing_sort_fields))
+    if case.unexpected_sort_fields:
+        unexpected_sort_fields = [item for item in case.unexpected_sort_fields if item in actual_sort_fields]
+        if unexpected_sort_fields:
+            failures.append("unexpected_sort_fields=" + ",".join(unexpected_sort_fields))
     if case.expected_filter_fields:
         missing_filter_fields = [item for item in case.expected_filter_fields if item not in actual_filter_fields]
         if missing_filter_fields:
@@ -217,20 +240,42 @@ def unique(items: list[str]) -> list[str]:
     return values
 
 
+def summarize_dimension(results: list[dict[str, Any]], key: str) -> dict[str, dict[str, int]]:
+    buckets: dict[str, dict[str, int]] = {}
+    for item in results:
+        raw_value = item.get(key)
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        values = values or ["unspecified"]
+        for value in values:
+            name = str(value or "unspecified")
+            bucket = buckets.setdefault(name, {"total": 0, "failed": 0})
+            bucket["total"] += 1
+            if not item["passed"]:
+                bucket["failed"] += 1
+    return dict(sorted(buckets.items()))
+
+
+def summarize_failures(results: list[dict[str, Any]]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in results:
+        for failure in item.get("failures", []):
+            failure_type = failure.split("=", 1)[0] if "=" in failure else failure
+            counter[failure_type] += 1
+    return dict(sorted(counter.items()))
+
+
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     passed = sum(1 for item in results if item["passed"])
     failed = len(results) - passed
-    by_question_type: dict[str, dict[str, int]] = {}
-    for item in results:
-        bucket = by_question_type.setdefault(item["classification_question_type"], {"total": 0, "failed": 0})
-        bucket["total"] += 1
-        if not item["passed"]:
-            bucket["failed"] += 1
     return {
         "case_count": len(results),
         "passed_count": passed,
         "failed_count": failed,
-        "by_question_type": by_question_type,
+        "by_question_type": summarize_dimension(results, "classification_question_type"),
+        "by_domain": summarize_dimension(results, "classification_domain"),
+        "by_scenario": summarize_dimension(results, "scenario"),
+        "by_coverage_tag": summarize_dimension(results, "coverage_tags"),
+        "failure_types": summarize_failures(results),
     }
 
 
@@ -262,6 +307,16 @@ def main() -> None:
         "--json",
         action="store_true",
         help="Emit machine-readable JSON output.",
+    )
+    parser.add_argument(
+        "--output",
+        default="",
+        help="Optional path to write the full JSON regression report.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default="",
+        help="Optional directory to write summary.json and failures.json reports.",
     )
     args = parser.parse_args()
 
@@ -305,8 +360,28 @@ def main() -> None:
         )
 
     summary = summarize(results)
+    report = {"summary": summary, "items": results}
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    if args.report_dir:
+        report_dir = Path(args.report_dir)
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        failures_only = [item for item in results if not item["passed"]]
+        (report_dir / "failures.json").write_text(
+            json.dumps({"items": failures_only}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
     if args.json:
-        print(json.dumps({"summary": summary, "items": results}, ensure_ascii=False, indent=2))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return
 
     print(
@@ -315,7 +390,16 @@ def main() -> None:
     )
     for question_type, bucket in sorted(summary["by_question_type"].items()):
         print(
-            f"- {question_type}: total={bucket['total']} failed={bucket['failed']}"
+            f"- type {question_type}: total={bucket['total']} failed={bucket['failed']}"
+        )
+    for scenario, bucket in sorted(summary["by_scenario"].items()):
+        print(
+            f"- scenario {scenario}: total={bucket['total']} failed={bucket['failed']}"
+        )
+    if summary["failure_types"]:
+        print(
+            "- failure_types:",
+            ", ".join(f"{name}={count}" for name, count in summary["failure_types"].items()),
         )
     for item in results:
         if args.failures_only and item["passed"]:

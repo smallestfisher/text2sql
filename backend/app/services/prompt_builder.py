@@ -222,6 +222,8 @@ class PromptBuilder:
                 "filter_fields": [item.field for item in semantic_parse.filters],
                 "time_grain": semantic_parse.time_context.grain,
                 "has_version_context": semantic_parse.version_context is not None,
+                "requested_sort": [item.model_dump() for item in semantic_parse.requested_sort],
+                "requested_limit": semantic_parse.requested_limit,
                 "has_follow_up_cue": semantic_parse.has_follow_up_cue,
                 "has_explicit_slots": semantic_parse.has_explicit_slots,
             },

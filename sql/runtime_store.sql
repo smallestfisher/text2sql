@@ -77,7 +77,11 @@ CREATE TABLE IF NOT EXISTS query_logs (
   subject_domain VARCHAR(64) NULL,
   answer_status VARCHAR(64) NULL,
   plan_valid BOOLEAN NULL,
+  plan_risk_level VARCHAR(16) NULL,
+  plan_risk_flags_json LONGTEXT NULL,
   sql_valid BOOLEAN NULL,
+  sql_risk_level VARCHAR(16) NULL,
+  sql_risk_flags_json LONGTEXT NULL,
   executed BOOLEAN NULL,
   row_count INT NULL,
   warnings_json LONGTEXT NULL,
@@ -102,13 +106,43 @@ CREATE TABLE IF NOT EXISTS sql_audit_logs (
   trace_id VARCHAR(64) NOT NULL,
   sql_text LONGTEXT NULL,
   plan_valid BOOLEAN NOT NULL,
+  plan_risk_level VARCHAR(16) NULL,
+  plan_risk_flags_json LONGTEXT NULL,
   sql_valid BOOLEAN NOT NULL,
+  sql_risk_level VARCHAR(16) NULL,
+  sql_risk_flags_json LONGTEXT NULL,
   executed BOOLEAN NOT NULL,
   row_count INT NULL,
   warnings_json LONGTEXT NULL,
   errors_json LONGTEXT NULL,
   created_at DATETIME NOT NULL
 );
+
+ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS plan_risk_level VARCHAR(16) NULL;
+ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS plan_risk_flags_json LONGTEXT NULL;
+ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS sql_risk_level VARCHAR(16) NULL;
+ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS sql_risk_flags_json LONGTEXT NULL;
+ALTER TABLE sql_audit_logs ADD COLUMN IF NOT EXISTS plan_risk_level VARCHAR(16) NULL;
+ALTER TABLE sql_audit_logs ADD COLUMN IF NOT EXISTS plan_risk_flags_json LONGTEXT NULL;
+ALTER TABLE sql_audit_logs ADD COLUMN IF NOT EXISTS sql_risk_level VARCHAR(16) NULL;
+ALTER TABLE sql_audit_logs ADD COLUMN IF NOT EXISTS sql_risk_flags_json LONGTEXT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at ON chat_sessions (updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions (user_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_trace_id ON chat_messages (trace_id);
+CREATE INDEX IF NOT EXISTS idx_session_state_snapshots_session_created ON session_state_snapshots (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_session_state_snapshots_trace_id ON session_state_snapshots (trace_id);
+CREATE INDEX IF NOT EXISTS idx_query_logs_session_created ON query_logs (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_user_created ON query_logs (user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_domain_created ON query_logs (subject_domain, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_sql_risk_created ON query_logs (sql_risk_level, created_at);
+CREATE INDEX IF NOT EXISTS idx_retrieval_logs_trace_rank ON retrieval_logs (trace_id, rank_position);
+CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_trace_created ON sql_audit_logs (trace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_logs_session_created ON feedback_logs (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_logs_trace_created ON feedback_logs (trace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_logs_user_created ON feedback_logs (user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evaluation_runs_created_at ON evaluation_runs (created_at);
 
 CREATE TABLE IF NOT EXISTS feedback_logs (
   feedback_id VARCHAR(64) PRIMARY KEY,

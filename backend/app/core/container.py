@@ -13,6 +13,7 @@ from backend.app.services.audit_service import AuditService
 from backend.app.services.auth_service import AuthService
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.evaluation_service import EvaluationService
+from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.feedback_service import FeedbackService
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
@@ -26,6 +27,7 @@ from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.runtime_admin_service import RuntimeAdminService
 from backend.app.services.semantic_loader import SemanticLayerLoader
+from backend.app.services.semantic_view_service import SemanticViewService
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
@@ -89,13 +91,21 @@ class AppContainer:
             default_limit=self.settings.default_sql_limit,
         )
         self.session_state_service = SessionStateService()
-        self.sql_executor = SqlExecutor(database_connector=self.business_database_connector)
+        self.execution_cache_service = ExecutionCacheService(
+            ttl_seconds=self.settings.execution_cache_ttl_seconds,
+            max_entries=self.settings.execution_cache_max_entries,
+        )
+        self.sql_executor = SqlExecutor(
+            database_connector=self.business_database_connector,
+            execution_cache=self.execution_cache_service,
+        )
         self.sql_generator = SqlGenerator(semantic_runtime=self.semantic_runtime)
         self.sql_ast_validator = SqlAstValidator()
         self.sql_validator = SqlValidator(
             ast_validator=self.sql_ast_validator,
             semantic_runtime=self.semantic_runtime,
             max_limit=self.settings.default_sql_limit,
+            high_risk_limit=self.settings.high_risk_sql_limit,
         )
         self.auth_service = AuthService(
             repository=self.auth_repository,
@@ -125,6 +135,11 @@ class AppContainer:
             metadata_repository=self.metadata_repository,
             semantic_loader=self.semantic_loader,
             audit_repository=self.audit_repository,
+        )
+        self.semantic_view_service = SemanticViewService(
+            semantic_layer=self.semantic_layer,
+            drafts_path=self.metadata_repository.documents["semantic_view_drafts"],
+            database_connector=self.business_database_connector,
         )
         self.runtime_admin_service = RuntimeAdminService(
             session_repository=self.session_repository,

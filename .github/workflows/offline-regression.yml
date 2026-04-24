@@ -29,8 +29,17 @@ jobs:
           python -m json.tool eval/evaluation_cases.json > /dev/null
           python -m json.tool examples/nl2sql_examples.template.json > /dev/null
 
+      - name: Run semantic lint
+        run: python backend/semantic_lint.py
+
       - name: Compile backend sources
         run: python -m compileall backend
 
       - name: Run offline regression
-        run: python backend/offline_regression.py --failures-only
+        run: python backend/offline_regression.py --failures-only --report-dir .artifacts/offline-regression
+
+      - name: Upload offline regression artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-regression-report
+          path: .artifacts/offline-regression

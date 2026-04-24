@@ -58,15 +58,10 @@ class QueryPlanner:
         filters = semantic_parse.filters
         time_context = semantic_parse.time_context
         version_context = semantic_parse.version_context
-        sort = []
-        limit = self.semantic_runtime.default_limit(classification.subject_domain)
-        dimensions = self._infer_dimensions(
-            subject_domain=classification.subject_domain,
-            requested_dimensions=semantic_parse.requested_dimensions,
-            matched_entities=matched_entities,
-            filters=filters,
-            time_context=time_context,
-        )
+        analysis_mode = semantic_parse.analysis_mode
+        sort = list(semantic_parse.requested_sort)
+        limit = semantic_parse.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
+        requested_dimensions = list(semantic_parse.requested_dimensions)
 
         if classification.inherit_context and session_state is not None:
             matched_entities = matched_entities or session_state.entities
@@ -80,10 +75,21 @@ class QueryPlanner:
                 time_context = session_state.time_context
             if version_context is None:
                 version_context = session_state.version_context
-            if not dimensions:
-                dimensions = session_state.dimensions
+            if analysis_mode is None:
+                analysis_mode = session_state.analysis_mode
+            if not requested_dimensions:
+                requested_dimensions = list(session_state.dimensions)
             sort = classification.context_delta.replace_sort or session_state.sort
             limit = classification.context_delta.replace_limit or session_state.limit or limit
+
+        dimensions = self._infer_dimensions(
+            subject_domain=classification.subject_domain,
+            requested_dimensions=requested_dimensions,
+            matched_entities=matched_entities,
+            filters=filters,
+            time_context=time_context,
+            analysis_mode=analysis_mode,
+        )
 
         plan = QueryPlan(
             question_type=classification.question_type,
@@ -108,11 +114,15 @@ class QueryPlanner:
             need_clarification=classification.need_clarification,
             clarification_question=classification.clarification_question,
             reason_code=classification.reason_code,
+            analysis_mode=analysis_mode,
             sort=sort,
             limit=limit,
             reason=classification.reason,
         )
         plan = self.semantic_runtime.sanitize_query_plan(plan)
+        if analysis_mode == "compare" and not plan.dimensions and not semantic_parse.requested_sort:
+            plan.sort = []
+
         if plan.need_clarification:
             classification.question_type = "clarification_needed"
             classification.need_clarification = True
@@ -155,15 +165,21 @@ class QueryPlanner:
         matched_entities: list[str],
         filters,
         time_context,
+        analysis_mode: str | None = None,
     ) -> list[str]:
         filter_fields = {item.field for item in filters}
-        return self.semantic_runtime.suggest_dimensions(
+        dimensions = self.semantic_runtime.suggest_dimensions(
             subject_domain=subject_domain,
             requested_dimensions=requested_dimensions,
             matched_entities=matched_entities,
             filter_fields=filter_fields,
             time_grain=time_context.grain,
         )
+        if analysis_mode == 'trend':
+            preferred_time_dimension = 'biz_month' if time_context.grain == 'month' else 'biz_date'
+            if preferred_time_dimension not in dimensions:
+                dimensions = dimensions + [preferred_time_dimension]
+        return dimensions
 
     def _merge_filters(self, current_filters, new_filters, remove_fields=None):
         remove_fields = set(remove_fields or [])

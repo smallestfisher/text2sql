@@ -5,6 +5,7 @@ import re
 from backend.app.models.api import ExecutionResponse
 from backend.app.models.auth import UserContext
 from backend.app.services.database_connector import DatabaseConnector
+from backend.app.services.execution_cache_service import ExecutionCacheService
 
 
 class SqlExecutor:
@@ -12,9 +13,11 @@ class SqlExecutor:
         self,
         database_connector: DatabaseConnector | None = None,
         max_sql_length: int = 20000,
+        execution_cache: ExecutionCacheService | None = None,
     ) -> None:
         self.database_connector = database_connector or DatabaseConnector()
         self.max_sql_length = max_sql_length
+        self.execution_cache = execution_cache
 
     def execute(self, sql: str | None, user_context: UserContext | None = None) -> ExecutionResponse:
         if sql is None:
@@ -60,7 +63,15 @@ class SqlExecutor:
                 error_category="governance",
             )
 
-        return self.database_connector.execute_readonly(sql)
+        if self.execution_cache is not None:
+            cached = self.execution_cache.get(sql, user_context=user_context)
+            if cached is not None:
+                return cached
+
+        execution = self.database_connector.execute_readonly(sql)
+        if self.execution_cache is not None:
+            self.execution_cache.put(sql, execution, user_context=user_context)
+        return execution
 
     def health(self) -> dict:
         return self.database_connector.test_connection()

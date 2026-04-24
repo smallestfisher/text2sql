@@ -36,6 +36,9 @@ class SemanticRuntime:
         self.filter_extractors = extractors.get("filters", [])
         self.dimension_extractors = extractors.get("dimensions", [])
         self.version_extractors = extractors.get("version", [])
+        self.analysis_extractors = extractors.get("analysis", [])
+        self.sort_extractors = extractors.get("sort", [])
+        self.limit_extractors = extractors.get("limit", [])
         self.graph_nodes = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
         self.graph_edges = semantic_layer.get("semantic_graph", {}).get("edges", [])
 
@@ -319,8 +322,11 @@ class SemanticRuntime:
             replace_entities=semantic_parse.matched_entities,
             replace_metrics=semantic_parse.matched_metrics,
             replace_dimensions=semantic_parse.requested_dimensions,
+            replace_sort=semantic_parse.requested_sort,
             replace_time_context=semantic_parse.time_context,
             replace_version_context=semantic_parse.version_context,
+            replace_limit=semantic_parse.requested_limit,
+            replace_analysis_mode=semantic_parse.analysis_mode,
         )
 
     def session_semantic_diff(
@@ -335,6 +341,8 @@ class SemanticRuntime:
         current_has_version = bool(
             semantic_parse.version_context is not None and semantic_parse.version_context.value
         )
+        current_has_sort = bool(semantic_parse.requested_sort)
+        current_has_limit = semantic_parse.requested_limit is not None
         if session_state is None:
             return {
                 "has_session": False,
@@ -349,6 +357,8 @@ class SemanticRuntime:
                 "only_updates_dimensions": current_has_dimensions,
                 "only_updates_time": False,
                 "only_updates_version": False,
+                "only_updates_sort": False,
+                "only_updates_limit": False,
                 "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
                 "can_execute_without_context": bool(
                     semantic_parse.matched_metrics
@@ -375,13 +385,17 @@ class SemanticRuntime:
         previous_has_version = bool(
             session_state.version_context is not None and session_state.version_context.value
         )
-        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_has_dimensions and not current_has_time and not current_has_version
-        only_updates_dimensions = current_has_dimensions and not current_metrics and not current_filter_fields and not current_has_time and not current_has_version
-        only_updates_time = current_has_time and not current_metrics and not current_entities and not current_filter_fields and not current_has_version
-        only_updates_version = current_has_version and not current_metrics and not current_entities and not current_filter_fields and not current_has_time
+        metric_changed = bool(current_metrics - previous_metrics)
+        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_has_dimensions and not current_has_time and not current_has_version and not current_has_sort and not current_has_limit
+        only_updates_dimensions = current_has_dimensions and not current_metrics and not current_filter_fields and not current_has_time and not current_has_version and not current_has_sort and not current_has_limit
+        only_updates_time = current_has_time and not current_metrics and not current_entities and not current_filter_fields and not current_has_version and not current_has_sort and not current_has_limit
+        only_updates_version = current_has_version and not current_metrics and not current_entities and not current_filter_fields and not current_has_time and not current_has_sort and not current_has_limit
+        only_updates_sort = current_has_sort and not metric_changed and not current_entities and not current_filter_fields and not current_has_time and not current_has_version and not current_has_dimensions
+        only_updates_limit = current_has_limit and not metric_changed and not current_entities and not current_filter_fields and not current_has_time and not current_has_version and not current_has_dimensions
         can_execute_without_context = bool(
             semantic_parse.matched_metrics
             and (parsed_domain_known or current_has_time or current_filter_fields or current_entities)
+            and not (only_updates_sort or only_updates_limit)
         )
         metrics_missing_but_context_resolvable = bool(
             not semantic_parse.matched_metrics
@@ -391,6 +405,8 @@ class SemanticRuntime:
                 or current_has_dimensions
                 or current_has_time
                 or current_has_version
+                or current_has_sort
+                or current_has_limit
                 or semantic_parse.has_follow_up_cue
             )
         )
@@ -407,6 +423,8 @@ class SemanticRuntime:
                 or only_updates_dimensions
                 or only_updates_time
                 or only_updates_version
+                or only_updates_sort
+                or only_updates_limit
             )
         )
         return {
@@ -434,6 +452,8 @@ class SemanticRuntime:
             "only_updates_dimensions": only_updates_dimensions,
             "only_updates_time": only_updates_time,
             "only_updates_version": only_updates_version,
+            "only_updates_sort": only_updates_sort,
+            "only_updates_limit": only_updates_limit,
             "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
             "can_execute_without_context": can_execute_without_context,
             "is_short_followup_fragment": is_short_followup_fragment,
@@ -576,6 +596,33 @@ class SemanticRuntime:
             return VersionContext(field=rule.get("field"), value=extracted)
         return None
 
+    def extract_analysis_mode(self, question: str) -> str | None:
+        for rule in self.analysis_extractors:
+            source = self._prepare_text(question, rule)
+            flags = 0
+            if "ignorecase" in rule.get("flags", []):
+                flags |= re.IGNORECASE
+            if re.search(rule.get("pattern", ""), source, flags):
+                mode = rule.get("mode")
+                if isinstance(mode, str) and mode:
+                    return mode
+        return None
+
+    def extract_sort(self, question: str, matched_metrics: list[str] | None = None) -> list[SortItem]:
+        sort_items: list[SortItem] = []
+        for rule in self.sort_extractors:
+            extracted = self._extract_sort_rule(question, rule, matched_metrics or [])
+            if extracted is not None:
+                sort_items.append(extracted)
+        return self._sanitize_sort(sort_items, allowed_fields=set())
+
+    def extract_limit(self, question: str) -> int | None:
+        for rule in self.limit_extractors:
+            extracted = self._extract_limit_rule(question, rule)
+            if extracted is not None:
+                return extracted
+        return None
+
     def apply_domain_constraints(self, query_plan: QueryPlan) -> QueryPlan:
         profile = self.query_profiles.get(query_plan.subject_domain, {})
         compiled = query_plan.model_copy(deep=True)
@@ -583,6 +630,7 @@ class SemanticRuntime:
         if not compiled.semantic_views:
             compiled.semantic_views = profile.get("default_semantic_views", [])
 
+        compiled = self._inject_time_filters(compiled, profile)
         compiled = self._inject_version_filter(compiled, profile)
         compiled = self._inject_default_sort(compiled, profile)
 
@@ -779,6 +827,47 @@ class SemanticRuntime:
                 queue.append((neighbor, next_path))
         return []
 
+    def _extract_sort_rule(
+        self,
+        question: str,
+        rule: dict,
+        matched_metrics: list[str],
+    ) -> SortItem | None:
+        source = self._prepare_text(question, rule)
+        flags = 0
+        if "ignorecase" in rule.get("flags", []):
+            flags |= re.IGNORECASE
+        pattern = rule.get("pattern", "")
+        if not pattern or not re.search(pattern, source, flags):
+            return None
+
+        field = rule.get("field")
+        if field == "__matched_metric__":
+            for metric in matched_metrics:
+                resolved = self.metric_column(metric)
+                if resolved:
+                    field = resolved
+                    break
+        if not field:
+            return None
+
+        order = rule.get("order", "desc")
+        return SortItem(field=field, order=order)
+
+    def _extract_limit_rule(self, question: str, rule: dict) -> int | None:
+        source = self._prepare_text(question, rule)
+        flags = 0
+        if "ignorecase" in rule.get("flags", []):
+            flags |= re.IGNORECASE
+        match = re.search(rule.get("pattern", ""), source, flags)
+        if not match:
+            return None
+        try:
+            value = int(match.group(1))
+        except (IndexError, TypeError, ValueError):
+            return None
+        return max(1, value)
+
     def _extract_filter(self, question: str, rule: dict) -> FilterItem | None:
         rule_type = rule.get("type")
         if rule_type == "regex":
@@ -921,9 +1010,80 @@ class SemanticRuntime:
             ] + [version_filter]
         return compiled
 
+    def _inject_time_filters(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
+        compiled = query_plan.model_copy(deep=True)
+        time_context = compiled.time_context
+        if time_context.grain == "unknown" or time_context.range is None:
+            return compiled
+
+        start = time_context.range.start
+        end = time_context.range.end
+        if not start and not end:
+            return compiled
+
+        time_fields = self.time_filter_fields(compiled.subject_domain)
+        if not time_fields:
+            return compiled
+
+        candidate_fields = [
+            field
+            for field in time_fields
+            if not compiled.semantic_views
+            or self.semantic_views_support_field(compiled.semantic_views, field)
+        ]
+        if not candidate_fields:
+            candidate_fields = time_fields
+
+        preferred_field = candidate_fields[0]
+        if time_context.grain == "month" and len(candidate_fields) > 1:
+            month_field = next((field for field in candidate_fields if "month" in field.lower()), None)
+            if month_field:
+                preferred_field = month_field
+        elif time_context.grain == "day":
+            day_field = next((field for field in candidate_fields if "date" in field.lower()), None)
+            if day_field:
+                preferred_field = day_field
+
+        time_filter = self._build_time_filter(preferred_field, start=start, end=end)
+        if time_filter is None:
+            return compiled
+
+        existing = {
+            f"{item.field}:{item.op}:{repr(item.value)}"
+            for item in compiled.filters
+        }
+        time_key = f"{time_filter.field}:{time_filter.op}:{repr(time_filter.value)}"
+        if time_key in existing:
+            return compiled
+
+        compiled.filters = [
+            item for item in compiled.filters if item.field != time_filter.field
+        ] + [time_filter]
+        return compiled
+
+    def _build_time_filter(
+        self,
+        field: str,
+        start: str | None,
+        end: str | None,
+    ) -> FilterItem | None:
+        if not field:
+            return None
+        if start and end:
+            if start == end:
+                return FilterItem(field=field, op="=", value=start)
+            return FilterItem(field=field, op="between", value=[start, end])
+        if start:
+            return FilterItem(field=field, op=">=", value=start)
+        if end:
+            return FilterItem(field=field, op="<=", value=end)
+        return None
+
     def _inject_default_sort(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
         if compiled.sort:
+            return compiled
+        if compiled.analysis_mode == "compare" and not compiled.dimensions:
             return compiled
         default_sort = profile.get("default_sort", [])
         if not default_sort:

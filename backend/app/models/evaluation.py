@@ -20,6 +20,9 @@ class EvaluationCase(BaseModel):
     expected_metrics: list[str] = Field(default_factory=list)
     unexpected_metrics: list[str] = Field(default_factory=list)
     expected_dimensions: list[str] = Field(default_factory=list)
+    unexpected_dimensions: list[str] = Field(default_factory=list)
+    expected_sort_fields: list[str] = Field(default_factory=list)
+    unexpected_sort_fields: list[str] = Field(default_factory=list)
     expected_filter_fields: list[str] = Field(default_factory=list)
     expected_semantic_views: list[str] = Field(default_factory=list)
     expected_status: str | None = None
@@ -94,6 +97,31 @@ class EvaluationReplayRequest(BaseModel):
     include_prior_context: bool = True
 
 
+class EvaluationReplayDiff(BaseModel):
+    classification_changed: bool = False
+    question_type_changed: bool = False
+    subject_domain_changed: bool = False
+    answer_status_changed: bool = False
+    plan_valid_changed: bool = False
+    plan_risk_level_changed: bool = False
+    sql_valid_changed: bool = False
+    sql_risk_level_changed: bool = False
+    execution_status_changed: bool = False
+    sql_changed: bool = False
+    metrics_added: list[str] = Field(default_factory=list)
+    metrics_removed: list[str] = Field(default_factory=list)
+    dimensions_added: list[str] = Field(default_factory=list)
+    dimensions_removed: list[str] = Field(default_factory=list)
+    filter_fields_added: list[str] = Field(default_factory=list)
+    filter_fields_removed: list[str] = Field(default_factory=list)
+    semantic_views_added: list[str] = Field(default_factory=list)
+    semantic_views_removed: list[str] = Field(default_factory=list)
+    plan_risk_flags_added: list[str] = Field(default_factory=list)
+    plan_risk_flags_removed: list[str] = Field(default_factory=list)
+    sql_risk_flags_added: list[str] = Field(default_factory=list)
+    sql_risk_flags_removed: list[str] = Field(default_factory=list)
+
+
 class EvaluationReplayResult(BaseModel):
     source_type: Literal["evaluation_case", "runtime_query_log"]
     source_id: str
@@ -103,4 +131,6 @@ class EvaluationReplayResult(BaseModel):
     original_trace_id: str | None = None
     original_session_id: str | None = None
     original_user_id: str | None = None
+    original_response: ChatResponse | None = None
+    diff: EvaluationReplayDiff | None = None
     response: ChatResponse

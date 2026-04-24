@@ -5,7 +5,9 @@
     "session_questions": [],
     "expected_domain": "inventory",
     "expected_question_type": "new",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "expected_status": null,
     "notes": "库存域基础单轮基线。"
   },
@@ -15,7 +17,9 @@
     "session_questions": [],
     "expected_domain": "inventory",
     "expected_question_type": "new",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "expected_status": null,
     "notes": "测试库存域 ERP_FACTORY 路径与按产品维度拆分。"
   },
@@ -24,13 +28,21 @@
     "question": "查询2026年4月 CELL 工厂库存",
     "session_questions": [],
     "scenario": "clarification_reason",
-    "coverage_tags": ["inventory", "clarification", "reason_code"],
+    "coverage_tags": [
+      "inventory",
+      "clarification",
+      "reason_code"
+    ],
     "expected_domain": "inventory",
     "expected_question_type": "clarification_needed",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "expected_status": "clarification_needed",
     "expected_reason_code": "inventory_factory_ambiguous",
-    "expected_semantic_views": ["semantic_inventory_view"],
+    "expected_semantic_views": [
+      "semantic_inventory_view"
+    ],
     "notes": "库存域工厂语义歧义，应澄清 factory_code 还是 ERP_FACTORY。"
   },
   {
@@ -39,7 +51,9 @@
     "session_questions": [],
     "expected_domain": "inventory",
     "expected_question_type": "new",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "expected_status": null,
     "notes": "测试客户维度是否将库存问题引导到更合适的库存口径。"
   },
@@ -51,7 +65,9 @@
     ],
     "expected_domain": "inventory",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "expected_status": null,
     "notes": "多轮库存追问，测试时间替换与维度切换。"
   },
@@ -61,7 +77,9 @@
     "session_questions": [],
     "expected_domain": "plan_actual",
     "expected_question_type": "new",
-    "expected_metrics": ["actual_output_qty"],
+    "expected_metrics": [
+      "actual_output_qty"
+    ],
     "expected_status": null,
     "notes": "计划实际域基础单轮基线。"
   },
@@ -71,7 +89,10 @@
     "session_questions": [],
     "expected_domain": "plan_actual",
     "expected_question_type": "new",
-    "expected_metrics": ["plan_input_qty", "actual_output_qty"],
+    "expected_metrics": [
+      "plan_input_qty",
+      "actual_output_qty"
+    ],
     "expected_status": null,
     "notes": "测试计划投入与实际产出双指标对比。"
   },
@@ -81,7 +102,9 @@
     "session_questions": [],
     "expected_domain": "plan_actual",
     "expected_question_type": "new",
-    "expected_metrics": ["actual_input_qty"],
+    "expected_metrics": [
+      "actual_input_qty"
+    ],
     "expected_status": null,
     "notes": "测试实际投入指标与工厂维度。"
   },
@@ -93,7 +116,9 @@
     ],
     "expected_domain": "plan_actual",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["actual_input_qty"],
+    "expected_metrics": [
+      "actual_input_qty"
+    ],
     "expected_status": null,
     "notes": "测试同域 follow-up 的指标替换与维度调整。"
   },
@@ -102,7 +127,11 @@
     "question": "查询2026年4月计划情况",
     "session_questions": [],
     "scenario": "clarification_reason",
-    "coverage_tags": ["plan_actual", "clarification", "reason_code"],
+    "coverage_tags": [
+      "plan_actual",
+      "clarification",
+      "reason_code"
+    ],
     "expected_domain": "plan_actual",
     "expected_question_type": "clarification_needed",
     "expected_metrics": [],
@@ -116,7 +145,9 @@
     "session_questions": [],
     "expected_domain": "demand",
     "expected_question_type": "new",
-    "expected_metrics": ["demand_qty"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
     "expected_status": null,
     "notes": "需求域基础版本查询。"
   },
@@ -126,7 +157,9 @@
     "session_questions": [],
     "expected_domain": "demand",
     "expected_question_type": "new",
-    "expected_metrics": ["demand_qty"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
     "expected_status": null,
     "notes": "测试需求域客户维度。"
   },
@@ -138,7 +171,9 @@
     ],
     "expected_domain": "demand",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["demand_qty"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
     "expected_status": null,
     "notes": "测试需求域版本切换与客户维度 follow-up。"
   },
@@ -148,7 +183,9 @@
     "session_questions": [],
     "expected_domain": "demand",
     "expected_question_type": "clarification_needed",
-    "expected_metrics": ["demand_qty"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
     "expected_status": "clarification_needed",
     "notes": "需求域未说明 V 版还是 P 版，应要求澄清。"
   },
@@ -158,9 +195,15 @@
     "session_questions": [],
     "expected_domain": "demand",
     "expected_question_type": "new",
-    "expected_metrics": ["demand_qty"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
     "expected_status": null,
-    "notes": "测试需求横表转月明细后的趋势查询能力。"
+    "notes": "测试需求横表转月明细后的趋势查询能力。",
+    "expected_dimensions": [
+      "biz_month",
+      "PM_VERSION"
+    ]
   },
   {
     "id": "eval_sales_001",
@@ -168,7 +211,9 @@
     "session_questions": [],
     "expected_domain": "sales_financial",
     "expected_question_type": "new",
-    "expected_metrics": ["sales_qty"],
+    "expected_metrics": [
+      "sales_qty"
+    ],
     "expected_status": null,
     "notes": "销售财务域基础单轮基线。"
   },
@@ -178,7 +223,9 @@
     "session_questions": [],
     "expected_domain": "sales_financial",
     "expected_question_type": "new",
-    "expected_metrics": ["financial_qty"],
+    "expected_metrics": [
+      "financial_qty"
+    ],
     "expected_status": null,
     "notes": "测试财务指标与客户维度。"
   },
@@ -188,9 +235,20 @@
     "session_questions": [],
     "expected_domain": "sales_financial",
     "expected_question_type": "new",
-    "expected_metrics": ["sales_qty", "financial_qty"],
+    "expected_metrics": [
+      "sales_qty",
+      "financial_qty"
+    ],
     "expected_status": null,
-    "notes": "测试销售与财务双指标对比。"
+    "notes": "测试销售与财务双指标对比。",
+    "unexpected_dimensions": [
+      "biz_month",
+      "biz_date"
+    ],
+    "unexpected_sort_fields": [
+      "biz_month",
+      "biz_date"
+    ]
   },
   {
     "id": "eval_demand_sales_compare_001",
@@ -198,7 +256,10 @@
     "session_questions": [],
     "expected_domain": "demand",
     "expected_question_type": "new",
-    "expected_metrics": ["demand_qty", "sales_qty"],
+    "expected_metrics": [
+      "demand_qty",
+      "sales_qty"
+    ],
     "expected_status": null,
     "notes": "测试需求与销售跨域桥接能力。"
   },
@@ -210,7 +271,9 @@
     ],
     "expected_domain": "sales_financial",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["financial_qty"],
+    "expected_metrics": [
+      "financial_qty"
+    ],
     "expected_status": null,
     "notes": "测试销售财务域同域 follow-up 的指标替换。"
   },
@@ -221,12 +284,24 @@
       "查询2026年4月 V1 版本需求"
     ],
     "scenario": "dimension_follow_up",
-    "coverage_tags": ["demand", "follow_up", "dimension_fragment"],
+    "coverage_tags": [
+      "demand",
+      "follow_up",
+      "dimension_fragment"
+    ],
     "expected_domain": "demand",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["demand_qty"],
-    "expected_dimensions": ["customer", "PM_VERSION"],
-    "expected_filter_fields": ["biz_month", "PM_VERSION"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "customer",
+      "PM_VERSION"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "PM_VERSION"
+    ],
     "expected_status": null,
     "notes": "纯维度追问应继承上一轮需求主题、指标和时间版本上下文。"
   },
@@ -237,12 +312,22 @@
       "查询2026年4月销售业绩"
     ],
     "scenario": "dimension_follow_up",
-    "coverage_tags": ["sales_financial", "follow_up", "dimension_fragment"],
+    "coverage_tags": [
+      "sales_financial",
+      "follow_up",
+      "dimension_fragment"
+    ],
     "expected_domain": "sales_financial",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["sales_qty"],
-    "expected_dimensions": ["customer"],
-    "expected_filter_fields": ["biz_month"],
+    "expected_metrics": [
+      "sales_qty"
+    ],
+    "expected_dimensions": [
+      "customer"
+    ],
+    "expected_filter_fields": [
+      "biz_month"
+    ],
     "expected_status": null,
     "notes": "纯维度追问不应因 customer 关键词漂移到 demand 域。"
   },
@@ -253,21 +338,113 @@
       "查询2026年4月 A1_CELL 的库存"
     ],
     "scenario": "dimension_follow_up",
-    "coverage_tags": ["inventory", "follow_up", "dimension_fragment"],
+    "coverage_tags": [
+      "inventory",
+      "follow_up",
+      "dimension_fragment"
+    ],
     "expected_domain": "inventory",
     "expected_question_type": "follow_up",
-    "expected_metrics": ["inventory_qty"],
-    "expected_dimensions": ["factory_code"],
-    "expected_filter_fields": ["biz_month", "factory_code"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
+    "expected_dimensions": [
+      "factory_code"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "factory_code"
+    ],
     "expected_status": null,
     "notes": "纯维度追问应继承库存指标与已有工厂过滤。"
+  },
+  {
+    "id": "eval_demand_trend_follow_up_001",
+    "question": "改成趋势",
+    "session_questions": [
+      "查询2026年4月 V1 版本需求"
+    ],
+    "scenario": "analysis_follow_up",
+    "coverage_tags": [
+      "demand",
+      "follow_up",
+      "trend",
+      "analysis_mode"
+    ],
+    "expected_domain": "demand",
+    "expected_question_type": "follow_up",
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "biz_month",
+      "PM_VERSION"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "PM_VERSION"
+    ],
+    "expected_status": null,
+    "notes": "趋势类追问应继承上一轮需求主题、版本和月粒度，并补时间维度。"
+  },
+  {
+    "id": "eval_sales_sort_topn_follow_up_001",
+    "question": "按销售量降序，只看前10条",
+    "session_questions": [
+      "查询2026年4月销售业绩"
+    ],
+    "scenario": "sort_limit_follow_up",
+    "coverage_tags": [
+      "sales_financial",
+      "follow_up",
+      "sort",
+      "limit"
+    ],
+    "expected_domain": "sales_financial",
+    "expected_question_type": "follow_up",
+    "expected_metrics": [
+      "sales_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month"
+    ],
+    "expected_status": null,
+    "notes": "纯排序和TopN追问应继承上一轮销售主题、时间和指标。"
+  },
+  {
+    "id": "eval_inventory_sort_topn_follow_up_001",
+    "question": "按库存降序看前5条",
+    "session_questions": [
+      "查询2026年4月 A1_CELL 的库存"
+    ],
+    "scenario": "sort_limit_follow_up",
+    "coverage_tags": [
+      "inventory",
+      "follow_up",
+      "sort",
+      "limit"
+    ],
+    "expected_domain": "inventory",
+    "expected_question_type": "follow_up",
+    "expected_metrics": [
+      "inventory_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "factory_code"
+    ],
+    "expected_status": null,
+    "notes": "库存域纯排序追问应继承库存指标和已有工厂过滤。"
   },
   {
     "id": "eval_invalid_smalltalk_001",
     "question": "你好",
     "session_questions": [],
     "scenario": "invalid_smalltalk",
-    "coverage_tags": ["invalid", "smalltalk"],
+    "coverage_tags": [
+      "invalid",
+      "smalltalk"
+    ],
     "expected_domain": "unknown",
     "expected_question_type": "invalid",
     "expected_status": "invalid",
@@ -279,7 +456,10 @@
     "question": "谢谢",
     "session_questions": [],
     "scenario": "invalid_smalltalk",
-    "coverage_tags": ["invalid", "smalltalk"],
+    "coverage_tags": [
+      "invalid",
+      "smalltalk"
+    ],
     "expected_domain": "unknown",
     "expected_question_type": "invalid",
     "expected_status": "invalid",
@@ -291,7 +471,11 @@
     "question": "hello",
     "session_questions": [],
     "scenario": "invalid_smalltalk",
-    "coverage_tags": ["invalid", "smalltalk", "english"],
+    "coverage_tags": [
+      "invalid",
+      "smalltalk",
+      "english"
+    ],
     "expected_domain": "unknown",
     "expected_question_type": "invalid",
     "expected_status": "invalid",
@@ -303,7 +487,11 @@
     "question": "hi",
     "session_questions": [],
     "scenario": "invalid_smalltalk",
-    "coverage_tags": ["invalid", "smalltalk", "english"],
+    "coverage_tags": [
+      "invalid",
+      "smalltalk",
+      "english"
+    ],
     "expected_domain": "unknown",
     "expected_question_type": "invalid",
     "expected_status": "invalid",
@@ -317,11 +505,20 @@
       "查询2026年4月 A1_CELL 的库存"
     ],
     "scenario": "same_domain_new_related",
-    "coverage_tags": ["inventory", "new_related", "single_turn_independent"],
+    "coverage_tags": [
+      "inventory",
+      "new_related",
+      "single_turn_independent"
+    ],
     "expected_domain": "inventory",
     "expected_question_type": "new_related",
-    "expected_metrics": ["inventory_qty"],
-    "expected_filter_fields": ["biz_month", "factory_code"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "factory_code"
+    ],
     "notes": "同域但已具备独立执行条件，不应误判为 follow-up。"
   },
   {
@@ -331,11 +528,19 @@
       "查询2026年4月 CELL 工厂计划投入和实际产出对比"
     ],
     "scenario": "same_domain_new_related",
-    "coverage_tags": ["plan_actual", "new_related", "dimension_switch"],
+    "coverage_tags": [
+      "plan_actual",
+      "new_related",
+      "dimension_switch"
+    ],
     "expected_domain": "plan_actual",
     "expected_question_type": "new_related",
-    "expected_metrics": ["actual_output_qty"],
-    "expected_dimensions": ["factory"],
+    "expected_metrics": [
+      "actual_output_qty"
+    ],
+    "expected_dimensions": [
+      "factory"
+    ],
     "notes": "同域问题但已不依赖上一轮上下文，应视为 new_related。"
   },
   {
@@ -345,12 +550,23 @@
       "查询2026年4月 V1 版本需求"
     ],
     "scenario": "same_domain_new_related",
-    "coverage_tags": ["demand", "new_related", "versioned"],
+    "coverage_tags": [
+      "demand",
+      "new_related",
+      "versioned"
+    ],
     "expected_domain": "demand",
     "expected_question_type": "new_related",
-    "expected_metrics": ["demand_qty"],
-    "expected_dimensions": ["customer"],
-    "expected_filter_fields": ["biz_month", "PM_VERSION"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "customer"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "PM_VERSION"
+    ],
     "notes": "同域换时间和版本但句子本身可独立执行，应优先判为 new_related。"
   },
   {
@@ -360,11 +576,19 @@
       "查询2026年4月销售业绩"
     ],
     "scenario": "same_domain_new_related",
-    "coverage_tags": ["sales_financial", "new_related", "metric_switch"],
+    "coverage_tags": [
+      "sales_financial",
+      "new_related",
+      "metric_switch"
+    ],
     "expected_domain": "sales_financial",
     "expected_question_type": "new_related",
-    "expected_metrics": ["financial_qty"],
-    "expected_dimensions": ["customer"],
+    "expected_metrics": [
+      "financial_qty"
+    ],
+    "expected_dimensions": [
+      "customer"
+    ],
     "notes": "同域切换指标且问题足够完整，不应强制继承上下文。"
   },
   {
@@ -374,10 +598,16 @@
       "查询2026年4月 A1_CELL 的库存"
     ],
     "scenario": "cross_domain_new_unrelated",
-    "coverage_tags": ["inventory", "sales_financial", "new_unrelated"],
+    "coverage_tags": [
+      "inventory",
+      "sales_financial",
+      "new_unrelated"
+    ],
     "expected_domain": "sales_financial",
     "expected_question_type": "new_unrelated",
-    "expected_metrics": ["sales_qty"],
+    "expected_metrics": [
+      "sales_qty"
+    ],
     "notes": "从库存切到销售，必须切断上下文继承。"
   },
   {
@@ -387,10 +617,16 @@
       "查询2026年4月 V1 版本需求"
     ],
     "scenario": "cross_domain_new_unrelated",
-    "coverage_tags": ["demand", "inventory", "new_unrelated"],
+    "coverage_tags": [
+      "demand",
+      "inventory",
+      "new_unrelated"
+    ],
     "expected_domain": "inventory",
     "expected_question_type": "new_unrelated",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "notes": "从需求切到库存，应识别为新主题。"
   },
   {
@@ -400,10 +636,16 @@
       "查询2026年4月 CELL 工厂计划投入和实际产出对比"
     ],
     "scenario": "cross_domain_new_unrelated",
-    "coverage_tags": ["plan_actual", "demand", "new_unrelated"],
+    "coverage_tags": [
+      "plan_actual",
+      "demand",
+      "new_unrelated"
+    ],
     "expected_domain": "demand",
     "expected_question_type": "new_unrelated",
-    "expected_metrics": ["demand_qty"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
     "notes": "从计划/实际域切到需求域，应清空上下文依赖。"
   },
   {
@@ -413,10 +655,16 @@
       "查询2026年4月销售业绩"
     ],
     "scenario": "cross_domain_new_unrelated",
-    "coverage_tags": ["sales_financial", "plan_actual", "new_unrelated"],
+    "coverage_tags": [
+      "sales_financial",
+      "plan_actual",
+      "new_unrelated"
+    ],
     "expected_domain": "plan_actual",
     "expected_question_type": "new_unrelated",
-    "expected_metrics": ["plan_input_qty"],
+    "expected_metrics": [
+      "plan_input_qty"
+    ],
     "notes": "从销售切到计划/实际域时，不应误用上一轮主题。"
   },
   {
@@ -424,18 +672,35 @@
     "question": "查询2026年4月库存量",
     "session_questions": [],
     "scenario": "permission_filter_injection",
-    "coverage_tags": ["inventory", "permission", "factory_scope"],
+    "coverage_tags": [
+      "inventory",
+      "permission",
+      "factory_scope"
+    ],
     "expected_domain": "inventory",
     "expected_question_type": "new",
-    "expected_metrics": ["inventory_qty"],
-    "expected_filter_fields": ["biz_month", "factory_code"],
-    "expected_semantic_views": ["semantic_inventory_view"],
-    "expected_warnings_contains": ["data scope filters injected into query plan"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "factory_code"
+    ],
+    "expected_semantic_views": [
+      "semantic_inventory_view"
+    ],
+    "expected_warnings_contains": [
+      "data scope filters injected into query plan"
+    ],
     "user_context": {
       "user_id": "eval_scope_inventory",
-      "roles": ["viewer"],
+      "roles": [
+        "viewer"
+      ],
       "data_scope": {
-        "factories": ["A1_CELL"]
+        "factories": [
+          "A1_CELL"
+        ]
       }
     },
     "notes": "库存域带工厂权限时，应自动注入 factory_code 过滤。"
@@ -445,18 +710,36 @@
     "question": "查询2026年4月 V1 版本需求",
     "session_questions": [],
     "scenario": "permission_filter_injection",
-    "coverage_tags": ["demand", "permission", "customer_scope"],
+    "coverage_tags": [
+      "demand",
+      "permission",
+      "customer_scope"
+    ],
     "expected_domain": "demand",
     "expected_question_type": "new",
-    "expected_metrics": ["demand_qty"],
-    "expected_filter_fields": ["biz_month", "PM_VERSION", "customer"],
-    "expected_semantic_views": ["semantic_demand_perf_view"],
-    "expected_warnings_contains": ["data scope filters injected into query plan"],
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "PM_VERSION",
+      "customer"
+    ],
+    "expected_semantic_views": [
+      "semantic_demand_perf_view"
+    ],
+    "expected_warnings_contains": [
+      "data scope filters injected into query plan"
+    ],
     "user_context": {
       "user_id": "eval_scope_demand",
-      "roles": ["viewer"],
+      "roles": [
+        "viewer"
+      ],
       "data_scope": {
-        "customers": ["CUST_A"]
+        "customers": [
+          "CUST_A"
+        ]
       }
     },
     "notes": "需求域带客户权限时，应自动注入 customer 过滤。"
@@ -466,18 +749,36 @@
     "question": "查询2026年4月 CELL 工厂实际产出",
     "session_questions": [],
     "scenario": "permission_filter_injection",
-    "coverage_tags": ["plan_actual", "permission", "product_scope"],
+    "coverage_tags": [
+      "plan_actual",
+      "permission",
+      "product_scope"
+    ],
     "expected_domain": "plan_actual",
     "expected_question_type": "new",
-    "expected_metrics": ["actual_output_qty"],
-    "expected_filter_fields": ["biz_month", "factory", "stage_product_id"],
-    "expected_semantic_views": ["semantic_plan_actual_view"],
-    "expected_warnings_contains": ["data scope filters injected into query plan"],
+    "expected_metrics": [
+      "actual_output_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "factory",
+      "stage_product_id"
+    ],
+    "expected_semantic_views": [
+      "semantic_plan_actual_view"
+    ],
+    "expected_warnings_contains": [
+      "data scope filters injected into query plan"
+    ],
     "user_context": {
       "user_id": "eval_scope_plan",
-      "roles": ["viewer"],
+      "roles": [
+        "viewer"
+      ],
       "data_scope": {
-        "products": ["STAGE-001"]
+        "products": [
+          "STAGE-001"
+        ]
       }
     },
     "notes": "计划/实际域带产品权限时，应注入 stage_product_id 过滤。"
@@ -487,18 +788,35 @@
     "question": "查询2026年4月财务业绩",
     "session_questions": [],
     "scenario": "permission_filter_injection",
-    "coverage_tags": ["sales_financial", "permission", "product_scope"],
+    "coverage_tags": [
+      "sales_financial",
+      "permission",
+      "product_scope"
+    ],
     "expected_domain": "sales_financial",
     "expected_question_type": "new",
-    "expected_metrics": ["financial_qty"],
-    "expected_filter_fields": ["biz_month", "FGCODE"],
-    "expected_semantic_views": ["semantic_demand_perf_view"],
-    "expected_warnings_contains": ["data scope filters injected into query plan"],
+    "expected_metrics": [
+      "financial_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "FGCODE"
+    ],
+    "expected_semantic_views": [
+      "semantic_demand_perf_view"
+    ],
+    "expected_warnings_contains": [
+      "data scope filters injected into query plan"
+    ],
     "user_context": {
       "user_id": "eval_scope_sales",
-      "roles": ["viewer"],
+      "roles": [
+        "viewer"
+      ],
       "data_scope": {
-        "products": ["FG-001"]
+        "products": [
+          "FG-001"
+        ]
       }
     },
     "notes": "销售财务域带产品权限时，应注入 FGCODE 过滤。"
@@ -508,13 +826,21 @@
     "question": "查询2026年4月 CELL 工厂库存",
     "session_questions": [],
     "scenario": "clarification_reason",
-    "coverage_tags": ["inventory", "clarification", "reason_code"],
+    "coverage_tags": [
+      "inventory",
+      "clarification",
+      "reason_code"
+    ],
     "expected_domain": "inventory",
     "expected_question_type": "clarification_needed",
-    "expected_metrics": ["inventory_qty"],
+    "expected_metrics": [
+      "inventory_qty"
+    ],
     "expected_status": "clarification_needed",
     "expected_reason_code": "inventory_factory_ambiguous",
-    "expected_semantic_views": ["semantic_inventory_view"],
+    "expected_semantic_views": [
+      "semantic_inventory_view"
+    ],
     "notes": "库存域工厂语义歧义时，应给出明确的 reason_code。"
   },
   {
@@ -522,7 +848,11 @@
     "question": "查询2026年4月计划情况",
     "session_questions": [],
     "scenario": "clarification_reason",
-    "coverage_tags": ["plan_actual", "clarification", "reason_code"],
+    "coverage_tags": [
+      "plan_actual",
+      "clarification",
+      "reason_code"
+    ],
     "expected_domain": "plan_actual",
     "expected_question_type": "clarification_needed",
     "expected_status": "clarification_needed",
@@ -534,7 +864,11 @@
     "question": "帮我查一下",
     "session_questions": [],
     "scenario": "clarification_reason",
-    "coverage_tags": ["unknown", "clarification", "reason_code"],
+    "coverage_tags": [
+      "unknown",
+      "clarification",
+      "reason_code"
+    ],
     "expected_domain": "unknown",
     "expected_question_type": "clarification_needed",
     "expected_status": "clarification_needed",
@@ -546,7 +880,11 @@
     "question": "查一下数据",
     "session_questions": [],
     "scenario": "clarification_reason",
-    "coverage_tags": ["unknown", "clarification", "reason_code"],
+    "coverage_tags": [
+      "unknown",
+      "clarification",
+      "reason_code"
+    ],
     "expected_domain": "unknown",
     "expected_question_type": "clarification_needed",
     "expected_status": "clarification_needed",

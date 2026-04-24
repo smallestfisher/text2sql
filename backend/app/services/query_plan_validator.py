@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from backend.app.models.query_plan import QueryPlan
 from backend.app.services.semantic_runtime import SemanticRuntime
+
+
+@dataclass
+class QueryPlanValidationResult:
+    errors: list[str]
+    warnings: list[str]
+    risk_level: str = "low"
+    risk_flags: list[str] = field(default_factory=list)
 
 
 class QueryPlanValidator:
@@ -9,6 +19,14 @@ class QueryPlanValidator:
         self.semantic_runtime = semantic_runtime
 
     def validate(self, query_plan: QueryPlan, semantic_layer: dict) -> tuple[list[str], list[str]]:
+        result = self.validate_detailed(query_plan=query_plan, semantic_layer=semantic_layer)
+        return result.errors, result.warnings
+
+    def validate_detailed(
+        self,
+        query_plan: QueryPlan,
+        semantic_layer: dict,
+    ) -> QueryPlanValidationResult:
         errors: list[str] = []
         warnings: list[str] = []
 
@@ -139,7 +157,13 @@ class QueryPlanValidator:
         if len(query_plan.metrics) > 1 and not query_plan.dimensions and not query_plan.filters:
             warnings.append("multi-metric query plan has no dimensions or filters; verify aggregation scope")
 
-        return errors, warnings
+        risk_flags = self._collect_risk_flags(query_plan, errors, warnings)
+        return QueryPlanValidationResult(
+            errors=errors,
+            warnings=warnings,
+            risk_level=self._risk_level_for_flags(risk_flags),
+            risk_flags=risk_flags,
+        )
 
     def _context_delta_has_updates(self, query_plan: QueryPlan) -> bool:
         context_delta = query_plan.context_delta
@@ -153,5 +177,50 @@ class QueryPlanValidator:
             or context_delta.replace_sort
             or context_delta.replace_version_context is not None
             or context_delta.replace_limit is not None
+            or context_delta.replace_analysis_mode is not None
             or context_delta.replace_time_context.grain != "unknown"
         )
+
+    def _collect_risk_flags(
+        self,
+        query_plan: QueryPlan,
+        errors: list[str],
+        warnings: list[str],
+    ) -> list[str]:
+        flags: list[str] = []
+        if query_plan.need_clarification:
+            flags.append("clarification_risk")
+        if query_plan.question_type == "follow_up" and query_plan.inherit_context:
+            flags.append("context_inheritance_risk")
+        if len(query_plan.metrics) > 1 and not query_plan.dimensions and not query_plan.filters:
+            flags.append("aggregation_scope_risk")
+        for message in errors + warnings:
+            lowered = message.lower()
+            if "unknown" in lowered or "unsupported" in lowered:
+                flags.append("semantic_contract_risk")
+            if "time filter" in lowered:
+                flags.append("scan_risk")
+            if "version filter" in lowered:
+                flags.append("version_scope_risk")
+            if "join path" in lowered:
+                flags.append("join_risk")
+        deduped: list[str] = []
+        for flag in flags:
+            if flag not in deduped:
+                deduped.append(flag)
+        return deduped
+
+    def _risk_level_for_flags(self, risk_flags: list[str]) -> str:
+        if any(
+            flag in risk_flags
+            for flag in [
+                "semantic_contract_risk",
+                "scan_risk",
+                "join_risk",
+                "version_scope_risk",
+            ]
+        ):
+            return "high"
+        if risk_flags:
+            return "medium"
+        return "low"

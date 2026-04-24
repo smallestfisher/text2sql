@@ -59,14 +59,16 @@ class RetrievalService:
         hits.extend(self._retrieve_knowledge_hits(semantic_parse, query_tokens))
         hits.extend(self._retrieve_vector_hits(semantic_parse, retrieval_terms))
         hits = self._rerank_hits(hits)
+        top_hits = hits[:5]
         return RetrievalContext(
             domains=domains,
             semantic_views=semantic_views,
             metrics=semantic_parse.matched_metrics,
             retrieval_terms=retrieval_terms,
             retrieval_channels=self._retrieval_channels(),
-            hits=hits[:5],
-            hit_count_by_source=self._count_hits_by_source(hits[:5]),
+            hits=top_hits,
+            hit_count_by_source=self._count_hits_by_source(top_hits),
+            hit_count_by_channel=self._count_hits_by_channel(top_hits),
         )
 
     def reload(self) -> None:
@@ -79,11 +81,14 @@ class RetrievalService:
         return {
             "channels": retrieval.retrieval_channels,
             "hit_count_by_source": retrieval.hit_count_by_source,
+            "hit_count_by_channel": retrieval.hit_count_by_channel,
             "top_hits": [
                 {
                     "source_type": hit.source_type,
                     "source_id": hit.source_id,
                     "score": hit.score,
+                    "retrieval_channel": hit.retrieval_channel,
+                    "source_score": hit.source_score,
                     "matched_features": hit.matched_features,
                 }
                 for hit in retrieval.hits[:3]
@@ -313,6 +318,8 @@ class RetrievalService:
                     source_id=example.id,
                     score=score,
                     summary=example.normalized_question,
+                    retrieval_channel="structured",
+                    source_score=score,
                     matched_features=matched_features,
                     metadata={
                         "intent": example.intent,
@@ -382,6 +389,8 @@ class RetrievalService:
                     source_id=view_name,
                     score=score,
                     summary=view.get("purpose", view_name),
+                    retrieval_channel="structured",
+                    source_score=score,
                     matched_features=matched_features,
                     metadata={
                         "source_tables": view.get("source_tables", []),
@@ -423,6 +432,8 @@ class RetrievalService:
                     source_id=metric_name,
                     score=score,
                     summary=f"{metric_name}: {', '.join(metric.get('aliases', [])[:3])}",
+                    retrieval_channel="structured",
+                    source_score=score,
                     matched_features=matched_features,
                     metadata={
                         "semantic_column": metric.get("semantic_column"),
@@ -474,6 +485,8 @@ class RetrievalService:
                     source_id=document["source_id"],
                     score=score,
                     summary=document["summary"],
+                    retrieval_channel="keyword",
+                    source_score=score,
                     matched_features=matched_features,
                     metadata=document["metadata"],
                 )
@@ -512,6 +525,8 @@ class RetrievalService:
                     source_id=item["source_id"],
                     score=float(item["score"]) * 0.45,
                     summary=item.get("summary", item["source_id"]),
+                    retrieval_channel="vector",
+                    source_score=float(item["score"]),
                     matched_features=[f"vector:{float(item['score']):.3f}"],
                     metadata=metadata,
                 )
@@ -575,14 +590,44 @@ class RetrievalService:
 
             existing = deduplicated[key]
             existing.score = round(existing.score + hit.score, 6)
+            existing.source_score = max(existing.source_score or 0.0, hit.source_score or 0.0)
             existing.matched_features = self._unique(existing.matched_features + hit.matched_features)
             existing.metadata = {**existing.metadata, **hit.metadata}
+            if existing.retrieval_channel != hit.retrieval_channel:
+                existing.retrieval_channel = "hybrid"
+
         ranked = sorted(
             deduplicated.values(),
             key=lambda item: (item.score, self._source_priority(item.source_type)),
             reverse=True,
         )
-        return ranked
+
+        quotas = {
+            "example": 2,
+            "semantic_view": 2,
+            "metric": 1,
+            "knowledge": 1,
+        }
+        selected: list[RetrievalHit] = []
+        selected_keys: set[tuple[str, str]] = set()
+        counts: Counter[str] = Counter()
+
+        for hit in ranked:
+            quota = quotas.get(hit.source_type, 1)
+            if counts[hit.source_type] >= quota:
+                continue
+            key = (hit.source_type, hit.source_id)
+            selected.append(hit)
+            selected_keys.add(key)
+            counts[hit.source_type] += 1
+
+        for hit in ranked:
+            key = (hit.source_type, hit.source_id)
+            if key in selected_keys:
+                continue
+            selected.append(hit)
+
+        return selected
 
     def _build_retrieval_terms(self, semantic_parse: SemanticParse) -> list[str]:
         terms: list[str] = []
@@ -652,6 +697,12 @@ class RetrievalService:
         counter: Counter[str] = Counter()
         for hit in hits:
             counter[hit.source_type] += 1
+        return dict(counter)
+
+    def _count_hits_by_channel(self, hits: list[RetrievalHit]) -> dict[str, int]:
+        counter: Counter[str] = Counter()
+        for hit in hits:
+            counter[hit.retrieval_channel] += 1
         return dict(counter)
 
     def _source_priority(self, source_type: str) -> int:
