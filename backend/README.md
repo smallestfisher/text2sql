@@ -89,6 +89,8 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `GET /api/admin/feedbacks`
 - `GET /api/admin/feedbacks/summary`
 - `GET /api/admin/runtime/status`
+- `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
+- `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
 - `POST /api/admin/database/bootstrap-semantic-views`
 - `GET /api/admin/users`
 - `GET /api/admin/users/{user_id}`

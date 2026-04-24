@@ -8,6 +8,7 @@ from collections import Counter
 from backend.app.config import EVAL_CASES_PATH
 from backend.app.models.api import PlanRequest
 from backend.app.models.conversation import ChatMessage
+from backend.app.models.example_library import ExampleRecord
 from backend.app.models.auth import UserContext
 from backend.app.models.evaluation import (
     EvaluationCase,
@@ -20,6 +21,7 @@ from backend.app.models.evaluation import (
     EvaluationRunRecord,
     EvaluationRunRequest,
     EvaluationSummary,
+    RuntimeQueryLogMaterializeCaseRequest,
 )
 
 
@@ -149,6 +151,109 @@ class EvaluationService:
             original_response=original_response,
             diff=self._build_replay_diff(original_response, response),
             response=response,
+        )
+
+    def materialize_trace_as_case(
+        self,
+        trace_id: str,
+        request: RuntimeQueryLogMaterializeCaseRequest,
+    ) -> EvaluationCase:
+        if self.runtime_log_repository is None:
+            raise RuntimeError("runtime log repository is not configured")
+        record = self.runtime_log_repository.get_query_log(trace_id)
+        if record is None:
+            raise KeyError(trace_id)
+        if not record.question:
+            raise ValueError("query log does not contain question")
+
+        session_questions: list[str] = []
+        if request.include_prior_context and record.session_id:
+            session_questions = self._load_prior_session_questions(record.session_id, trace_id)
+
+        original_user_id = record.user_id if request.reuse_original_user else None
+        effective_user = self._resolve_replay_user(request.user_id, fallback_user_id=original_user_id)
+        snapshot = self._build_original_response_snapshot(trace_id)
+        if snapshot is None:
+            raise ValueError("query log does not contain enough trace data to materialize an evaluation case")
+
+        case = EvaluationCase(
+            id=request.case_id or self._generate_case_id(trace_id, snapshot.classification.subject_domain),
+            question=record.question,
+            session_questions=session_questions,
+            scenario=request.scenario,
+            coverage_tags=list(dict.fromkeys(request.coverage_tags)),
+            expected_domain=snapshot.classification.subject_domain,
+            expected_question_type=snapshot.classification.question_type,
+            expected_metrics=list(snapshot.query_plan.metrics),
+            expected_dimensions=list(snapshot.query_plan.dimensions),
+            expected_sort_fields=[item.field for item in snapshot.query_plan.sort],
+            expected_filter_fields=self._extract_filter_fields(snapshot),
+            expected_semantic_views=list(snapshot.query_plan.semantic_views),
+            expected_status=snapshot.answer.status if snapshot.answer is not None else None,
+            expected_reason_code=snapshot.classification.reason_code,
+            expected_warnings_contains=self._collect_response_warnings(snapshot),
+            user_context=effective_user,
+            notes=request.notes or f"materialized from runtime query log {trace_id}",
+        )
+        return self.create_case(case)
+
+    def materialize_trace_as_example(
+        self,
+        trace_id: str,
+        *,
+        example_id: str | None = None,
+        scenario: str | None = None,
+        coverage_tags: list[str] | None = None,
+        notes: str | None = None,
+    ) -> ExampleRecord:
+        if self.runtime_log_repository is None:
+            raise RuntimeError("runtime log repository is not configured")
+        record = self.runtime_log_repository.get_query_log(trace_id)
+        if record is None:
+            raise KeyError(trace_id)
+        if not record.question:
+            raise ValueError("query log does not contain question")
+
+        snapshot = self._build_original_response_snapshot(trace_id)
+        if snapshot is None:
+            raise ValueError("query log does not contain enough trace data to materialize an example")
+        if not snapshot.sql:
+            raise ValueError("query log does not contain SQL, cannot materialize example")
+
+        normalized_question = (snapshot.semantic_parse.normalized_question or record.question).strip()
+        effective_scenario = scenario or self._default_example_scenario(snapshot.classification.question_type)
+        merged_tags = list(dict.fromkeys([
+            snapshot.classification.subject_domain,
+            snapshot.classification.question_type,
+            *(coverage_tags or []),
+        ]))
+        return ExampleRecord(
+            id=example_id or self._generate_example_id(
+                trace_id,
+                snapshot.classification.subject_domain,
+                snapshot.classification.question_type,
+            ),
+            question=record.question,
+            normalized_question=normalized_question,
+            intent=self._generate_example_intent(
+                snapshot.classification.subject_domain,
+                snapshot.classification.question_type,
+                effective_scenario,
+            ),
+            scenario=effective_scenario,
+            coverage_tags=merged_tags,
+            subject_domain=snapshot.classification.subject_domain,
+            question_type=snapshot.classification.question_type,
+            tables=list(snapshot.query_plan.tables),
+            semantic_views=list(snapshot.query_plan.semantic_views),
+            entities=list(snapshot.query_plan.entities),
+            metrics=list(snapshot.query_plan.metrics),
+            dimensions=list(snapshot.query_plan.dimensions),
+            filters=list(snapshot.query_plan.filters),
+            join_path=list(snapshot.query_plan.join_path),
+            sql=snapshot.sql,
+            result_shape=snapshot.answer.status if snapshot.answer is not None else None,
+            notes=notes or f"materialized from runtime query log {trace_id}",
         )
 
     def run(self, request: EvaluationRunRequest) -> EvaluationRunRecord:
@@ -316,6 +421,45 @@ class EvaluationService:
                 if warning not in warnings:
                     warnings.append(warning)
         return warnings
+
+    def _generate_case_id(self, trace_id: str, subject_domain: str | None) -> str:
+        prefix = (subject_domain or "unknown").replace("-", "_")
+        prefix = prefix.replace(" ", "_")
+        return f"runtime_{prefix}_{trace_id[-8:]}"
+
+    def _generate_example_id(
+        self,
+        trace_id: str,
+        subject_domain: str | None,
+        question_type: str | None,
+    ) -> str:
+        domain_prefix = (subject_domain or "unknown").replace("-", "_").replace(" ", "_")
+        question_prefix = (question_type or "new").replace("-", "_").replace(" ", "_")
+        return f"runtime_{domain_prefix}_{question_prefix}_{trace_id[-8:]}"
+
+    def _generate_example_intent(
+        self,
+        subject_domain: str | None,
+        question_type: str | None,
+        scenario: str | None,
+    ) -> str:
+        parts = [subject_domain or "unknown", question_type or "new"]
+        if scenario:
+            parts.append(scenario)
+        return "_".join(part.replace("-", "_").replace(" ", "_") for part in parts if part)
+
+    def _default_example_scenario(self, question_type: str | None) -> str:
+        if question_type == "follow_up":
+            return "runtime_follow_up"
+        if question_type == "clarification_needed":
+            return "runtime_clarification"
+        if question_type == "new_related":
+            return "runtime_new_related"
+        if question_type == "new_unrelated":
+            return "runtime_new_unrelated"
+        if question_type == "invalid":
+            return "runtime_invalid"
+        return "runtime_captured"
 
     def _get_case(self, case_id: str) -> EvaluationCase:
         for item in self._load_cases():

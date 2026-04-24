@@ -63,6 +63,13 @@ class MetadataService:
             count=len(examples),
         )
 
+    def materialize_example(
+        self,
+        example: ExampleRecord,
+        retrieval_service: RetrievalService,
+    ) -> ExampleMutationResponse:
+        return self.create_example(example, retrieval_service=retrieval_service)
+
     def bulk_upsert_examples(
         self,
         payloads: list[dict | ExampleRecord],

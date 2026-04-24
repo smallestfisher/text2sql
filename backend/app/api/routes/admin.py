@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from backend.app.api.dependencies import get_container, get_current_user, require_admin_user
 from backend.app.core.container import AppContainer
@@ -40,6 +40,7 @@ from backend.app.models.evaluation import (
     EvaluationRunRecord,
     EvaluationRunRequest,
     EvaluationSummary,
+    RuntimeQueryLogMaterializeCaseRequest,
 )
 from backend.app.models.feedback import FeedbackCollectionResponse, FeedbackSummary
 from backend.app.models.trace import TraceRecord
@@ -76,6 +77,13 @@ class RoleUpdateRequest(RoleUpsertRequest):
 
 class RuntimeRetentionRequest(BaseModel):
     retention_days: int = 30
+
+
+class RuntimeQueryLogMaterializeExampleRequest(BaseModel):
+    example_id: str | None = None
+    scenario: str | None = None
+    coverage_tags: list[str] = Field(default_factory=list)
+    notes: str | None = None
 
 
 @router.get("/metadata/overview", response_model=MetadataOverview)
@@ -337,6 +345,50 @@ def replay_runtime_query_log(
         raise HTTPException(status_code=404, detail="query log not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/runtime/query-logs/{trace_id}/materialize-case", response_model=EvaluationCase)
+def materialize_runtime_query_log_as_case(
+    trace_id: str,
+    request: RuntimeQueryLogMaterializeCaseRequest,
+    container: AppContainer = Depends(get_container),
+) -> EvaluationCase:
+    try:
+        return container.evaluation_service.materialize_trace_as_case(trace_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="query log not found") from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already exists" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/runtime/query-logs/{trace_id}/materialize-example", response_model=ExampleMutationResponse)
+def materialize_runtime_query_log_as_example(
+    trace_id: str,
+    request: RuntimeQueryLogMaterializeExampleRequest,
+    container: AppContainer = Depends(get_container),
+) -> ExampleMutationResponse:
+    try:
+        example = container.evaluation_service.materialize_trace_as_example(
+            trace_id,
+            example_id=request.example_id,
+            scenario=request.scenario,
+            coverage_tags=request.coverage_tags,
+            notes=request.notes,
+        )
+        return container.metadata_service.materialize_example(
+            example,
+            retrieval_service=container.retrieval_service,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="query log not found") from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already exists" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/database/bootstrap-semantic-views")

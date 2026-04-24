@@ -97,6 +97,16 @@ class EvaluationReplayRequest(BaseModel):
     include_prior_context: bool = True
 
 
+class RuntimeQueryLogMaterializeCaseRequest(BaseModel):
+    case_id: str | None = None
+    scenario: str | None = None
+    coverage_tags: list[str] = Field(default_factory=list)
+    user_id: str | None = None
+    reuse_original_user: bool = True
+    include_prior_context: bool = True
+    notes: str | None = None
+
+
 class EvaluationReplayDiff(BaseModel):
     classification_changed: bool = False
     question_type_changed: bool = False
