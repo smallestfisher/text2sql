@@ -4,9 +4,7 @@
 
 本文基于以下文档与当前后端实现对照整理：
 
-- [TEXT2SQL_ARCHITECTURE.md](/home/yang/code/text2sql/TEXT2SQL_ARCHITECTURE.md)
-- [DEVELOPMENT_PLAN.md](/home/yang/code/text2sql/DEVELOPMENT_PLAN.md)
-- [TODO_BACKLOG.md](/home/yang/code/text2sql/TODO_BACKLOG.md)
+- [TEXT2SQL_ARCHITECTURE.md](/home/y/llm/new/TEXT2SQL_ARCHITECTURE.md)
 
 本文只整理当前范围内仍未完成或仍需继续完善的后端能力。
 
@@ -30,18 +28,31 @@
 - 已有 `example + semantic_view + metric + knowledge` 的多源检索
 - 已有向量检索接口骨架
 - 默认仍以本地轻量向量化占位实现为主
+- 已补基础混排治理和更细的检索解释输出
 
-尚未实现的目标能力：
+当前判断：
+
+- 这部分不是当前阶段的刚性优先项
+- 现有轻量检索已足够支撑离线规则收敛、回归和真实联调前准备
+- 是否升级到“真实混合检索体系”，应由真实联调结果触发，而不是先行重投入
+
+仍未实现、但需由真实联调触发的目标能力：
 
 - 稳定的真实 embedding provider 接入
 - 真实向量库或稳定索引层
-- 明确的检索重排治理与线上可调参数体系
+- 基于真实问法效果的检索重排治理与线上可调参数体系
 - 更完整的召回来源解释与效果分析闭环
+
+建议触发条件：
+
+- 真实问题样本规模上来后，轻量检索开始频繁排错
+- 语义相近但词面差异较大的真实问法召回明显不足
+- example / semantic_view / knowledge 的现有混排已成为主链瓶颈
 
 代码参考：
 
-- [vector_retriever.py](/home/yang/code/text2sql/backend/app/services/vector_retriever.py)
-- [retrieval_service.py](/home/yang/code/text2sql/backend/app/services/retrieval_service.py)
+- [vector_retriever.py](/home/y/llm/new/backend/app/services/vector_retriever.py)
+- [retrieval_service.py](/home/y/llm/new/backend/app/services/retrieval_service.py)
 
 ### 2.2 真正落地的数据库语义视图层
 
@@ -262,7 +273,7 @@
 - 真实 LLM 主链收紧与联调
 - 真实数据库执行治理补强
 - 继续弱化规则，往语义层和 Query Profile 下沉
-- 示例库扩充与真实混合检索接入
+- 示例库扩充，并在真实联调确认检索瓶颈后再升级真实混合检索
 
 ### P1：第二批补
 
@@ -286,134 +297,149 @@
 
 ## 6. 近期可先做的事项
 
-这部分只列“不依赖真实生产数据、可以先推进”的工作，目标是继续提升系统的可回归性、可解释性和可维护性。
+这部分不再按“还能继续补哪些离线能力”来列，而是按“当前阶段最值得做、且最接近真实联调”的事项来列。原则很明确：
 
-### 6.1 P0：结构化意图前移
+- 不再继续投入低 ROI 的平台化治理主题
+- 优先把后端推进到“可接真实数据、可收真实问题、可快速定位问题”
+- 所有新增工作都尽量服务于下一阶段的真实调优，而不是继续做脱离场景的抽象建设
 
-当前状态：
-
-- 已完成一轮高价值结构化前移
-- 已落地 `sort / topN / trend / compare`
-- 已补 follow-up 场景下的 `analysis_mode / sort / limit` 继承
-- 对应离线 case 已补到 [eval/evaluation_cases.json](/home/y/llm/new/eval/evaluation_cases.json)
-
-当前结论：
-
-- 这部分已经不再是最优先的纯离线补强项
-- 后续继续深挖的边际收益开始下降
-- 下一步更适合用真实问题样本验证现有结构化链路，而不是继续凭空扩规则
-
-### 6.2 P0：离线回归继续做厚
-
-当前状态：
-
-- 已补 `--output` / `--report-dir`
-- 已支持 `scenario / coverage_tags / failure_types` 聚合统计
-- CI 已上传 regression artifact
-- README 已补使用说明
-
-当前结论：
-
-- 离线回归已经达到“可作为日常门禁”的程度
-- 后续可以继续增强，但优先级已经低于真实数据联调
-- 下一步应更多用真实样本扩回归，而不是继续只做报告形态增强
-
-### 6.3 P0：语义层配置治理补强
-
-当前状态：
-
-- 已补轻量 semantic lint 脚本 [backend/semantic_lint.py](/home/y/llm/new/backend/semantic_lint.py)
-- 已覆盖 domain / semantic_view / query_profile / extractor 的关键一致性检查
-- CI 已接入 semantic lint
-
-当前结论：
-
-- 这一轮配置治理已经能提前拦下大部分低级配置错误
-- 后续如果继续增强，更值得结合真实字段结构做针对性收敛，而不是先堆重型 schema 工程
-
-### 6.4 P1：Query Plan 与 SQL 一致性再收紧一层
+### 6.1 P0：准备第一批真实数据接入清单
 
 建议优先做：
 
-- 加强 `QueryPlan -> SQL` 一致性校验
-- 增加对 `join / group by / order by / limit / version filter / permission filter` 的逐项核对
-- 增加“风险级别”而不只是 `valid/invalid`
+- 明确首批要接的真实表、视图或数据快照
+- 为每个数据源补齐字段说明：主键、时间字段、版本字段、组织字段、常用指标字段
+- 明确哪些字段已经可以进入语义层，哪些字段先不暴露
+- 形成一份最小可联调的数据清单，避免一开始就追求全量接入
 
-为什么先做：
+为什么现在先做：
 
-- 现在主链已经能跑，下一步最值得做的是减少“能跑但不够稳”的灰区
-- 这类增强仍然不依赖真实生产数据，完全可以用离线 case 驱动
+- 后续很多问题不是代码逻辑问题，而是字段口径、时间口径、版本口径没有先对齐
+- 这一步越早做，后续 LLM、检索、SQL、语义层调优越不会反复返工
 
 建议交付物：
 
-- `backend/app/services/query_plan_validator.py`
-- `backend/app/services/sql_validator.py`
-- `backend/app/services/sql_ast_validator.py`
+- 一份真实数据接入清单文档
+- 一份字段映射表或语义映射草稿
+- 一批可用于只读验证的样例 SQL
 
 验收标准：
 
-- 能区分 `hard error / risky but executable / acceptable`
-- 对时间过滤缺失、排序缺失、join 可疑等问题给出更清晰的分类
+- 团队能明确说清楚“先拿哪几张表做第一轮联调”
+- 每张表的关键口径字段都有初步说明
 
-### 6.5 P1：失败回放与差异分析工具
+### 6.2 P0：收集第一批真实问题样本
 
 建议优先做：
 
-- 对 replay/run 增加阶段差异对比：`classification / query_plan / sql / warnings`
-- 让一次失败可以直接沉淀成评测样本或示例样本
-- 为 regression/replay 结果增加“失败原因聚类”
+- 收集首批真实用户问题，先不追求多，先追求典型
+- 样本至少覆盖：库存、计划/实际、需求、销售、版本对比、时间趋势、排序 TopN、多轮追问
+- 为每条问题补最小标注：领域、是否多轮、期望指标、期望维度、是否需要澄清
+- 把问题样本整理成后续可沉淀到 eval/example 的格式
 
-为什么先做：
+为什么现在先做：
 
-- 当前已经有 replay 和 eval run 骨架，但失败定位成本还偏高
-- 这是把离线回归真正变成日常工程工具的关键一步
+- 当前主链路离线能力已经差不多，真正缺的是“真实问法分布”
+- 没有真实问题，就无法判断到底该继续前移规则、补语义层，还是增强 LLM 理解
 
 建议交付物：
 
-- `backend/app/services/evaluation_service.py`
-- 管理端 replay / eval 相关接口
-- 一个简单的 diff 输出格式
+- 一份首批真实问题样本表
+- 样本分类标签约定
+- 可回放的问题导入格式
 
 验收标准：
 
-- 一条失败样本能快速看到“到底是分类错、规划错、还是 SQL 校验错”
+- 至少有一批能覆盖主要业务主题的真实问题
+- 每条问题都能进入回放和后续归因流程
 
-### 6.6 P1：示例库与评测样本按场景继续扩充
+### 6.3 P0：建立真实问题调优闭环
 
 建议优先做：
 
-- 扩大 `follow_up / clarification / new_related / new_unrelated / permission` 这些高价值样本
-- 增加更多边界样本：短问句、只改时间、只改排序、只改版本、只改维度
-- 把最近修过的问题都转成固定资产，而不是只停留在代码里
+- 为真实问题建立统一归因维度：`classification / retrieval / query_plan / sql / execution / answer`
+- 每修一类问题，都要求能回放、能复现、能判断修复是否有效
+- 形成“问题录入 -> 复跑 -> 定位 -> 修复 -> 回归”的最小流程
+- 把真实问题调优和已有 offline regression 串起来，而不是分成两套体系
 
-为什么先做：
+为什么现在先做：
 
-- 在没有真实生产问法时，最靠谱的办法就是持续把“已知失败模式”转成样本
-- 样本规模上来后，后续接真实数据时也更容易做差异分析
+- 接入真实数据后，最大的风险不是缺能力，而是问题很多但无法快速归因
+- 没有调优闭环，后续优化会重新回到拍脑袋修问题
 
 建议交付物：
 
-- `examples/nl2sql_examples.template.json`
-- `eval/evaluation_cases.json`
+- 一份失败归因模板
+- 一套最小问题状态流转约定
+- 将真实样本纳入 replay/regression 的落库或文件约定
 
 验收标准：
 
-- 每修一个边界问题，都至少补一条 example 或 eval case
-- 样本能覆盖结构化追问、澄清原因、权限注入和跨域切题
+- 任意一条真实失败问题都能被清楚归到某一个主环节
+- 修复后能快速验证是否真的改善
 
-### 6.7 P2：管理端与运行时可观测性增强
+### 6.4 P1：继续收紧 Query Plan 与 SQL 风险边界
 
-建议后续做：
+建议优先做：
 
-- 管理端补回归结果浏览、失败筛选、case 级复跑
-- 为下载、replay、eval run 增加更细的审计记录
-- 运行时日志增加索引和保留策略
+- 继续加强 `QueryPlan -> SQL` 一致性校验
+- 对 `join / group by / order by / limit / version filter / permission filter` 保持逐项核对
+- 把现有风险输出继续用于真实问题归因，而不只是离线校验
+- 优先修“会产生业务误解但不一定报错”的灰区问题
 
-为什么后置：
+为什么放在这一档：
 
-- 这部分有价值，但不如主链路稳定性和离线资产建设来得直接
-- 适合在规则层基本收敛后补
+- 这部分已经有较完整骨架
+- 后续继续补的价值，主要体现在真实联调时能更快识别“看似能跑、其实不可靠”的结果
 
+建议交付物：
+
+- 更清晰的风险分类与错误提示
+- 面向 replay/eval 的风险 diff 输出
+- 与真实失败样本联动的回归 case
+
+验收标准：
+
+- 能更稳定地区分 `hard error / risky but executable / acceptable`
+- 高风险 SQL 不再只停留在“执行成功”这一层判断
+
+### 6.5 P1：把真实修复持续沉淀为离线资产
+
+建议优先做：
+
+- 每修一个真实问题，至少补一条 eval case 或 example
+- 按失败类型沉淀样本：短问句、错别字、口语化、省略、多轮继承、模糊时间、版本切换、维度切换
+- 把真实样本和纯人工构造样本区分标记，便于后续看效果差异
+
+为什么现在要持续做：
+
+- 离线资产建设本身已经不是主目标，但它仍然是避免问题反复回归的最低成本方式
+- 真实样本一旦开始积累，example/eval 的价值会比此前更高
+
+建议交付物：
+
+- 扩充后的 [eval/evaluation_cases.json](/home/y/llm/new/eval/evaluation_cases.json)
+- 按来源分类的 example 资产
+- 一份失败类型与样本映射说明
+
+验收标准：
+
+- 最近修过的问题不会在后续改动中无声回归
+- 能区分“离线构造样本表现”和“真实样本表现”
+
+### 6.6 P2：平台化治理主题暂时冻结
+
+当前判断：
+
+- 完整权限策略治理不继续做
+- metadata/example 的统一运行时治理不作为当前重点
+- 缓存、限流、告警不作为当前主线
+- 更重的混合检索、语义视图落库，也不在真实瓶颈出现前提前重投入
+
+为什么明确写出来：
+
+- 这能防止后续又回到“继续补看起来完整、但当前收益不高的基础设施”
+- 当前阶段最缺的是效果调优和真实场景收敛，不是平台化完备性
 ## 7. 推荐执行顺序
 
 如果按当前阶段来排，建议顺序如下：

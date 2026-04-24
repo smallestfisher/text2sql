@@ -49,7 +49,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 生成下一轮 `session_state`
 - 注入基础数据权限过滤
 - 提供只读执行器和 SQL 治理骨架
-- 提供会话仓库与历史接口，并支持文件持久化
+- 提供会话仓库与历史接口
 - 提供结构化检索 explain、示例库校验与管理接口
 - 提供编排器、审计追踪和路由分层
 - 提供 LLM prompt builder 和 OpenAI-compatible LLM client
@@ -212,6 +212,6 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 - `app/models`
   - 请求、响应、会话、检索、追踪、answer 模型
 - `app/repositories`
-  - 文件持久化仓库、metadata 仓库
+  - 运行时数据库仓库、metadata 仓库
 - `app/services`
   - 语义解析、分类、规划、编译、策略、权限、执行、会话、审计、prompt、llm、answer、metadata、evaluation、auth
