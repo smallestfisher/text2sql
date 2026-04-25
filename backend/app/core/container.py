@@ -27,13 +27,11 @@ from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.runtime_admin_service import RuntimeAdminService
 from backend.app.services.semantic_loader import SemanticLayerLoader
-from backend.app.services.semantic_view_service import SemanticViewService
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
 from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_executor import SqlExecutor
-from backend.app.services.sql_generator import SqlGenerator
 from backend.app.services.sql_validator import SqlValidator
 from backend.app.services.vector_retriever import VectorRetriever
 from backend.app.services.runtime_store_initializer import RuntimeStoreInitializer
@@ -99,7 +97,6 @@ class AppContainer:
             database_connector=self.business_database_connector,
             execution_cache=self.execution_cache_service,
         )
-        self.sql_generator = SqlGenerator(semantic_runtime=self.semantic_runtime)
         self.sql_ast_validator = SqlAstValidator()
         self.sql_validator = SqlValidator(
             ast_validator=self.sql_ast_validator,
@@ -136,11 +133,6 @@ class AppContainer:
             semantic_loader=self.semantic_loader,
             audit_repository=self.audit_repository,
         )
-        self.semantic_view_service = SemanticViewService(
-            semantic_layer=self.semantic_layer,
-            drafts_path=self.metadata_repository.documents["semantic_view_drafts"],
-            database_connector=self.business_database_connector,
-        )
         self.runtime_admin_service = RuntimeAdminService(
             session_repository=self.session_repository,
             runtime_log_repository=self.runtime_log_repository,
@@ -152,7 +144,6 @@ class AppContainer:
             permission_service=self.permission_service,
             query_plan_compiler=self.query_plan_compiler,
             session_state_service=self.session_state_service,
-            sql_generator=self.sql_generator,
             sql_validator=self.sql_validator,
             sql_executor=self.sql_executor,
             prompt_builder=self.prompt_builder,

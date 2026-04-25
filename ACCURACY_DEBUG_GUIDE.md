@@ -2,13 +2,13 @@
 
 ## 1. 目的
 
-本文面向当前仓库已经实现的 Text2SQL 主链路，说明在用户输入一个问题之后，应该如何沿现有架构定位问题、提升准确度，并把修复优先沉淀到语义层、示例库和治理层，而不是继续堆 prompt 补丁。
+本文面向当前仓库已经实现的 LLM-first Text2SQL 主链路，说明在用户输入一个问题之后，应该如何沿现有架构定位问题、提升准确度。当前优先把改进沉淀到真实 schema 上下文、业务说明、few-shot 示例和 SQL 治理层，而不是把所有场景写成 Python 规则或 SQL 模板。
 
 适用范围：
 
 - 当前 `backend/app/services/orchestrator.py` 主链路
 - 当前前端管理端、会话详情、Trace 和 replay 能力
-- 当前 `semantic_layer.json + examples + retrieval + query_plan + sql validation` 这套结构
+- 当前 `tables.json + readme.txt + examples + query_plan + LLM SQL generation + sql validation` 这套结构
 
 ## 2. 当前链路怎么看
 
@@ -17,12 +17,12 @@
 1. `chat.py` 接口接收问题和用户上下文
 2. `orchestrator.py` 生成 trace，并加载 `session_state`
 3. `query_planner.py` 先做 `semantic_parse`，再做问题分类和基础 Query Plan
-4. `retrieval_service.py` 基于 parse 结果做 example / semantic_view / metric / knowledge / vector 检索
+4. `retrieval_service.py` 基于 parse 结果做 example / metric / knowledge / vector 检索，semantic view 仅作为辅助上下文
 5. `llm_client + query_plan_compiler.py` 尝试给 Query Plan 注入 LLM hint，并做边界收缩
 6. `permission_service.py` 把权限过滤条件注入 Query Plan
 7. `query_plan_validator` 校验 Query Plan
-8. `sql_generator.py` 生成 SQL，必要时尝试使用 LLM SQL hint
-9. `sql_validator.py` 和 `sql_ast_validator.py` 校验 SQL
+8. `llm_client.py` 基于真实表结构、业务说明和 Query Plan 生成 SQL
+9. `sql_validator.py` 和 `sql_ast_validator.py` 校验 SQL；失败时触发 LLM repair
 10. `sql_executor.py` 执行 SQL
 11. `answer_builder.py` 组织回答
 12. `runtime_log_repository`、`audit_service`、`session_service` 落日志、trace、会话消息、SQL 审计和快照
@@ -31,10 +31,10 @@
 
 - 语义解析错
 - 问题分类错
-- 检索召回错
+- LLM SQL prompt 上下文不足
 - Query Plan 错
 - 权限注入影响结果
-- SQL 生成错
+- LLM SQL 生成错或 repair 未收敛
 - SQL 校验过松或过严
 - 执行环境或底层数据口径问题
 
@@ -99,18 +99,18 @@
 - `plan_validation` 失败：优先看 Query Plan、语义域、指标和视图选择
 - `sql_validation` 失败：优先看 SQL 生成和字段映射
 - `execution.db_error / timeout / empty_result`：优先看 SQL、权限注入、时间条件、底表口径
-- 执行成功但答案不准：优先看检索、Query Plan、指标口径和语义视图
+- 执行成功但答案不准：优先看真实 schema、业务说明、few-shot、Query Plan 和 SQL 口径
 
 ### 4.2 先看 Trace，不要先猜
 
 `trace` 里至少能回答几个关键问题：
 
 - 会话状态是否正确加载
-- 检索是否命中相关 example / semantic_view / metric / knowledge
+- 检索是否命中相关 example / metric / knowledge
 - LLM hint 是否被接受，还是被 reject 后回退
 - 计划校验和 SQL 校验在哪一步失败
 
-如果 trace 已经显示 `llm query plan hint rejected` 或 `llm sql hint rejected`，那就说明不是简单的“模型质量差”，而是模型输出越界，当前系统已经在保护主链路。此时应该收紧语义层或补示例，而不是一味放开 LLM。
+如果 trace 显示 SQL 校验失败或 repair 失败，先看 prompt 上下文是否缺少真实表字段、业务说明或 few-shot 示例，再看 SQL 校验器是否过严。不要把这类问题改成 Python 模板优先，否则会退回维护不完的规则系统。
 
 ## 5. 分层调试方法
 
@@ -177,21 +177,21 @@
 
 重点看：
 
-- top hits 是否命中了正确 example / semantic_view / metric / knowledge
+- top hits 是否命中了正确 example / metric / knowledge
 - `retrieval_terms` 是否合理
 - `retrieval_channels` 和 `hit_count_by_source` 是否异常
 
 典型症状：
 
 - 问题被分到对的域，但命中的 example 很偏
-- 该命中的语义视图没进 top hits
+- 真实表或业务说明没有进入有效 prompt 上下文
 - example 命中很多，但都是低质量样例
 
 优先修复方式：
 
 - 补 example，尤其是高频问法和 follow-up 样例
-- 补 semantic view purpose / output_fields / notes，让文档检索更有信号
-- 补 metric alias 和 table metadata 描述
+- 补 `tables.json` 字段说明和 `readme.txt` 业务口径
+- 补 metric alias 和高质量 example
 - 如果问题是召回排序错，不要先改 SQL 生成
 
 ### 5.4 Query Plan 层
@@ -204,22 +204,22 @@
 
 重点看：
 
-- `semantic_views / tables / metrics / dimensions / filters / time_context` 是否稳定
+- `tables / metrics / dimensions / filters / time_context` 是否稳定
 - LLM plan hint 是否被接受
 - fallback 到本地 planner 后是否恢复正常
 
 典型症状：
 
-- 指标对，但选错语义视图
+- 指标对，但候选真实表或字段上下文不对
 - 维度没带，导致 group by 不对
 - filter 丢失，导致结果集过大
 - LLM hint 想加越界字段，被 reject 后又退回保守版本
 
 优先修复方式：
 
-- 优先增强 `semantic_runtime.sanitize_query_plan` 的可解释性和约束
-- 补 query profile / semantic view ranking 所需特征
-- 如果某类问题稳定需要特定视图，优先沉淀到视图排序和语义层，而不是 prompt 魔改
+- 优先增强 Query Plan 的可解释性和约束
+- 补真实表、字段、时间、版本和权限上下文
+- 如果某类问题稳定失败，优先沉淀到 `readme.txt`、few-shot 或 validator，而不是新增 SQL 模板
 
 ### 5.5 权限层
 
@@ -250,13 +250,14 @@
 
 代码入口：
 
-- `backend/app/services/sql_generator.py`
+- `backend/app/services/llm_client.py`
+- `backend/app/services/prompt_builder.py`
 - `backend/app/services/sql_validator.py`
 - `backend/app/services/sql_ast_validator.py`
 
 重点看：
 
-- SQL 来源是本地生成还是 LLM hint
+- SQL 是否来自 LLM-first 生成链路
 - 是否引用了 Query Plan 外的 source
 - 是否缺过滤条件、group by、sort、time filter、limit
 
@@ -269,9 +270,9 @@
 
 优先修复方式：
 
-- 优先修 `semantic_runtime.resolve_field`、metric 定义和 semantic view 字段映射
-- 再补 SQL validator 的一致性检查
-- 尽量不要给 SQL generator 继续堆业务 case 分支
+- 优先修 `tables.json`、`readme.txt`、metric 定义和 few-shot
+- 再补 SQL validator 的一致性检查和 repair 错误信息
+- 不要重新引入本地 SQL 模板生成器去堆业务 case 分支
 
 ### 5.7 执行与结果层
 
@@ -296,7 +297,7 @@
 优先修复方式：
 
 - 补时间范围和默认 limit
-- 补更稳定的语义视图，减少直接扫底表
+- 补更清晰的时间范围、业务口径和 prompt 约束，减少无边界扫表
 - 补执行结果状态说明，避免把“执行成功但空结果”误读成“回答正确”
 
 ## 6. 提高准确度时的优先级顺序
@@ -305,7 +306,7 @@
 
 1. 先确认是不是数据口径或权限问题
 2. 再确认语义解析和分类是否正确
-3. 再看检索是否命中正确样例和语义视图
+3. 再看 prompt 是否拿到了正确 schema、业务说明和样例
 4. 再看 Query Plan 是否稳定
 5. 再看 SQL 生成和校验
 6. 最后才考虑 prompt 或 LLM 参数微调
@@ -313,16 +314,16 @@
 原因很简单：
 
 - 如果前面层错了，后面层再聪明也只能在错误目标上优化
-- 语义层和示例库的修复可以复用到一类问题
-- prompt 补丁通常只能救一个问题，且很难维护
+- schema、业务说明和示例库的修复可以复用到一类问题
+- 只针对单题的硬编码补丁通常只能救一个问题，且很难维护
 
 ## 7. 推荐的提准动作
 
 ### 7.1 最优先做的
 
 - 补高频业务问法 example，尤其是真实失败问题
-- 补 metric alias、entity alias、domain inference 特征
-- 把高频复杂底表逻辑前移到 semantic view
+- 补 `tables.json`、`readme.txt`、metric alias、entity alias、domain inference 特征
+- 把高频复杂问法沉淀为 few-shot 和 eval case
 - 用 replay 把失败问题稳定复现，再做回归验证
 
 ### 7.2 第二优先做的
@@ -333,9 +334,9 @@
 
 ### 7.3 最后再做的
 
-- 调 prompt
-- 放宽 LLM hint 接受条件
+- 放宽 SQL validator
 - 增加临时业务分支逻辑
+- 创建真实数据库 semantic view
 
 ## 8. 建议的单题调试流程
 
@@ -345,9 +346,9 @@
 2. 看 `trace` 和 `sql-audit`，先判断错在分类、检索、规划、SQL 还是执行
 3. 在管理端对该 `trace_id` 做 replay，确认是否稳定复现
 4. 如果是解析/分类问题，优先改语义层和分类规则
-5. 如果是检索问题，补 example、view 文档、metric alias
-6. 如果是规划问题，补 query profile / semantic view ranking / plan sanitize
-7. 如果是 SQL 问题，先修字段映射和 validator，再看 generator
+5. 如果是检索问题，补 example、业务说明、metric alias
+6. 如果是规划问题，补 query profile / plan sanitize / 真实表字段上下文
+7. 如果是 SQL 问题，先修 `tables.json`、`readme.txt`、prompt 和 validator，再看 repair
 8. 修复后再次 replay 原问题，确认链路稳定
 9. 如果问题具有代表性，把它沉淀成 evaluation case 或 example
 
@@ -363,4 +364,4 @@
 
 ## 10. 一句话原则
 
-在当前架构里，提升准确度最有效的方法不是继续把 prompt 写长，而是把失败问题往 `语义层 / 语义视图 / 示例库 / 检索 / Query Plan 治理 / replay 闭环` 这几层持续下沉。
+在当前架构里，提升准确度最有效的方法不是继续写 SQL 模板，而是把失败问题往 `tables.json / readme.txt / few-shot / SQL validator / repair / eval replay` 这几层持续下沉。

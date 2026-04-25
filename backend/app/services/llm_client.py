@@ -145,7 +145,9 @@ class LLMClient:
             return None
 
         system_prompt = (
-            "You generate readonly SQL for MySQL. Return SQL only, without markdown, comments, or explanations."
+            "You are the primary Text2SQL generator for MySQL. "
+            "Generate one executable readonly SQL statement using only real database tables and fields provided by the user prompt. "
+            "Return SQL only, without markdown, comments, or explanations."
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         messages = [
@@ -163,7 +165,54 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Return exactly one readonly SELECT statement with LIMIT. No explanation.",
+                            "content": "Return exactly one readonly SELECT or WITH ... SELECT statement with LIMIT. No explanation.",
+                        }
+                    )
+            except Exception:
+                if attempt >= self.max_retries:
+                    return None
+                time.sleep(min(0.4 * attempt, 1.0))
+        return None
+
+    def repair_sql(self, prompt_payload: dict, sql: str, errors: list[str], warnings: list[str]) -> str | None:
+        if not self.enabled:
+            return None
+
+        repair_payload = {
+            "task": "sql_repair",
+            "original_prompt": prompt_payload,
+            "sql": sql,
+            "errors": errors,
+            "warnings": warnings,
+            "instructions": {
+                "return_format": "sql_only",
+                "constraints": [
+                    "fix the SQL using only the original prompt context",
+                    "return exactly one readonly SELECT or WITH ... SELECT statement",
+                    "do not add markdown or explanation",
+                    "must include LIMIT",
+                ],
+            },
+        }
+        system_prompt = (
+            "You repair MySQL Text2SQL output. Return one corrected readonly SQL statement only."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False)},
+        ]
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                content = self._complete(messages).strip()
+                repaired = self._extract_sql(content)
+                if repaired and self._is_readonly_select(repaired):
+                    return repaired
+                if attempt < self.max_retries:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Return exactly one valid readonly SQL statement. No prose.",
                         }
                     )
             except Exception:
@@ -218,7 +267,8 @@ class LLMClient:
 
     def _is_readonly_select(self, sql: str) -> bool:
         normalized = f" {sql.lower()} "
-        if not normalized.strip().startswith("select"):
+        stripped = normalized.strip()
+        if not (stripped.startswith("select") or stripped.startswith("with")):
             return False
         forbidden = (" insert ", " update ", " delete ", " drop ", " alter ", " truncate ", " create ")
         if any(keyword in normalized for keyword in forbidden):

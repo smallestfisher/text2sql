@@ -254,6 +254,7 @@ export interface RuntimeQueryLogRecord {
   executed?: boolean | null;
   row_count?: number | null;
   warnings: string[];
+  prompt_context_summary?: Record<string, unknown>;
   created_at: string;
 }
 
@@ -328,6 +329,20 @@ export interface EvaluationReplayRequest {
   include_prior_context: boolean;
 }
 
+export interface EvaluationReplayDiff {
+  classification_changed: boolean;
+  question_type_changed: boolean;
+  subject_domain_changed: boolean;
+  answer_status_changed: boolean;
+  plan_valid_changed: boolean;
+  sql_valid_changed: boolean;
+  execution_status_changed: boolean;
+  sql_changed: boolean;
+  prompt_context_changed?: boolean;
+  original_prompt_context_summary?: Record<string, unknown>;
+  replay_prompt_context_summary?: Record<string, unknown>;
+}
+
 export interface EvaluationReplayResult {
   source_type: "evaluation_case" | "runtime_query_log";
   source_id: string;
@@ -337,6 +352,7 @@ export interface EvaluationReplayResult {
   original_trace_id?: string | null;
   original_session_id?: string | null;
   original_user_id?: string | null;
+  diff?: EvaluationReplayDiff | null;
   response: ChatResponse;
 }
 

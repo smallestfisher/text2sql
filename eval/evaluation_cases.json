@@ -206,6 +206,38 @@
     ]
   },
   {
+    "id": "eval_demand_latest_p_top_fgcode_001",
+    "question": "最新4版p版需求中，202604需求最多的fgcode是哪一个",
+    "session_questions": [],
+    "scenario": "demand_horizontal_latest",
+    "coverage_tags": [
+      "demand",
+      "horizontal_table",
+      "latest_version",
+      "topn"
+    ],
+    "expected_domain": "demand",
+    "expected_question_type": "new",
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "FGCODE"
+    ],
+    "expected_sort_fields": [
+      "demand_qty"
+    ],
+    "expected_filter_fields": [
+      "source_table",
+      "demand_month",
+      "PM_VERSION"
+    ],
+    "expected_semantic_views": [
+      "semantic_demand_unpivot_view"
+    ],
+    "notes": "需求横表问题应识别目标需求月份、P版来源、最新N版版本范围，并按 FGCODE 取 Top1。"
+  },
+  {
     "id": "eval_sales_001",
     "question": "查询2026年4月销售业绩",
     "session_questions": [],
@@ -890,5 +922,123 @@
     "expected_status": "clarification_needed",
     "expected_reason_code": "unknown_request",
     "notes": "泛化请求不应直接尝试规划 SQL。"
+  },
+  {
+    "id": "eval_synthetic_demand_latest_p_target_month_001",
+    "question": "最新4版p版需求中，202604需求最多的fgcode是哪一个",
+    "session_questions": [],
+    "scenario": "synthetic_llm_first_sql_shape",
+    "coverage_tags": [
+      "synthetic",
+      "demand",
+      "horizontal_table",
+      "latest_n",
+      "topn"
+    ],
+    "expected_domain": "demand",
+    "expected_question_type": "new",
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "FGCODE"
+    ],
+    "expected_sort_fields": [
+      "demand_qty"
+    ],
+    "expected_filter_fields": [
+      "demand_month",
+      "source_table",
+      "PM_VERSION"
+    ],
+    "notes": "合成需求横表 case，用于覆盖目标月份不等于 MONTH、最新 N 版和 TopN 聚合。"
+  },
+  {
+    "id": "eval_synthetic_demand_follow_up_version_switch_001",
+    "question": "换成v版，还是看202604",
+    "session_questions": [
+      "最新4版p版需求中，202604需求最多的fgcode是哪一个"
+    ],
+    "scenario": "synthetic_follow_up_context_delta",
+    "coverage_tags": [
+      "synthetic",
+      "demand",
+      "follow_up",
+      "version_switch"
+    ],
+    "expected_domain": "demand",
+    "expected_question_type": "follow_up",
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_filter_fields": [
+      "demand_month",
+      "source_table"
+    ],
+    "notes": "合成多轮 case，验证追问中 p/v 版本来源替换和目标月份继承。"
+  },
+  {
+    "id": "eval_synthetic_inventory_permission_customer_001",
+    "question": "查询2026年4月库存，按客户拆分",
+    "session_questions": [],
+    "scenario": "synthetic_permission_filter",
+    "coverage_tags": [
+      "synthetic",
+      "inventory",
+      "permission",
+      "customer_scope"
+    ],
+    "expected_domain": "inventory",
+    "expected_question_type": "new",
+    "expected_metrics": [
+      "inventory_qty"
+    ],
+    "expected_filter_fields": [
+      "biz_month",
+      "customer"
+    ],
+    "expected_warnings_contains": [
+      "data scope filters injected into query plan"
+    ],
+    "user_context": {
+      "user_id": "eval_scope_inventory_customer",
+      "roles": [
+        "viewer"
+      ],
+      "data_scope": {
+        "customers": [
+          "CUST-001"
+        ]
+      }
+    },
+    "notes": "合成权限 case，验证无真实数据时也能检查客户范围过滤注入。"
+  },
+  {
+    "id": "eval_synthetic_plan_actual_follow_up_time_001",
+    "question": "那2026年5月呢，按天看",
+    "session_questions": [
+      "查询2026年4月 CELL 工厂计划投入和实际产出对比"
+    ],
+    "scenario": "synthetic_follow_up_time_dimension",
+    "coverage_tags": [
+      "synthetic",
+      "plan_actual",
+      "follow_up",
+      "time_replace",
+      "dimension_replace"
+    ],
+    "expected_domain": "plan_actual",
+    "expected_question_type": "follow_up",
+    "expected_metrics": [
+      "plan_input_qty",
+      "actual_output_qty"
+    ],
+    "expected_dimensions": [
+      "biz_date"
+    ],
+    "expected_filter_fields": [
+      "biz_month"
+    ],
+    "notes": "合成多轮 case，验证时间替换和时间维度切换。"
   }
 ]

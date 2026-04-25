@@ -235,6 +235,12 @@
         "type": "calendar_month",
         "field": "biz_month",
         "pattern": "(\\d{4})年(\\d{1,2})月(?!\\d)"
+      },
+      {
+        "name": "compact_month",
+        "type": "compact_month",
+        "field": "biz_month",
+        "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b"
       }
     ],
     "filters": [
@@ -292,6 +298,32 @@
         "field": "customer",
         "op": "=",
         "pattern": "(?:CUSTOMER|customer|客户)\\s*(?:[:：=]|为|是)\\s*([A-Za-z0-9._\\-\\u4e00-\\u9fa5]+)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "demand_month_compact",
+        "type": "regex",
+        "field": "demand_month",
+        "op": "=",
+        "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b(?=\\s*需求)",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "demand_source_p",
+        "type": "regex",
+        "field": "source_table",
+        "op": "=",
+        "pattern": "(?:^|[^A-Za-z0-9])P版(?:[^A-Za-z0-9]|$)",
+        "value": "p_demand",
+        "flags": ["ignorecase"]
+      },
+      {
+        "name": "demand_source_v",
+        "type": "regex",
+        "field": "source_table",
+        "op": "=",
+        "pattern": "(?:^|[^A-Za-z0-9])V版(?:[^A-Za-z0-9]|$)",
+        "value": "v_demand",
         "flags": ["ignorecase"]
       }
     ],
@@ -370,6 +402,12 @@
         "field": "PM_VERSION",
         "pattern": "([A-Za-z0-9._-]+)\\s*(?:版本|version)",
         "flags": ["ignorecase"]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "最新\\s*(\\d{1,2})\\s*版",
+        "value_template": "LATEST_N:{match}",
+        "flags": ["ignorecase"]
       }
     ],
     "analysis": [
@@ -410,6 +448,12 @@
         "flags": ["ignorecase"]
       },
       {
+        "field": "demand_qty",
+        "order": "desc",
+        "pattern": "(?:需求最多|最多的(?:fgcode|成品型号)|需求最高|最高需求)",
+        "flags": ["ignorecase"]
+      },
+      {
         "field": "actual_output_qty",
         "order": "desc",
         "pattern": "(?:按|依)?实际产出(?:量)?(?:从高到低|降序|倒序)",
@@ -443,6 +487,11 @@
     "limit": [
       {
         "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
+        "flags": ["ignorecase"]
+      },
+      {
+        "pattern": "(?:哪一个|哪个)",
+        "value": 1,
         "flags": ["ignorecase"]
       }
     ]
@@ -660,11 +709,11 @@
       ]
     },
     "demand": {
-      "default_semantic_views": ["semantic_demand_perf_view", "semantic_demand_unpivot_view"],
+      "default_semantic_views": ["semantic_demand_unpivot_view", "semantic_demand_perf_view"],
       "default_limit": 200,
       "max_limit": 200,
       "version_field": "PM_VERSION",
-      "time_filter_fields": ["biz_month"],
+      "time_filter_fields": ["demand_month", "biz_month"],
       "warn_if_missing_time_filter": true,
       "table_selection": {
         "prefer_metric_tables": true,
@@ -915,6 +964,7 @@
         "sbu_desc",
         "bu_desc",
         "customer",
+        "demand_month",
         "biz_month",
         "demand_qty",
         "sales_qty",

@@ -32,6 +32,7 @@ FilterOperator = Literal[
     "between",
     "in",
     "like",
+    "latest_n",
     "is_null",
     "not_null",
 ]

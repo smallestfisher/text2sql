@@ -610,6 +610,8 @@ class EvaluationService:
         replay_plan_flags = set(replay_response.plan_validation.risk_flags)
         original_sql_flags = set(original_response.sql_validation.risk_flags)
         replay_sql_flags = set(replay_response.sql_validation.risk_flags)
+        original_prompt_context = self._prompt_context_summary(original_response)
+        replay_prompt_context = self._prompt_context_summary(replay_response)
 
         return EvaluationReplayDiff(
             classification_changed=(
@@ -625,6 +627,9 @@ class EvaluationService:
             sql_risk_level_changed=original_response.sql_validation.risk_level != replay_response.sql_validation.risk_level,
             execution_status_changed=(original_response.execution.status if original_response.execution else None) != (replay_response.execution.status if replay_response.execution else None),
             sql_changed=(original_response.sql or "") != (replay_response.sql or ""),
+            prompt_context_changed=original_prompt_context != replay_prompt_context,
+            original_prompt_context_summary=original_prompt_context,
+            replay_prompt_context_summary=replay_prompt_context,
             metrics_added=sorted(replay_metrics - original_metrics),
             metrics_removed=sorted(original_metrics - replay_metrics),
             dimensions_added=sorted(replay_dimensions - original_dimensions),
@@ -638,6 +643,14 @@ class EvaluationService:
             sql_risk_flags_added=sorted(replay_sql_flags - original_sql_flags),
             sql_risk_flags_removed=sorted(original_sql_flags - replay_sql_flags),
         )
+
+    def _prompt_context_summary(self, response) -> dict:
+        trace = getattr(response, "trace", None)
+        if trace is None:
+            return {}
+        metadata = self._step_metadata(trace, "build_sql_prompt")
+        summary = metadata.get("context_summary")
+        return summary if isinstance(summary, dict) else {}
 
     def _step_metadata(self, trace, step_name: str) -> dict:
         for step in trace.steps:

@@ -69,14 +69,17 @@ class SqlValidator:
         normalized_sql = f" {sql.lower()} "
         inspection = self.ast_validator.inspect(sql)
 
-        if not normalized_sql.strip().startswith("select"):
+        stripped_sql = normalized_sql.strip()
+        if not (stripped_sql.startswith("select") or stripped_sql.startswith("with")):
             errors.append("only SELECT statements are allowed")
 
         for keyword in self.FORBIDDEN_KEYWORDS:
             if keyword in normalized_sql:
                 errors.append(f"forbidden keyword detected:{keyword.strip()}")
 
-        allowed_sources = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
+        physical_sources = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
+        allowed_sources = set(physical_sources)
+        allowed_sources.update(inspection.cte_names)
         allowed_sources.update(
             item["name"] for item in semantic_layer.get("semantic_views", [])
         )
@@ -90,7 +93,10 @@ class SqlValidator:
             errors.append(f"sql references unknown sources: {', '.join(unknown_sources)}")
 
         if query_plan is not None:
-            expected_sources = set(query_plan.semantic_views + query_plan.tables)
+            expected_sources = set(query_plan.tables)
+            if not expected_sources:
+                expected_sources = set(query_plan.semantic_views)
+            expected_sources.update(inspection.cte_names)
             unexpected_sources = [source for source in used_sources if source not in expected_sources]
             if unexpected_sources:
                 errors.append(f"sql references sources outside query plan: {', '.join(unexpected_sources)}")

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+from backend.app.config import README_TEXT_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import SemanticParse
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.retrieval import RetrievalContext
@@ -8,8 +11,13 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 
 
 class PromptBuilder:
+    BUSINESS_NOTES_MAX_CHARS = 2400
+
     def __init__(self, semantic_runtime: SemanticRuntime | None = None) -> None:
         self.semantic_runtime = semantic_runtime
+        self._tables_metadata = self._load_tables_metadata()
+        self._business_notes = self._load_business_notes()
+        self._business_note_chunks = self._split_business_notes(self._business_notes)
 
     def build_query_plan_prompt(
         self,
@@ -40,10 +48,11 @@ class PromptBuilder:
             "instructions": {
                 "return_format": "json",
                 "constraints": [
-                    "prefer selected semantic views over raw tables",
-                    "only use registered domains, tables, semantic views, metrics and fields",
+                    "prefer real physical tables over semantic views",
+                    "semantic views are auxiliary hints only and may not exist in the database",
+                    "only use registered domains, real tables, metrics and fields",
                     "respect base_plan and only refine filters, dimensions, sort, version_context and limit when needed",
-                    "do not invent new metrics, fields, semantic views or tables outside the allowed lists",
+                    "do not invent new metrics, fields or tables outside the allowed lists",
                     "for follow-up questions, preserve previous subject when the new question is only refining filters or time",
                 ],
                 "fields": [
@@ -151,23 +160,152 @@ class PromptBuilder:
         }
 
     def build_sql_prompt(self, query_plan: QueryPlan) -> dict:
-        selected_sources = query_plan.semantic_views or query_plan.tables
+        selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
+        source_schemas = {
+            table_name: self._tables_metadata.get(table_name, {})
+            for table_name in selected_sources
+            if table_name in self._tables_metadata
+        }
+        sql_preferences = [
+            "Use query_plan tables as the primary source of truth for actual database objects.",
+            "Use query_plan dimensions, filters, sort and limit exactly unless they would produce invalid SQL.",
+        ]
+        few_shot = None
+        if self._is_demand_plan(query_plan, selected_sources):
+            sql_preferences = [
+                "For p_demand/v_demand horizontal demand tables, target demand month is computed from base MONTH plus offset: offset 0 REQUIREMENT_QTY, offset 1 NEXT_REQUIREMENT, offset 2 LAST_REQUIREMENT, offset 3 MONTH4, offset 4 MONTH5, offset 5 MONTH6, offset 6 MONTH7.",
+                "If query_plan filters contain demand_month='YYYYMM', build a CTE with columns PM_VERSION, FGCODE, customer dimensions, demand_month, demand_qty, then filter computed demand_month = 'YYYYMM'. Do not compare the base MONTH to future months as a CASE shortcut.",
+                "When query_plan filters contain PM_VERSION with op latest_n, compute latest distinct versions using SELECT PM_VERSION FROM <source table> GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT count.",
+                *sql_preferences,
+            ]
+            few_shot = {
+                "question_pattern": "最新N版P版需求中，YYYYMM需求最多的FGCODE是哪一个",
+                "sql_shape": [
+                    "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT N)",
+                    "demand_unpivot AS (UNION ALL rows where demand_month is MONTH plus each offset field)",
+                    "SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month='YYYYMM' AND PM_VERSION IN (...) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1",
+                ],
+            }
+        business_notes = self._business_notes_for_plan(query_plan, selected_sources)
+        context_budget = {
+            "business_notes_max_chars": self.BUSINESS_NOTES_MAX_CHARS,
+            "business_notes_mode": "ranked_relevant_chunks",
+            "tables_metadata_mode": "selected_query_plan_tables_only",
+        }
+        context_summary = {
+            "selected_sources": selected_sources,
+            "tables_metadata_count": len(source_schemas),
+            "business_notes_chars": len(business_notes),
+            "few_shot_used": few_shot is not None,
+            "subject_domain": query_plan.subject_domain,
+        }
         return {
             "task": "sql_generation",
             "query_plan": query_plan.model_dump(),
             "allowed_sources": selected_sources,
             "allowed_fields": sorted(self._allowed_fields(query_plan)),
+            "tables_metadata": source_schemas,
+            "business_notes": business_notes,
+            "context_budget": context_budget,
+            "context_summary": context_summary,
             "instructions": {
                 "return_format": "sql_only",
                 "constraints": [
-                    "readonly select only",
-                    "must include limit",
-                    "prefer semantic views when available",
-                    "only reference sources from allowed_sources",
-                    "do not reference fields outside allowed_fields",
+                    "generate MySQL readonly SQL using real physical tables first",
+                    "prefer WITH CTE over referencing semantic views that may not exist in the database",
+                    "only use real tables from tables_metadata",
+                    "do not reference semantic_demand_unpivot_view or other semantic views unless explicitly requested",
+                    "must include LIMIT",
+                    "if demand tables are horizontal, expand them with a CTE when needed",
+                    "do not use SELECT *",
+                    "aggregate metrics with GROUP BY all query_plan dimensions",
+                    "only return SQL, no markdown or explanation",
                 ],
+                "sql_preferences": sql_preferences,
+                "few_shot": few_shot,
             },
         }
+
+    def _load_tables_metadata(self) -> dict:
+        try:
+            return json.loads(TABLES_METADATA_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _load_business_notes(self) -> str:
+        try:
+            return README_TEXT_PATH.read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+    def _split_business_notes(self, notes: str) -> list[str]:
+        chunks: list[str] = []
+        current: list[str] = []
+        for raw_line in notes.splitlines():
+            line = raw_line.strip()
+            if not line:
+                if current:
+                    chunks.append("\n".join(current))
+                    current = []
+                continue
+            if current and self._starts_new_note_chunk(line):
+                chunks.append("\n".join(current))
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            chunks.append("\n".join(current))
+        return chunks
+
+    def _starts_new_note_chunk(self, line: str) -> bool:
+        return bool(line[:2] and line[0].isdigit() and line[1] in {".", "、", ")"})
+
+    def _business_notes_for_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> str:
+        if not self._business_note_chunks:
+            return ""
+        terms = self._business_note_terms(query_plan, selected_sources)
+        scored_chunks: list[tuple[int, int, str]] = []
+        for index, chunk in enumerate(self._business_note_chunks):
+            lower_chunk = chunk.lower()
+            score = sum(1 for term in terms if term and term in lower_chunk)
+            if score:
+                scored_chunks.append((score, -index, chunk))
+        if not scored_chunks:
+            scored_chunks = [(0, -index, chunk) for index, chunk in enumerate(self._business_note_chunks[:2])]
+        selected_chunks: list[str] = []
+        total_chars = 0
+        for _score, _negative_index, chunk in sorted(scored_chunks, reverse=True):
+            separator_chars = 2 if selected_chunks else 0
+            projected = total_chars + separator_chars + len(chunk)
+            if projected > self.BUSINESS_NOTES_MAX_CHARS and selected_chunks:
+                continue
+            selected_chunks.append(chunk)
+            total_chars = projected
+            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+                break
+        notes = "\n\n".join(selected_chunks)
+        return notes[: self.BUSINESS_NOTES_MAX_CHARS]
+
+    def _business_note_terms(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> set[str]:
+        terms = {
+            query_plan.subject_domain,
+            *(selected_sources or []),
+            *query_plan.tables,
+            *query_plan.metrics,
+            *query_plan.dimensions,
+            *(item.field for item in query_plan.filters),
+        }
+        if query_plan.version_context and query_plan.version_context.field:
+            terms.add(query_plan.version_context.field)
+        return {str(term).lower() for term in terms if term}
+
+    def _is_demand_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> bool:
+        sources = set(selected_sources or []) | set(query_plan.tables)
+        return (
+            query_plan.subject_domain == "demand"
+            or bool({"p_demand", "v_demand"}.intersection(sources))
+            or any(metric.startswith("demand") for metric in query_plan.metrics)
+        )
 
     def _query_profile(self, subject_domain: str) -> dict | None:
         if self.semantic_runtime is None or subject_domain == "unknown":

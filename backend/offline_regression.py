@@ -24,8 +24,11 @@ from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.semantic_loader import SemanticLayerLoader
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_state_service import SessionStateService
-from backend.app.services.sql_generator import SqlGenerator
-from backend.app.services.sql_validator import SqlValidator
+
+
+OFFLINE_SQL_SKIP_REASON = (
+    "sql generation skipped in offline regression; LLM-first SQL is validated in live/replay paths"
+)
 
 
 def load_cases(path: Path) -> list[EvaluationCase]:
@@ -48,8 +51,6 @@ def build_components() -> dict[str, Any]:
         "query_plan_validator": QueryPlanValidator(semantic_runtime=semantic_runtime),
         "permission_service": PermissionService(policy_engine=PolicyEngine(semantic_runtime=semantic_runtime)),
         "session_state_service": SessionStateService(),
-        "sql_generator": SqlGenerator(semantic_runtime=semantic_runtime),
-        "sql_validator": SqlValidator(semantic_runtime=semantic_runtime),
         "answer_builder": AnswerBuilder(),
     }
 
@@ -66,8 +67,6 @@ def run_question(
     query_plan_validator = components["query_plan_validator"]
     permission_service = components["permission_service"]
     session_state_service = components["session_state_service"]
-    sql_generator = components["sql_generator"]
-    sql_validator = components["sql_validator"]
     answer_builder = components["answer_builder"]
 
     semantic_parse, classification, query_plan, planner_warnings = query_planner.create_plan(
@@ -94,34 +93,13 @@ def run_question(
         risk_flags=plan_result.risk_flags,
     )
 
-    sql = None if plan_errors else sql_generator.generate(query_plan)
-    required_filter_fields = permission_service.required_filter_fields(
-        query_plan=query_plan,
-        user_context=user_context,
-    )
-    sql_errors: list[str] = []
-    sql_warnings: list[str] = []
-    sql_risk_level = "low"
-    sql_risk_flags: list[str] = []
-    if sql is None and not plan_errors:
-        sql_errors = ["sql is empty"]
-    elif sql is not None:
-        sql_result = sql_validator.validate_detailed(
-            sql,
-            semantic_layer,
-            query_plan=query_plan,
-            required_filter_fields=required_filter_fields,
-        )
-        sql_errors = sql_result.errors
-        sql_warnings = sql_result.warnings
-        sql_risk_level = sql_result.risk_level
-        sql_risk_flags = sql_result.risk_flags
+    sql = None
     sql_validation = ValidationResponse(
-        valid=not sql_errors,
-        errors=sql_errors,
-        warnings=sql_warnings,
-        risk_level=sql_risk_level,
-        risk_flags=sql_risk_flags,
+        valid=True,
+        errors=[],
+        warnings=[OFFLINE_SQL_SKIP_REASON],
+        risk_level="low",
+        risk_flags=[],
     )
     answer = answer_builder.build(
         classification=classification,
@@ -142,6 +120,8 @@ def run_question(
         "sql": sql,
         "plan_validation": plan_validation,
         "sql_validation": sql_validation,
+        "sql_generation_mode": "skipped_llm_first_offline",
+        "sql_skip_reason": OFFLINE_SQL_SKIP_REASON,
         "answer": answer,
         "next_session_state": next_session_state,
     }
@@ -271,6 +251,8 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "case_count": len(results),
         "passed_count": passed,
         "failed_count": failed,
+        "sql_generation_mode": "skipped_llm_first_offline",
+        "sql_skip_reason": OFFLINE_SQL_SKIP_REASON,
         "by_question_type": summarize_dimension(results, "classification_question_type"),
         "by_domain": summarize_dimension(results, "classification_domain"),
         "by_scenario": summarize_dimension(results, "scenario"),
@@ -353,6 +335,8 @@ def main() -> None:
                 "actual_semantic_views": list(result["query_plan"].semantic_views),
                 "plan_valid": result["plan_validation"].valid,
                 "sql_valid": result["sql_validation"].valid,
+                "sql_generation_mode": result["sql_generation_mode"],
+                "sql_skip_reason": result["sql_skip_reason"],
                 "passed": not failures,
                 "failures": failures,
                 "warnings": unique(result["plan_validation"].warnings + result["sql_validation"].warnings),
@@ -388,6 +372,7 @@ def main() -> None:
         f"offline regression: {summary['passed_count']}/{summary['case_count']} passed, "
         f"{summary['failed_count']} failed"
     )
+    print(f"sql generation: {summary['sql_generation_mode']} ({summary['sql_skip_reason']})")
     for question_type, bucket in sorted(summary["by_question_type"].items()):
         print(
             f"- type {question_type}: total={bucket['total']} failed={bucket['failed']}"

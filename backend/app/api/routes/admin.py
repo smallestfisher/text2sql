@@ -10,9 +10,6 @@ from backend.app.models.admin import (
     ExampleMutationResponse,
     MetadataDocument,
     MetadataOverview,
-    SemanticViewBootstrapResponse,
-    SemanticViewDraftCollectionResponse,
-    SemanticViewValidationResponse,
     RuntimeQueryLogCollectionResponse,
     RuntimeQueryLogRecord,
     RuntimeRetrievalLogRecord,
@@ -44,7 +41,6 @@ from backend.app.models.evaluation import (
 )
 from backend.app.models.feedback import FeedbackCollectionResponse, FeedbackSummary
 from backend.app.models.trace import TraceRecord
-from backend.app.config import SEMANTIC_VIEW_DRAFTS_PATH
 
 
 router = APIRouter(
@@ -389,41 +385,6 @@ def materialize_runtime_query_log_as_example(
         detail = str(exc)
         status_code = 409 if "already exists" in detail else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
-
-
-@router.post("/database/bootstrap-semantic-views")
-def bootstrap_semantic_views(container: AppContainer = Depends(get_container)) -> dict:
-    sql_script = SEMANTIC_VIEW_DRAFTS_PATH.read_text(encoding="utf-8")
-    return container.business_database_connector.execute_script(sql_script)
-
-
-@router.get("/database/semantic-views/drafts", response_model=SemanticViewDraftCollectionResponse)
-def list_semantic_view_drafts(
-    container: AppContainer = Depends(get_container),
-) -> SemanticViewDraftCollectionResponse:
-    return container.semantic_view_service.list_drafts()
-
-
-@router.get("/database/semantic-views/{view_name}/validate", response_model=SemanticViewValidationResponse)
-def validate_single_semantic_view(
-    view_name: str,
-    container: AppContainer = Depends(get_container),
-) -> SemanticViewValidationResponse:
-    try:
-        return container.semantic_view_service.validate_view(view_name)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="semantic view draft not found") from exc
-
-
-@router.post("/database/semantic-views/{view_name}/bootstrap", response_model=SemanticViewBootstrapResponse)
-def bootstrap_single_semantic_view(
-    view_name: str,
-    container: AppContainer = Depends(get_container),
-) -> SemanticViewBootstrapResponse:
-    try:
-        return container.semantic_view_service.bootstrap_view(view_name)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="semantic view draft not found") from exc
 
 
 @router.get("/users", response_model=list[UserContext])

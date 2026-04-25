@@ -25,52 +25,6 @@ class MetadataOverview(BaseModel):
     trace_count: int
 
 
-class SemanticViewDraftRecord(BaseModel):
-    name: str
-    sql: str
-    declared_output_fields: list[str] = Field(default_factory=list)
-    semantic_output_fields: list[str] = Field(default_factory=list)
-    semantic_status: str | None = None
-    semantic_stage: str | None = None
-    missing_fields: list[str] = Field(default_factory=list)
-    extra_fields: list[str] = Field(default_factory=list)
-    contract_aligned: bool = False
-
-
-class SemanticViewDraftCollectionResponse(BaseModel):
-    views: list[SemanticViewDraftRecord] = Field(default_factory=list)
-    count: int = 0
-
-
-class SemanticViewDependencyRecord(BaseModel):
-    name: str
-    dependency_type: str
-    exists_in_drafts: bool = False
-    exists_in_database: bool | None = None
-    database_status: str | None = None
-    database_warning: str | None = None
-
-
-class SemanticViewValidationResponse(BaseModel):
-    view: SemanticViewDraftRecord
-    dependencies: list[SemanticViewDependencyRecord] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    database_connected: bool = False
-    bootstrap_ready: bool = False
-
-
-class SemanticViewBootstrapResponse(BaseModel):
-    view: str
-    contract_aligned: bool = False
-    database_connected: bool = False
-    bootstrap_ready: bool = False
-    dependencies: list[SemanticViewDependencyRecord] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    executed: bool = False
-    statements: int | None = None
-    error: str | None = None
-
-
 class ExampleCollectionResponse(BaseModel):
     examples: list[ExampleRecord]
     count: int
@@ -113,6 +67,7 @@ class RuntimeQueryLogRecord(BaseModel):
     executed: bool | None = None
     row_count: int | None = None
     warnings: list[str] = Field(default_factory=list)
+    prompt_context_summary: dict = Field(default_factory=dict)
     created_at: datetime
 
 

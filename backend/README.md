@@ -37,20 +37,20 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 ## Current Scope
 
-当前后端实现的是“整体架构骨架 + R0/R1/R2/R3/R4/R5/R6 第一版能力”：
+当前后端实现的是“LLM-first 的 Text2SQL 主链路 + SQL 治理与执行骨架”：
 
-- 加载语义层配置
-- 语义解析
-- 问题分类
-- 根据问题生成最小 Query Plan
-- 对 Query Plan 做结构化校验
-- 生成草案 SQL
-- 对 SQL 做基础只读校验
+- 加载真实表结构描述、业务说明和辅助语义配置
+- 语义解析与问题分类
+- 根据问题生成 Query Plan 作为 LLM SQL 生成约束
+- 由 LLM 直接基于真实表生成 MySQL SQL
+- PromptBuilder 只选择当前 Query Plan 相关表结构、业务说明片段和场景 few-shot，避免全量 prompt 膨胀
+- SQL 校验器做只读、安全、表字段范围、LIMIT 与风险治理
+- SQL 校验或执行失败时，触发一次 LLM SQL repair
 - 生成下一轮 `session_state`
 - 注入基础数据权限过滤
 - 提供只读执行器和 SQL 治理骨架
 - 提供会话仓库与历史接口
-- 提供结构化检索 explain、示例库校验与管理接口
+- 提供结构化检索、示例库和管理接口
 - 提供编排器、审计追踪和路由分层
 - 提供 LLM prompt builder 和 OpenAI-compatible LLM client
 - 提供 DB connector、answer builder、middleware、settings、异常处理
@@ -60,10 +60,11 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 当前阶段说明：
 
-- 当前主要以测试数据、测试问法和待收敛规则为主，不以最终生产口径为假设前提
-- 当前更强调“架构骨架、语义对象、结构化链路、可调试性”先搭起来，而不是过早做重型落库或性能优化
-- 语义视图当前以 `draft / logical_scaffold` 方式存在，既进入 retrieval / planner 链路，也保留 SQL 草案，但不要求已经是最终数据库对象
-- 语义视图脚手架说明见 [SEMANTIC_VIEW_SCAFFOLD_PLAN.md](/home/y/llm/new/SEMANTIC_VIEW_SCAFFOLD_PLAN.md)
+- 当前主要以真实表结构、真实业务说明和 LLM 生成 SQL 为主，不再要求数据库中预先落库 semantic view
+- 语义层现在主要承担解析、检索和约束提示作用，而不是主 SQL 模板来源
+- `readme.txt` 会被切片并按当前表、指标、字段选择相关片段，不会整份无条件进入 SQL prompt
+- 对横表、复杂口径等问题，优先通过 prompt / few-shot / repair loop 驱动 LLM 生成可执行 SQL，再由校验器治理
+- 已移除 semantic view bootstrap 管理接口和 SQL 草案文件，避免真实数据库被辅助视图污染
 
 ## API
 
@@ -91,7 +92,6 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `GET /api/admin/runtime/status`
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
-- `POST /api/admin/database/bootstrap-semantic-views`
 - `GET /api/admin/users`
 - `GET /api/admin/users/{user_id}`
 - `PUT /api/admin/users/{user_id}`
@@ -135,8 +135,8 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 
 ## Offline Regression
 
-在没有运行时 MySQL、业务库或真实执行环境的情况下，可以直接跑离线回归，
-覆盖 `classification / query_plan / permission_filter / sql_validation` 这几层：
+在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，
+覆盖 `classification / query_plan / permission_filter` 这几层：
 
 ```bash
 .venv/bin/python backend/offline_regression.py --failures-only
@@ -178,10 +178,10 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 
 - 离线回归不会连接数据库，也不会写 runtime 审计表
 - 当前会复用 `eval/evaluation_cases.json`
-- 当前主要用于收敛分类、规划、权限注入和 SQL 校验，不用于验证真实执行结果
+- 当前主要用于收敛分类、规划和权限注入；LLM-first SQL 生成与 SQL 校验需要在 live/replay 链路验证
 - 控制台输出现在会包含 `question_type / scenario / failure_types` 的聚合统计
 - `--report-dir` 会输出 `summary.json` 和 `failures.json`，方便在本地或 CI 比较回归结果
-- `backend/semantic_lint.py` 会提前检查 domain / semantic_view / query_profile / extractor 的关键一致性，避免把配置错误拖到运行时
+- `backend/semantic_lint.py` 仍会检查 domain / semantic_view / query_profile / extractor 的关键一致性，但 semantic view 已不再是主执行依赖
 - 仓库已补 `.github/workflows/offline-regression.yml`
 - `push` / `pull_request` 时会自动执行 JSON 校验、semantic lint、`compileall`、离线回归，并上传回归 artifact
 - 这条流水线不依赖 MySQL 或业务数据连接，适合做规则层回归门禁
@@ -191,9 +191,13 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 - 稳定可达的数据库网络环境
 - 真实向量库与更完整的向量索引基础设施
 
-进入真实数据与真实问题联调前，建议先阅读 [REAL_DATA_TUNING_PLAYBOOK.md](/home/y/llm/new/REAL_DATA_TUNING_PLAYBOOK.md)。
+进入真实数据与真实问题联调前，建议先阅读：
 
-当前已补一版前端工作台，见 [frontend/README.md](/home/y/llm/new/frontend/README.md)：
+- [REAL_DATA_TUNING_PLAYBOOK.md](/home/yang/code/text2sql/REAL_DATA_TUNING_PLAYBOOK.md)
+- [REAL_SCENARIO_DEBUG_GUIDE.md](/home/yang/code/text2sql/REAL_SCENARIO_DEBUG_GUIDE.md)
+- [OFFLINE_OPTIMIZATION_PLAN.md](/home/yang/code/text2sql/OFFLINE_OPTIMIZATION_PLAN.md)
+
+当前已补一版前端工作台，见 [frontend/README.md](/home/yang/code/text2sql/frontend/README.md)：
 
 - 登录 / 初始化管理员
 - 聊天工作台
@@ -216,4 +220,4 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 - `app/repositories`
   - 运行时数据库仓库、metadata 仓库
 - `app/services`
-  - 语义解析、分类、规划、编译、策略、权限、执行、会话、审计、prompt、llm、answer、metadata、evaluation、auth
+  - 语义解析、分类、规划、权限、执行、会话、审计、prompt、llm、answer、metadata、evaluation、auth

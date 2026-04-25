@@ -109,10 +109,11 @@ def generate_sql(
     )
     plan_errors = plan_result.errors
     plan_warnings = plan_result.warnings
-    generated_sql = None if plan_errors else container.sql_generator.generate(query_plan)
-    visible_sql = (
-        generated_sql if container.permission_service.can_view_sql(request.user_context) else None
-    )
+    sql_prompt = None
+    generated_sql = None
+    if not plan_errors:
+        sql_prompt = container.prompt_builder.build_sql_prompt(query_plan)
+        generated_sql = container.llm_client.generate_sql_hint(sql_prompt)
     required_filter_fields = container.permission_service.required_filter_fields(
         query_plan=query_plan,
         user_context=request.user_context,
@@ -134,6 +135,30 @@ def generate_sql(
         sql_warnings = sql_result.warnings
         sql_risk_level = sql_result.risk_level
         sql_risk_flags = sql_result.risk_flags
+        if sql_errors and sql_prompt is not None:
+            repaired_sql = container.llm_client.repair_sql(
+                prompt_payload=sql_prompt,
+                sql=generated_sql,
+                errors=sql_errors,
+                warnings=sql_warnings,
+            )
+            if repaired_sql:
+                repaired_result = container.sql_validator.validate_detailed(
+                    repaired_sql,
+                    container.semantic_layer,
+                    query_plan=query_plan,
+                    required_filter_fields=required_filter_fields,
+                )
+                if not repaired_result.errors:
+                    generated_sql = repaired_sql
+                    sql_errors = []
+                    sql_warnings = repaired_result.warnings
+                    sql_risk_level = repaired_result.risk_level
+                    sql_risk_flags = repaired_result.risk_flags
+                    sql_warnings.append("llm sql repaired after validation failure")
+    visible_sql = (
+        generated_sql if container.permission_service.can_view_sql(request.user_context) else None
+    )
     validation = ValidationResponse(
         valid=not (plan_errors or sql_errors),
         errors=plan_errors + sql_errors,

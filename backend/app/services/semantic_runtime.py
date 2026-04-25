@@ -177,6 +177,13 @@ class SemanticRuntime:
         field_aliases = source.get("field_aliases", {})
         return field_aliases.get(logical_field, logical_field)
 
+    def is_dynamic_version_context(self, version_context: VersionContext | None) -> bool:
+        return bool(
+            version_context
+            and isinstance(version_context.value, str)
+            and version_context.value.startswith("LATEST_N:")
+        )
+
     def semantic_view_fields(self, view_name: str) -> list[str]:
         view = self.view_catalog.get(view_name, {})
         return list(view.get("output_fields", []))
@@ -862,6 +869,11 @@ class SemanticRuntime:
         match = re.search(rule.get("pattern", ""), source, flags)
         if not match:
             return None
+        if "value" in rule:
+            try:
+                return max(1, int(rule["value"]))
+            except (TypeError, ValueError):
+                return None
         try:
             value = int(match.group(1))
         except (IndexError, TypeError, ValueError):
@@ -919,7 +931,16 @@ class SemanticRuntime:
         match = re.search(rule.get("pattern", ""), source, flags)
         if not match:
             return None
-        return match.group(1)
+        if "value" in rule:
+            return str(rule["value"])
+        try:
+            value = match.group(1)
+        except IndexError:
+            return match.group(0)
+        value_template = rule.get("value_template")
+        if isinstance(value_template, str):
+            return value_template.replace("{match}", value)
+        return value
 
     def _extract_time_rule(self, question: str, rule: dict) -> dict | None:
         pattern = rule.get("pattern", "")
@@ -959,6 +980,13 @@ class SemanticRuntime:
             return {
                 "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
                 "context": TimeContext(grain="month", range=TimeRange(start=start, end=end)),
+            }
+
+        if rule_type == "compact_month":
+            value = match.group(1)
+            return {
+                "filter": FilterItem(field=field, op="=", value=value) if field else None,
+                "context": TimeContext(grain="month", range=TimeRange(start=value, end=value)),
             }
 
         return None
@@ -1002,7 +1030,29 @@ class SemanticRuntime:
             f"{item.field}:{item.op}:{repr(item.value)}"
             for item in compiled.filters
         }
-        version_filter = FilterItem(field=version_field, op="=", value=compiled.version_context.value)
+        version_value = compiled.version_context.value
+        if version_value.startswith("LATEST_N:"):
+            try:
+                latest_count = max(1, int(version_value.removeprefix("LATEST_N:")))
+            except ValueError:
+                return compiled
+            source_table = next(
+                (
+                    item.value
+                    for item in compiled.filters
+                    if item.field in {"source_table", "demand_source"}
+                    and item.op == "="
+                    and isinstance(item.value, str)
+                ),
+                None,
+            )
+            version_filter = FilterItem(
+                field=version_field,
+                op="latest_n",
+                value={"count": latest_count, "source_table": source_table},
+            )
+        else:
+            version_filter = FilterItem(field=version_field, op="=", value=version_value)
         version_key = f"{version_filter.field}:{version_filter.op}:{repr(version_filter.value)}"
         if version_key not in existing:
             compiled.filters = [
@@ -1069,6 +1119,17 @@ class SemanticRuntime:
     ) -> FilterItem | None:
         if not field:
             return None
+        if field == "demand_month":
+            compact_start = self._compact_month_value(start)
+            compact_end = self._compact_month_value(end)
+            if compact_start and compact_end:
+                if compact_start == compact_end:
+                    return FilterItem(field=field, op="=", value=compact_start)
+                return FilterItem(field=field, op="between", value=[compact_start, compact_end])
+            if compact_start:
+                return FilterItem(field=field, op=">=", value=compact_start)
+            if compact_end:
+                return FilterItem(field=field, op="<=", value=compact_end)
         if start and end:
             if start == end:
                 return FilterItem(field=field, op="=", value=start)
@@ -1077,6 +1138,16 @@ class SemanticRuntime:
             return FilterItem(field=field, op=">=", value=start)
         if end:
             return FilterItem(field=field, op="<=", value=end)
+        return None
+
+    def _compact_month_value(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        if re.fullmatch(r"20\d{2}(?:0[1-9]|1[0-2])", value):
+            return value
+        match = re.fullmatch(r"(20\d{2})-(0[1-9]|1[0-2])(?:-\d{2})?", value)
+        if match:
+            return f"{match.group(1)}{match.group(2)}"
         return None
 
     def _inject_default_sort(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:

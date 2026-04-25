@@ -44,7 +44,7 @@ class DbRuntimeLogRepository:
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
                    answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
                    sql_valid, sql_risk_level, sql_risk_flags_json,
-                   executed, row_count, warnings_json, created_at
+                   executed, row_count, warnings_json, trace_json, created_at
             FROM query_logs
             {where_sql}
             ORDER BY created_at DESC, trace_id DESC
@@ -67,7 +67,7 @@ class DbRuntimeLogRepository:
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
                    answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
                    sql_valid, sql_risk_level, sql_risk_flags_json,
-                   executed, row_count, warnings_json, created_at
+                   executed, row_count, warnings_json, trace_json, created_at
             FROM query_logs
             WHERE trace_id = :trace_id
             """,
@@ -314,6 +314,7 @@ class DbRuntimeLogRepository:
         )
 
     def _hydrate_query_log(self, row: dict) -> RuntimeQueryLogRecord:
+        trace_payload = json_loads(row.get("trace_json"), {})
         return RuntimeQueryLogRecord(
             trace_id=row["trace_id"],
             session_id=row.get("session_id"),
@@ -331,5 +332,16 @@ class DbRuntimeLogRepository:
             executed=bool(row["executed"]) if row.get("executed") is not None else None,
             row_count=row.get("row_count"),
             warnings=json_loads(row.get("warnings_json"), []),
+            prompt_context_summary=self._extract_prompt_context_summary(trace_payload),
             created_at=as_datetime(row["created_at"]),
         )
+
+    def _extract_prompt_context_summary(self, trace_payload: dict) -> dict:
+        for step in trace_payload.get("steps", []):
+            if step.get("name") != "build_sql_prompt":
+                continue
+            metadata = step.get("metadata") or {}
+            summary = metadata.get("context_summary")
+            if isinstance(summary, dict):
+                return summary
+        return {}

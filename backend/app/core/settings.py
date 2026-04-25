@@ -70,6 +70,7 @@ class Settings(BaseModel):
     openai_model: str = os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL", "stub")
     llm_timeout_seconds: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
     llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+    sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))
     classification_llm_enabled: bool = os.getenv("CLASSIFICATION_LLM_ENABLED", "true").lower() == "true"
     vector_retrieval_provider: str = os.getenv("VECTOR_RETRIEVAL_PROVIDER", "local")
     vector_api_key: str | None = os.getenv("VECTOR_API_KEY") or os.getenv("OPENAI_API_KEY")

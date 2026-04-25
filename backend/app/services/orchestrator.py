@@ -17,7 +17,6 @@ from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepos
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
 from backend.app.services.sql_executor import SqlExecutor
-from backend.app.services.sql_generator import SqlGenerator
 from backend.app.services.sql_validator import SqlValidator
 
 
@@ -32,7 +31,6 @@ class ConversationOrchestrator:
         permission_service: PermissionService,
         query_plan_compiler: QueryPlanCompiler,
         session_state_service: SessionStateService,
-        sql_generator: SqlGenerator,
         sql_validator: SqlValidator,
         sql_executor: SqlExecutor,
         prompt_builder: PromptBuilder,
@@ -49,7 +47,6 @@ class ConversationOrchestrator:
         self.permission_service = permission_service
         self.query_plan_compiler = query_plan_compiler
         self.session_state_service = session_state_service
-        self.sql_generator = sql_generator
         self.sql_validator = sql_validator
         self.sql_executor = sql_executor
         self.prompt_builder = prompt_builder
@@ -250,8 +247,13 @@ class ConversationOrchestrator:
 
             llm_sql = None
             sql_hint_metadata = {"mode": "stub", "used": False}
+            sql_prompt = None
             if not plan_errors:
                 sql_prompt = self.prompt_builder.build_sql_prompt(query_plan)
+                prompt_context_metadata = {
+                    "context_budget": sql_prompt.get("context_budget"),
+                    "context_summary": sql_prompt.get("context_summary"),
+                }
                 llm_sql = self.llm_client.generate_sql_hint(sql_prompt)
                 if llm_sql:
                     sql_hint_metadata = {"mode": "live", "used": True}
@@ -260,20 +262,20 @@ class ConversationOrchestrator:
                         "build_sql_prompt",
                         "completed",
                         "live sql hint returned",
-                        metadata=sql_hint_metadata,
+                        metadata={**sql_hint_metadata, **prompt_context_metadata},
                     )
                 else:
                     self.audit_service.append_step(
                         trace,
                         "build_sql_prompt",
                         "completed",
-                        "fallback to local sql generator",
-                        metadata=sql_hint_metadata,
+                        "llm sql unavailable",
+                        metadata={**sql_hint_metadata, **prompt_context_metadata},
                     )
 
             sql = None
             if not plan_errors:
-                sql = self.sql_generator.generate(query_plan, llm_sql=llm_sql)
+                sql = llm_sql
             logger.info(
                 "sql generation trace_id=%s generated=%s llm_used=%s",
                 trace.trace_id,
@@ -309,29 +311,30 @@ class ConversationOrchestrator:
             sql_warnings = sql_result.warnings if sql_result is not None else []
             sql_risk_level = sql_result.risk_level if sql_result is not None else "low"
             sql_risk_flags = sql_result.risk_flags if sql_result is not None else []
-            if sql_errors and llm_sql and not plan_errors:
-                local_sql = self.sql_generator.generate(query_plan, llm_sql=None)
-                local_sql_result = (
-                    self.sql_validator.validate_detailed(
-                        local_sql,
+            if sql_errors and llm_sql and not plan_errors and sql_prompt is not None:
+                repaired_sql = self.llm_client.repair_sql(
+                    prompt_payload=sql_prompt,
+                    sql=sql,
+                    errors=sql_errors,
+                    warnings=sql_warnings,
+                )
+                if repaired_sql:
+                    repaired_sql_result = self.sql_validator.validate_detailed(
+                        repaired_sql,
                         self.semantic_layer,
                         query_plan=query_plan,
                         required_filter_fields=required_filter_fields,
                     )
-                    if local_sql is not None
-                    else None
-                )
-                local_sql_errors = ["sql is empty"] if local_sql is None else (local_sql_result.errors if local_sql_result else [])
-                if not local_sql_errors:
-                    warnings.append("llm sql hint rejected; fallback to local sql generator")
-                    sql_hint_metadata["used"] = False
-                    sql_hint_metadata["fallback_reason"] = "llm_sql_failed_validation"
-                    sql = local_sql
-                    visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
-                    sql_errors = []
-                    sql_warnings = local_sql_result.warnings if local_sql_result is not None else []
-                    sql_risk_level = local_sql_result.risk_level if local_sql_result is not None else "low"
-                    sql_risk_flags = local_sql_result.risk_flags if local_sql_result is not None else []
+                    if not repaired_sql_result.errors:
+                        warnings.append("llm sql repaired after validation failure")
+                        sql_hint_metadata["repair_used"] = True
+                        sql = repaired_sql
+                        visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
+                        sql_errors = []
+                        sql_warnings = repaired_sql_result.warnings
+                        sql_risk_level = repaired_sql_result.risk_level
+                        sql_risk_flags = repaired_sql_result.risk_flags
+
             self.audit_service.append_step(
                 trace,
                 "validate_sql",
@@ -342,6 +345,11 @@ class ConversationOrchestrator:
                     "fallback_reason": sql_hint_metadata.get("fallback_reason"),
                     "error_count": len(sql_errors),
                     "warning_count": len(sql_warnings),
+                    "errors": sql_errors,
+                    "warnings": sql_warnings,
+                    "risk_level": sql_risk_level,
+                    "risk_flags": sql_risk_flags,
+                    "repair_used": bool(sql_hint_metadata.get("repair_used")),
                 },
             )
             logger.info(
@@ -356,6 +364,41 @@ class ConversationOrchestrator:
                 sql=sql,
                 user_context=request.user_context,
             )
+            if (
+                execution is not None
+                and not execution.executed
+                and llm_sql
+                and sql_prompt is not None
+                and self.llm_client.enabled
+            ):
+                repaired_sql = self.llm_client.repair_sql(
+                    prompt_payload=sql_prompt,
+                    sql=sql,
+                    errors=execution.errors,
+                    warnings=execution.warnings,
+                )
+                if repaired_sql:
+                    repaired_sql_result = self.sql_validator.validate_detailed(
+                        repaired_sql,
+                        self.semantic_layer,
+                        query_plan=query_plan,
+                        required_filter_fields=required_filter_fields,
+                    )
+                    if not repaired_sql_result.errors:
+                        repaired_execution = self.sql_executor.execute(
+                            sql=repaired_sql,
+                            user_context=request.user_context,
+                        )
+                        if repaired_execution.executed:
+                            warnings.append("llm sql repaired after execution failure")
+                            sql_hint_metadata["repair_used"] = True
+                            sql = repaired_sql
+                            visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
+                            sql_errors = []
+                            sql_warnings = repaired_sql_result.warnings
+                            sql_risk_level = repaired_sql_result.risk_level
+                            sql_risk_flags = repaired_sql_result.risk_flags
+                            execution = repaired_execution
             execution = self.permission_service.apply_to_execution(
                 execution=execution,
                 user_context=request.user_context,

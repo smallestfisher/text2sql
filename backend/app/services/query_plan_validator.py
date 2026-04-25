@@ -66,8 +66,8 @@ class QueryPlanValidator:
         if not query_plan.need_clarification:
             if not query_plan.metrics:
                 warnings.append("query plan does not include metrics")
-            if not query_plan.tables and not query_plan.semantic_views:
-                errors.append("query plan must include at least one table or semantic view")
+            if not query_plan.tables:
+                errors.append("query plan must include at least one real table")
 
         if query_plan.need_clarification and not query_plan.clarification_question:
             warnings.append("clarification is required but no clarification question was provided")

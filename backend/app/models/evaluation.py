@@ -118,6 +118,9 @@ class EvaluationReplayDiff(BaseModel):
     sql_risk_level_changed: bool = False
     execution_status_changed: bool = False
     sql_changed: bool = False
+    prompt_context_changed: bool = False
+    original_prompt_context_summary: dict = Field(default_factory=dict)
+    replay_prompt_context_summary: dict = Field(default_factory=dict)
     metrics_added: list[str] = Field(default_factory=list)
     metrics_removed: list[str] = Field(default_factory=list)
     dimensions_added: list[str] = Field(default_factory=list)

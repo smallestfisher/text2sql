@@ -473,7 +473,7 @@ function App() {
   const showInspector = isAdmin && viewMode === "workspace";
   const semanticCards = [
     { label: "业务域", value: String(semanticSummary?.domains.length || 0) },
-    { label: "语义视图", value: String(semanticSummary?.semantic_views.length || 0) },
+    { label: "辅助语义对象", value: String(semanticSummary?.semantic_views.length || 0) },
     { label: "指标", value: String(semanticSummary?.metrics.length || 0) },
   ];
 
@@ -925,12 +925,12 @@ function AuthScreen(props: {
           <div className="hero-badge">Text2SQL Workspace</div>
           <div className="auth-title">面向业务分析的自然语言查询入口</div>
           <div className="auth-copy">
-            登录后可以直接提问，系统会自动规划语义、生成 SQL、执行查询，并把 Trace 与上下文状态保留在同一工作台里。
+            登录后可以直接提问，系统会基于真实表结构和业务说明生成 SQL、执行查询，并把 Trace 与上下文状态保留在同一工作台里。
           </div>
 
           <div className="auth-metrics">
             <StatPill label="业务域" value={String(props.semanticSummary?.domains.length || 0)} />
-            <StatPill label="语义视图" value={String(props.semanticSummary?.semantic_views.length || 0)} />
+            <StatPill label="辅助语义对象" value={String(props.semanticSummary?.semantic_views.length || 0)} />
             <StatPill label="指标" value={String(props.semanticSummary?.metrics.length || 0)} />
           </div>
         </div>
@@ -1071,7 +1071,7 @@ function AdminView(props: {
             <div className="meta-stack">
               <MetaRow label="语义版本" value={props.metadataOverview?.semantic_version || "-"} />
               <MetaRow label="业务域数" value={String(props.metadataOverview?.semantic_domains.length || 0)} />
-              <MetaRow label="语义视图数" value={String(props.metadataOverview?.semantic_views.length || 0)} />
+              <MetaRow label="辅助语义对象数" value={String(props.metadataOverview?.semantic_views.length || 0)} />
               <MetaRow label="示例数" value={String(props.metadataOverview?.example_count || 0)} />
               <MetaRow label="Trace 数" value={String(props.metadataOverview?.trace_count || 0)} />
             </div>
@@ -1203,15 +1203,35 @@ function AdminView(props: {
             {props.adminLogs.length ? (
               props.adminLogs.slice(0, 10).map((log) => (
                 <div className="admin-list-item" key={log.trace_id}>
+                  {(() => {
+                    const promptSummary = log.prompt_context_summary || {};
+                    const selectedSources = Array.isArray(promptSummary.selected_sources)
+                      ? promptSummary.selected_sources.join(", ")
+                      : "";
+                    const notesChars =
+                      typeof promptSummary.business_notes_chars === "number"
+                        ? `${promptSummary.business_notes_chars} chars`
+                        : "";
+                    const fewShotUsed =
+                      typeof promptSummary.few_shot_used === "boolean"
+                        ? promptSummary.few_shot_used
+                          ? "few-shot"
+                          : "no few-shot"
+                        : "";
+                    return (
+                      <>
                   <div>
                     <div className="admin-item-title">{log.question || "未记录问题"}</div>
                     <div className="admin-item-meta">
                       {log.subject_domain || "unknown"} · {formatDate(log.created_at)} · {log.trace_id}
+                      {selectedSources ? ` · ${selectedSources}` : ""}
                     </div>
                   </div>
                   <div className="mini-tags">
                     <span className="mini-tag">{log.answer_status || "unknown"}</span>
                     <span className="mini-tag">{String(log.row_count ?? 0)} rows</span>
+                    {notesChars ? <span className="mini-tag">{notesChars}</span> : null}
+                    {fewShotUsed ? <span className="mini-tag">{fewShotUsed}</span> : null}
                   </div>
                   <div className="admin-user-actions">
                     <button
@@ -1223,6 +1243,9 @@ function AdminView(props: {
                       {props.replayPendingTraceId === log.trace_id ? "复跑中" : "复跑"}
                     </button>
                   </div>
+                      </>
+                    );
+                  })()}
                 </div>
               ))
             ) : (
@@ -1273,7 +1296,20 @@ function AdminView(props: {
                   <span>执行状态</span>
                   <strong>{replayExecution?.status || "unknown"}</strong>
                 </div>
+                <div className="compact-stat">
+                  <span>Prompt上下文</span>
+                  <strong>{props.replayResult.diff?.prompt_context_changed ? "有变化" : "稳定"}</strong>
+                </div>
               </div>
+
+              {props.replayResult.diff?.replay_prompt_context_summary ? (
+                <div className="detail-card">
+                  <div className="detail-title">Prompt 上下文摘要</div>
+                  <pre className="json-block">
+                    {JSON.stringify(props.replayResult.diff.replay_prompt_context_summary, null, 2)}
+                  </pre>
+                </div>
+              ) : null}
 
               {props.replayResult.response.sql ? (
                 <div className="detail-card">
@@ -1434,7 +1470,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
         <div className="meta-stack">
           <MetaRow label="规划校验" value={props.latestResponse.plan_validation.valid ? "通过" : "未通过"} />
           <MetaRow label="业务域" value={(retrieval?.domains || []).join(", ") || "-"} />
-          <MetaRow label="语义视图" value={(retrieval?.semantic_views || []).join(", ") || "-"} />
+          <MetaRow label="辅助语义对象" value={(retrieval?.semantic_views || []).join(", ") || "-"} />
           <MetaRow label="指标" value={(retrieval?.metrics || []).join(", ") || "-"} />
         </div>
       </div>
@@ -1462,7 +1498,7 @@ function SqlPanel(props: {
   if (!sql && !queryPlan) {
     return (
       <section className="tab-panel">
-        <div className="empty-card subtle-card">这里会展示 SQL 草案、校验信息和 Query Plan。</div>
+        <div className="empty-card subtle-card">这里会展示 LLM 生成 SQL、校验信息和 Query Plan。</div>
       </section>
     );
   }

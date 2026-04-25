@@ -24,6 +24,7 @@ class JoinInspection:
 class SqlInspection:
     statement_count: int
     sources: list[str] = field(default_factory=list)
+    cte_names: list[str] = field(default_factory=list)
     joins: list[JoinInspection] = field(default_factory=list)
     functions: list[str] = field(default_factory=list)
     referenced_fields: list[str] = field(default_factory=list)
@@ -139,12 +140,14 @@ class SqlAstValidator:
         where_clause = self._extract_where_clause(normalized)
         limit_match = re.search(r"\bLIMIT\s+(\d+)", normalized, re.IGNORECASE)
         sources = re.findall(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", normalized, re.IGNORECASE)
+        cte_names = self._extract_cte_names(normalized)
         aliases = self._extract_source_aliases(normalized)
         functions = sorted(set(re.findall(r"\b([A-Z_]+)\s*\(", normalized.upper())))
 
         return SqlInspection(
             statement_count=len(statements),
             sources=sources,
+            cte_names=cte_names,
             joins=self._extract_joins(normalized),
             functions=functions,
             referenced_fields=self._extract_referenced_fields(normalized, sources, aliases, functions),
@@ -188,6 +191,13 @@ class SqlAstValidator:
                 if getattr(table, "name", None)
             ]
         )
+        cte_names = self._unique_strings(
+            [
+                cte.alias_or_name
+                for cte in root.find_all(exp.CTE)
+                if getattr(cte, "alias_or_name", None)
+            ]
+        )
         functions = self._unique_strings(
             [
                 self._function_name(node)
@@ -211,6 +221,7 @@ class SqlAstValidator:
         return SqlInspection(
             statement_count=len(statements),
             sources=sources,
+            cte_names=cte_names,
             joins=self._extract_sqlglot_joins(root),
             functions=functions,
             referenced_fields=referenced_fields,
@@ -338,6 +349,18 @@ class SqlAstValidator:
             re.IGNORECASE,
         )
         return self._unique_strings(aliases)
+
+    def _extract_cte_names(self, sql: str) -> list[str]:
+        cte_names: list[str] = []
+        match = re.match(r"\s*WITH\s+(.*)\bSELECT\b", sql, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return cte_names
+        prefix = match.group(1)
+        for cte_match in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(", prefix, re.IGNORECASE):
+            name = cte_match.group(1)
+            if name not in cte_names:
+                cte_names.append(name)
+        return cte_names
 
     def _extract_sqlglot_joins(self, root: Any) -> list[JoinInspection]:
         joins: list[JoinInspection] = []
