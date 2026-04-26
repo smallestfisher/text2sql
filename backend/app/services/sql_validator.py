@@ -7,6 +7,15 @@ from backend.app.models.query_plan import QueryPlan
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.sql_ast_validator import SqlAstValidator
 
+try:
+    import sqlglot
+    from sqlglot import exp
+    from sqlglot.errors import ParseError
+except Exception:  # pragma: no cover - optional dependency
+    sqlglot = None
+    exp = None
+    ParseError = Exception
+
 
 @dataclass
 class SqlValidationResult:
@@ -149,6 +158,19 @@ class SqlValidator:
 
             version_errors = self._validate_version_context(query_plan, inspection.where_clause, primary_source)
             errors.extend(version_errors)
+
+            demand_version_projection_errors = self._validate_demand_version_projection(
+                query_plan,
+                sql,
+            )
+            errors.extend(demand_version_projection_errors)
+
+            demand_month_errors = self._validate_horizontal_demand_month_mapping(
+                query_plan,
+                sql,
+                used_sources,
+            )
+            errors.extend(demand_month_errors)
 
             limit_errors = self._validate_limit_consistency(query_plan, inspection.limit_value, inspection.has_limit)
             errors.extend(limit_errors)
@@ -313,6 +335,111 @@ class SqlValidator:
             return []
         if sql_limit > query_plan.limit:
             return [f"sql limit {sql_limit} exceeds query plan limit {query_plan.limit}"]
+        return []
+
+    def _validate_demand_version_projection(
+        self,
+        query_plan: QueryPlan,
+        sql: str,
+    ) -> list[str]:
+        version_field = query_plan.version_context.field if query_plan.version_context else None
+        if version_field != "PM_VERSION":
+            return []
+
+        if not {"p_demand", "v_demand"}.intersection(set(query_plan.tables)):
+            return []
+
+        if sqlglot is None or exp is None:
+            return []
+
+        try:
+            statement = sqlglot.parse_one(sql, read="mysql")
+        except ParseError:
+            return []
+
+        if statement is None:
+            return []
+
+        outer_from = statement.args.get("from")
+        if outer_from is None:
+            return []
+
+        outer_sources = {
+            table.name.lower()
+            for table in outer_from.find_all(exp.Table)
+            if getattr(table, "name", None)
+        }
+        if "demand_unpivot" not in outer_sources:
+            return []
+
+        outer_where = statement.find(exp.Where)
+        if outer_where is None:
+            return []
+
+        outer_where_fields = {
+            column.name.upper()
+            for column in outer_where.find_all(exp.Column)
+            if getattr(column, "name", None)
+        }
+        if version_field.upper() not in outer_where_fields:
+            return []
+
+        demand_cte = next(
+            (
+                cte
+                for cte in statement.find_all(exp.CTE)
+                if getattr(cte, "alias_or_name", "").lower() == "demand_unpivot"
+            ),
+            None,
+        )
+        if demand_cte is None:
+            return []
+
+        select_nodes = list(demand_cte.this.find_all(exp.Select))
+        if not select_nodes:
+            return []
+
+        missing_projection = False
+        for select_node in select_nodes:
+            projected_fields = {
+                expression.alias_or_name.upper()
+                for expression in select_node.expressions
+                if getattr(expression, "alias_or_name", None)
+            }
+            if version_field.upper() not in projected_fields:
+                missing_projection = True
+                break
+
+        if missing_projection:
+            return [
+                "demand_unpivot is filtered by PM_VERSION outside the CTE, but the CTE does not project PM_VERSION in every UNION branch"
+            ]
+        return []
+
+    def _validate_horizontal_demand_month_mapping(
+        self,
+        query_plan: QueryPlan,
+        sql: str,
+        used_sources: list[str],
+    ) -> list[str]:
+        has_demand_month_filter = any(item.field == "demand_month" for item in query_plan.filters)
+        if not has_demand_month_filter:
+            return []
+
+        demand_sources = {"p_demand", "v_demand"}
+        if not demand_sources.intersection(set(query_plan.tables) | set(used_sources)):
+            return []
+
+        raw_month_date_math_patterns = (
+            r"date_add\s*\(\s*(?:`?\w+`?\.)?`?month`?\s*,\s*interval",
+            r"adddate\s*\(\s*(?:`?\w+`?\.)?`?month`?\s*,",
+            r"timestampadd\s*\(\s*month\s*,\s*[^,]+,\s*(?:`?\w+`?\.)?`?month`?\s*\)",
+        )
+        lowered_sql = sql.lower()
+        if any(re.search(pattern, lowered_sql, re.IGNORECASE) for pattern in raw_month_date_math_patterns):
+            return [
+                "horizontal demand month mapping must not use date math on raw MONTH when target demand_month is compact YYYYMM; convert MONTH to a real date first and format back to YYYYMM, or map REQUIREMENT_QTY directly to base MONTH"
+            ]
         return []
 
     def _validate_selected_dimensions(

@@ -39,8 +39,8 @@ class LLMClient:
             }
 
         system_prompt = (
-            "You are a Text2SQL planner. Return only compact JSON. "
-            "Do not add markdown. Keep only fields you are confident about."
+            "你是一个 Text2SQL 规划器。只返回紧凑 JSON。"
+            "不要输出 markdown。只保留你有把握的字段。"
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         messages = [
@@ -66,7 +66,7 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Return valid JSON only. Remove all prose and markdown fences.",
+                            "content": "只返回合法 JSON，去掉所有解释性文字和 markdown 代码块。",
                         }
                     )
             except Exception as exc:
@@ -96,10 +96,10 @@ class LLMClient:
             }
 
         system_prompt = (
-            "You are an arbitration model for Text2SQL conversation classification. "
-            "Do not freely reclassify from scratch. Instead, arbitrate among the structured local candidates and evidence provided in the prompt. "
-            "Your job is to pick the most coherent allowed classification and, when follow-up is selected, produce a minimal executable context_delta. "
-            "Return only compact JSON. Do not add markdown or prose. Only choose values explicitly allowed by the prompt."
+            "你是一个用于 Text2SQL 会话分类的裁决模型。"
+            "不要脱离现有结构化候选从零随意重分类，而是根据 prompt 中给出的本地候选和证据做裁决。"
+            "你的任务是选出最连贯、最符合约束的分类；如果选择 follow_up，还要生成最小可执行的 context_delta。"
+            "只返回紧凑 JSON，不要输出 markdown 或额外解释。只能选择 prompt 明确允许的取值。"
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         messages = [
@@ -120,7 +120,7 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Return valid JSON only and keep only the requested fields.",
+                            "content": "只返回合法 JSON，并且只保留要求的字段。",
                         }
                     )
             except Exception as exc:
@@ -140,14 +140,68 @@ class LLMClient:
             "task": prompt_payload.get("task"),
         }
 
+    def check_question_relevance(self, prompt_payload: dict) -> dict:
+        if not self.enabled:
+            return {
+                "mode": "stub",
+                "model": self.model_name,
+                "note": "LLM is not connected; relevance guard is disabled.",
+                "task": prompt_payload.get("task"),
+            }
+
+        system_prompt = (
+            "你是一个 Text2SQL 系统的相关性守卫模型。"
+            "判断用户输入是否属于应该继续留在 SQL 工作流中的业务数据查询或业务追问。"
+            "如果它是业务数据请求，只是信息不完整，也应继续留在范围内。"
+            "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
+        )
+        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                content = self._complete(messages)
+                parsed = self._extract_json(content)
+                if parsed:
+                    parsed["mode"] = "live"
+                    parsed["model"] = self.model_name
+                    parsed["attempt"] = attempt
+                    return parsed
+                if attempt < self.max_retries:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "只返回合法 JSON，并且只保留要求的字段。",
+                        }
+                    )
+            except Exception as exc:
+                if attempt >= self.max_retries:
+                    return {
+                        "mode": "stub",
+                        "model": self.model_name,
+                        "note": f"LLM call failed, relevance guard skipped: {exc}",
+                        "task": prompt_payload.get("task"),
+                    }
+                time.sleep(min(0.4 * attempt, 1.0))
+
+        return {
+            "mode": "stub",
+            "model": self.model_name,
+            "note": "LLM returned non-JSON content, relevance guard skipped.",
+            "task": prompt_payload.get("task"),
+        }
+
     def generate_sql_hint(self, prompt_payload: dict) -> str | None:
         if not self.enabled:
             return None
 
         system_prompt = (
-            "You are the primary Text2SQL generator for MySQL. "
-            "Generate one executable readonly SQL statement using only real database tables and fields provided by the user prompt. "
-            "Return SQL only, without markdown, comments, or explanations."
+            "你是 MySQL 场景下的主 Text2SQL 生成器。"
+            "只能使用用户 prompt 中提供的真实数据库表和字段，生成一条可执行的只读 SQL。"
+            "只返回 SQL，不要输出 markdown、注释或解释。"
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         messages = [
@@ -165,7 +219,7 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Return exactly one readonly SELECT or WITH ... SELECT statement with LIMIT. No explanation.",
+                            "content": "精确返回一条只读 SELECT 或 WITH ... SELECT 语句，并且必须带 LIMIT。不要解释。",
                         }
                     )
             except Exception:
@@ -187,15 +241,15 @@ class LLMClient:
             "instructions": {
                 "return_format": "sql_only",
                 "constraints": [
-                    "fix the SQL using only the original prompt context",
-                    "return exactly one readonly SELECT or WITH ... SELECT statement",
-                    "do not add markdown or explanation",
-                    "must include LIMIT",
+                    "只能基于原始 prompt 上下文修复 SQL。",
+                    "精确返回一条只读 SELECT 或 WITH ... SELECT 语句。",
+                    "不要输出 markdown 或解释。",
+                    "必须包含 LIMIT。",
                 ],
             },
         }
         system_prompt = (
-            "You repair MySQL Text2SQL output. Return one corrected readonly SQL statement only."
+            "你负责修复 MySQL Text2SQL 的输出。只返回一条修正后的只读 SQL 语句。"
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -212,7 +266,7 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Return exactly one valid readonly SQL statement. No prose.",
+                            "content": "精确返回一条合法的只读 SQL 语句。不要额外文字。",
                         }
                     )
             except Exception:

@@ -230,7 +230,6 @@ button {
 
 .workspace-shell {
   position: relative;
-  z-index: 2;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
   gap: 20px;
@@ -897,6 +896,87 @@ button {
   border-color: rgba(119, 168, 255, 0.16);
 }
 
+.message-result-card {
+  width: min(100%, 840px);
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(149, 174, 255, 0.08);
+  background: rgba(18, 24, 38, 0.82);
+}
+
+.message-result-card.is-active {
+  border-color: rgba(119, 168, 255, 0.2);
+  background: rgba(24, 33, 52, 0.9);
+}
+
+.message-result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message-result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.message-result-summary strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.message-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-result-button {
+  min-width: 0;
+  padding: 8px 12px;
+}
+
+.message-result-note {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.message-result-table-wrap {
+  overflow: auto;
+  border: 1px solid rgba(149, 174, 255, 0.06);
+  border-radius: var(--radius-md);
+  background: rgba(10, 14, 22, 0.44);
+}
+
+.message-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.message-result-table th,
+.message-result-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(149, 174, 255, 0.06);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.message-result-table th {
+  color: #d5ddf4;
+  font-weight: 500;
+}
+
 .composer-shell {
   padding: 14px;
 }
@@ -1285,6 +1365,7 @@ input:focus {
 }
 
 .mobile-backdrop {
+  display: none;
   position: fixed;
   inset: 0;
   z-index: 30;
@@ -1328,6 +1409,10 @@ input:focus {
 }
 
 @media (max-width: 1180px) {
+  .mobile-backdrop {
+    display: block;
+  }
+
   .admin-toolbar-top,
   .admin-toolbar-strip {
     flex-direction: column;
@@ -1460,6 +1545,19 @@ input:focus {
   .message-card {
     width: 100%;
     border-radius: var(--radius-lg);
+  }
+
+  .message-result-card {
+    width: 100%;
+  }
+
+  .message-result-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .message-result-actions {
+    justify-content: flex-start;
   }
 
   .composer-dock {

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from backend.app.models.api import ExecutionResponse
+from backend.app.models.admin import RuntimeSqlAuditRecord
+from backend.app.models.api import ChatResponse, ExecutionResponse
+from backend.app.models.conversation import ChatSession
 from backend.app.models.auth import UserContext
 from backend.app.models.query_plan import FilterItem, QueryPlan
+from backend.app.models.session_state import SessionState
 from backend.app.services.policy_engine import PolicyEngine
 
 
@@ -22,7 +25,10 @@ class PermissionService:
 
         if not decision.allow_execute:
             query_plan.need_clarification = True
+            query_plan.question_type = "clarification_needed"
             query_plan.reason = "当前用户没有执行 SQL 的权限。"
+            query_plan.reason_code = "permission_denied"
+            query_plan.clarification_question = "当前用户没有执行 SQL 的权限。"
             warnings.append("user is not allowed to execute SQL")
             return query_plan, warnings
 
@@ -47,6 +53,58 @@ class PermissionService:
 
     def can_download_results(self, user_context: UserContext | None) -> bool:
         return self.policy_engine.evaluate(user_context).allow_download_results
+
+    def apply_to_session_state(
+        self,
+        session_state: SessionState | None,
+        user_context: UserContext | None,
+    ) -> SessionState | None:
+        if session_state is None or self.can_view_sql(user_context):
+            return session_state
+        if session_state.last_sql is None:
+            return session_state
+        return session_state.model_copy(update={"last_sql": None})
+
+    def apply_to_chat_session(
+        self,
+        session: ChatSession | None,
+        user_context: UserContext | None,
+    ) -> ChatSession | None:
+        if session is None:
+            return None
+        sanitized_state = self.apply_to_session_state(session.last_state, user_context)
+        if sanitized_state is session.last_state:
+            return session
+        return session.model_copy(update={"last_state": sanitized_state})
+
+    def apply_to_sql_audit(
+        self,
+        sql_audit: RuntimeSqlAuditRecord | None,
+        user_context: UserContext | None,
+    ) -> RuntimeSqlAuditRecord | None:
+        if sql_audit is None or self.can_view_sql(user_context):
+            return sql_audit
+        if sql_audit.sql_text is None:
+            return sql_audit
+        return sql_audit.model_copy(update={"sql_text": None})
+
+    def apply_to_chat_response(
+        self,
+        response: ChatResponse | None,
+        user_context: UserContext | None,
+    ) -> ChatResponse | None:
+        if response is None or self.can_view_sql(user_context):
+            return response
+        execution = response.execution
+        if execution is not None and execution.sql is not None:
+            execution = execution.model_copy(update={"sql": None})
+        return response.model_copy(
+            update={
+                "sql": None,
+                "execution": execution,
+                "next_session_state": self.apply_to_session_state(response.next_session_state, user_context),
+            }
+        )
 
     def required_filter_fields(
         self,

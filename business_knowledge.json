@@ -1,0 +1,67 @@
+{
+  "version": "2026-04-26",
+  "entries": [
+    {
+      "id": "demand_fgcode_mapping",
+      "domains": ["demand", "sales_financial"],
+      "tables": ["p_demand", "v_demand", "product_mapping", "sales_financial_perf"],
+      "keywords": ["FGCODE", "product_mapping", "Cell", "Array", "CF", "customer"],
+      "notes": [
+        "p_demand 和 v_demand 的核心业务实体是 FGCODE。",
+        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell、Array、CF 分别对应不同阶段编码。",
+        "当需求问题需要和销售或财务业绩对比时，通常通过 FGCODE 与 sales_financial_perf 关联。"
+      ]
+    },
+    {
+      "id": "demand_horizontal_month_mapping",
+      "domains": ["demand"],
+      "tables": ["p_demand", "v_demand"],
+      "keywords": ["MONTH", "REQUIREMENT_QTY", "NEXT_REQUIREMENT", "LAST_REQUIREMENT", "MONTH4", "MONTH5", "MONTH6", "MONTH7", "PM_VERSION"],
+      "notes": [
+        "p_demand 和 v_demand 是横向需求表，目标需求月份不能简单理解成 base MONTH 本身。",
+        "需求月份映射规则是：offset 0 对应 REQUIREMENT_QTY，offset 1 对应 NEXT_REQUIREMENT，offset 2 对应 LAST_REQUIREMENT，offset 3 到 6 分别对应 MONTH4 到 MONTH7。",
+        "如果问题包含最新 N 版，应先按 PM_VERSION 取最新 N 个版本，再对目标需求月份聚合。"
+      ]
+    },
+    {
+      "id": "inventory_daily_inventory",
+      "domains": ["inventory"],
+      "tables": ["daily_inventory"],
+      "keywords": ["inventory", "型号", "product", "factory_code", "ERP_FACTORY"],
+      "notes": [
+        "daily_inventory 通常用于查询库存数量，核心过滤条件通常是型号、工厂和时间。",
+        "库存问题如果出现工厂语义，需要区分 factory_code 和 ERP_FACTORY。"
+      ]
+    },
+    {
+      "id": "inventory_oms_attributes",
+      "domains": ["inventory"],
+      "tables": ["oms_inventory", "product_attributes"],
+      "keywords": ["oms_inventory", "product_attributes", "inventory", "customer"],
+      "notes": [
+        "oms_inventory 也是库存口径来源之一。",
+        "当库存问题涉及产品属性或分类时，通常需要和 product_attributes 关联。"
+      ]
+    },
+    {
+      "id": "plan_actual_daily_plan",
+      "domains": ["plan_actual"],
+      "tables": ["daily_PLAN", "production_actuals"],
+      "keywords": ["plan", "actual", "投入", "产出", "factory", "work_date"],
+      "notes": [
+        "daily_PLAN 通常用于计划投入量查询。",
+        "当问题需要计划和实际产出对比时，daily_PLAN 通常与 production_actuals 关联。"
+      ]
+    },
+    {
+      "id": "plan_actual_monthly_approved",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["actual_input", "monthly_plan_approved", "production_actuals", "投入", "产出"],
+      "notes": [
+        "monthly_plan_approved 常用于实际投入量查询。",
+        "如果要看实际投产和产出对比，monthly_plan_approved 通常与 production_actuals 关联。"
+      ]
+    }
+  ]
+}

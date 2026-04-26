@@ -14,103 +14,170 @@ pip install -r backend/requirements.txt
 uvicorn backend.app.main:app --reload --app-dir .
 ```
 
-配置读取：
+## 配置读取
 
 - 终端日志默认输出到 stdout
 - 日志级别通过 `LOG_LEVEL` 控制，默认 `INFO`
-- 每条日志会附带 `request_id` 与 `trace_id`，便于串联请求链路与一次 chat 编排
-
-
-- 优先读取仓库根目录的 `.env`
-- 如果不存在，则读取仓库根目录的 `env`
+- 每条日志会附带 `request_id` 和 `trace_id`
+- 优先读取仓库根目录 `.env`
+- 如果 `.env` 不存在，则回退读取仓库根目录 `env`
 - 业务查询库优先读取 `BUSINESS_DATABASE_URL`
 - 运行时库优先读取 `RUNTIME_DATABASE_URL`
 - 未显式配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接自动派生并使用 `manager` 数据库
 - 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
-- 业务库仍兼容旧字段 `DATABASE_URL` / `DB_URI`
-
-运行时存储：
-
-- 登录、用户、会话、反馈、审计、评测 run 默认落到运行时数据库
-- 运行时表定义见 `sql/runtime_store.sql`
-- 启动时会自动执行“建库 + 建表”；默认会在同一 MySQL 实例上创建 `manager` 数据库
+- 业务库兼容旧字段 `DATABASE_URL` / `DB_URI`
 
 ## Current Scope
 
-当前后端实现的是“LLM-first 的 Text2SQL 主链路 + SQL 治理与执行骨架”：
+当前后端实现的是“LLM-first 的 Text2SQL 主链路 + SQL 治理 + runtime 会话工作台支撑”：
 
-- 加载真实表结构描述、业务说明和辅助语义配置
-- 语义解析与问题分类
-- 根据问题生成 Query Plan 作为 LLM SQL 生成约束
-- 由 LLM 直接基于真实表生成 MySQL SQL
-- PromptBuilder 只选择当前 Query Plan 相关表结构、业务说明片段和场景 few-shot，避免全量 prompt 膨胀
-- SQL 校验器做只读、安全、表字段范围、LIMIT 与风险治理
+- 加载真实表结构描述、结构化业务知识和辅助语义配置
+- 进行语义解析、问题分类和 relevance guard
+- 生成 Query Plan 作为 LLM SQL 生成约束
+- 由 LLM 直接基于真实表和业务知识生成 MySQL SQL
+- PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和场景 few-shot，避免 prompt 膨胀
+- SQL 校验器做只读、安全、表字段范围、权限、时间/版本、LIMIT 和风险治理
 - SQL 校验或执行失败时，触发一次 LLM SQL repair
 - 生成下一轮 `session_state`
 - 注入基础数据权限过滤
-- 提供只读执行器和 SQL 治理骨架
-- 提供会话仓库与历史接口
-- 提供结构化检索、示例库和管理接口
-- 提供编排器、审计追踪和路由分层
-- 提供 LLM prompt builder 和 OpenAI-compatible LLM client
-- 提供 DB connector、answer builder、middleware、settings、异常处理
-- 提供 token 登录、bootstrap-admin、用户与角色骨架
-- 提供基础登录鉴权、管理员接口控制、用户会话归属与反馈管理
-- 提供评测 case / replay run 骨架
+- 提供会话仓库、workspace 聚合接口、trace 恢复和 response snapshot
+- 提供查询日志、SQL 审计、反馈、replay、eval case 和管理接口
 
-当前阶段说明：
+当前阶段的明确边界：
 
-- 当前主要以真实表结构、真实业务说明和 LLM 生成 SQL 为主，不再要求数据库中预先落库 semantic view
-- 语义层现在主要承担解析、检索和约束提示作用，而不是主 SQL 模板来源
-- `readme.txt` 会被切片并按当前表、指标、字段选择相关片段，不会整份无条件进入 SQL prompt
-- 对横表、复杂口径等问题，优先通过 prompt / few-shot / repair loop 驱动 LLM 生成可执行 SQL，再由校验器治理
-- 已移除 semantic view bootstrap 管理接口和 SQL 草案文件，避免真实数据库被辅助视图污染
+- 不再要求数据库预建 semantic view
+- `business_knowledge.json` 和 `readme.txt` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
+- 对横表和复杂口径，优先通过 prompt / few-shot / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
+- `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
+
+## Runtime 存储与升级
+
+运行时数据默认落到运行时数据库，包括：
+
+- 用户、角色和权限
+- 会话、消息和状态快照
+- query log、trace、SQL audit、feedback
+- evaluation runs
+
+运行时表定义见 [sql/runtime_store.sql](../sql/runtime_store.sql)。
+
+首次启动时，服务会尝试：
+
+- 建库
+- 建表
+- 补增量列
+- 补常用索引
+
+### 老 runtime 库升级提示
+
+如果你复用的是旧 runtime 库，且运行账号没有 `ALTER TABLE` 权限，启动后可能不会自动补齐新列。常见症状是登录时报：
+
+```text
+Unknown column 'can_download_results' in 'field list'
+```
+
+这说明 `users` 表还是旧结构。处理方式：
+
+1. 优先用有 `CREATE/ALTER` 权限的账号重启服务，让 `RuntimeStoreInitializer` 自动补表结构。
+2. 如果运行账号不允许改表，就手动执行 [sql/runtime_store.sql](../sql/runtime_store.sql)，并补齐当前增量列：
+   - `users.can_download_results`
+   - `query_logs.plan_risk_level`
+   - `query_logs.plan_risk_flags_json`
+   - `query_logs.sql_risk_level`
+   - `query_logs.sql_risk_flags_json`
+   - `sql_audit_logs.plan_risk_level`
+   - `sql_audit_logs.plan_risk_flags_json`
+   - `sql_audit_logs.sql_risk_level`
+   - `sql_audit_logs.sql_risk_flags_json`
 
 ## API
 
+### Health
+
 - `GET /health`
+
+### Semantic
+
 - `GET /api/semantic/summary`
 - `POST /api/semantic/retrieve-preview`
+
+### Auth
+
 - `GET /api/auth/bootstrap-status`
 - `POST /api/auth/bootstrap-admin`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 - `POST /api/auth/change-password`
 - `POST /api/auth/stub-login`
+
+### Admin Metadata
+
 - `GET /api/admin/metadata/overview`
 - `GET /api/admin/metadata/documents`
 - `GET /api/admin/metadata/documents/{name}`
 - `PUT /api/admin/metadata/documents/{name}`
 - `POST /api/admin/metadata/reload`
+
+### Admin Examples / Trace / Feedback
+
 - `GET /api/admin/examples`
 - `POST /api/admin/examples`
 - `PUT /api/admin/examples/{example_id}`
+- `POST /api/admin/examples/bulk`
 - `GET /api/admin/traces`
 - `GET /api/admin/traces/{trace_id}`
 - `GET /api/admin/feedbacks`
 - `GET /api/admin/feedbacks/summary`
+
+### Admin Runtime
+
 - `GET /api/admin/runtime/status`
+- `GET /api/admin/runtime/sessions`
+- `GET /api/admin/runtime/sessions/{session_id}/history`
+- `GET /api/admin/runtime/sessions/{session_id}/snapshots`
+- `GET /api/admin/runtime/query-logs`
+- `GET /api/admin/runtime/query-logs/risk-summary`
+- `POST /api/admin/runtime/retention/purge`
+- `GET /api/admin/runtime/query-logs/{trace_id}`
+- `GET /api/admin/runtime/query-logs/{trace_id}/retrieval`
+- `GET /api/admin/runtime/query-logs/{trace_id}/sql-audit`
+- `POST /api/admin/runtime/query-logs/{trace_id}/replay`
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
+
+### Admin Users / Roles
+
 - `GET /api/admin/users`
 - `GET /api/admin/users/{user_id}`
 - `PUT /api/admin/users/{user_id}`
+- `POST /api/admin/users/{user_id}/reset-password`
+- `DELETE /api/admin/users/{user_id}`
 - `PUT /api/admin/users/{user_id}/data-scope`
 - `PUT /api/admin/users/{user_id}/field-visibility`
 - `GET /api/admin/roles`
 - `PUT /api/admin/roles/{role_name}`
+
+### Admin Eval
+
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/cases`
+- `POST /api/admin/eval/cases/{case_id}/replay`
 - `GET /api/admin/eval/runs`
 - `GET /api/admin/eval/summary`
 - `POST /api/admin/eval/run`
+
+### Chat / Sessions
+
 - `POST /api/chat/sessions`
 - `GET /api/chat/sessions`
 - `GET /api/chat/sessions/{session_id}`
 - `PUT /api/chat/sessions/{session_id}/status`
+- `DELETE /api/chat/sessions/{session_id}`
 - `GET /api/chat/history/{session_id}`
-- `GET /api/chat/snapshots/{session_id}`
 - `GET /api/chat/state/{session_id}`
+- `GET /api/chat/sessions/{session_id}/workspace`
+- `GET /api/chat/snapshots/{session_id}`
+- `POST /api/chat/query`
 - `POST /api/chat/feedback`
 - `GET /api/chat/feedbacks`
 - `GET /api/chat/feedbacks/summary`
@@ -118,12 +185,15 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `GET /api/chat/traces/{trace_id}`
 - `GET /api/chat/traces/{trace_id}/retrieval`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
+- `GET /api/chat/traces/{trace_id}/export`
+
+### Query
+
 - `POST /api/query/classify`
 - `POST /api/query/plan`
 - `POST /api/query/plan/validate`
 - `POST /api/query/sql`
 - `POST /api/query/execute`
-- `POST /api/chat/query`
 
 ## Example
 
@@ -133,10 +203,19 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
   -d '{"question":"查询2026年4月CELL工厂计划投入量"}'
 ```
 
+## 当前调试主路径
+
+推荐按这条路径调问题：
+
+1. 在前端工作台或 `POST /api/chat/query` 复现问题
+2. 用 `GET /api/chat/sessions/{session_id}/workspace` 看消息、状态、`latest_response` 和 `trace_artifacts`
+3. 看 `GET /api/chat/traces/{trace_id}`、`/sql-audit`、`/retrieval`
+4. 对历史问题优先走 `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+5. 有代表性的失败样本再物化为 eval case 或 example
+
 ## Offline Regression
 
-在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，
-覆盖 `classification / query_plan / permission_filter` 这几层：
+在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，当前主要覆盖 `classification / query_plan / permission_filter` 这几层：
 
 ```bash
 .venv/bin/python backend/offline_regression.py --failures-only
@@ -165,59 +244,35 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 把完整报告写到文件：
 
 ```bash
-.venv/bin/python backend/offline_regression.py   --output tmp/offline-regression.json
+.venv/bin/python backend/offline_regression.py --output tmp/offline-regression.json
 ```
 
 把摘要和失败项分别落盘：
 
 ```bash
-.venv/bin/python backend/offline_regression.py   --report-dir tmp/offline-regression
+.venv/bin/python backend/offline_regression.py --report-dir tmp/offline-regression
 ```
 
 说明：
 
 - 离线回归不会连接数据库，也不会写 runtime 审计表
 - 当前会复用 `eval/evaluation_cases.json`
-- 当前主要用于收敛分类、规划和权限注入；LLM-first SQL 生成与 SQL 校验需要在 live/replay 链路验证
-- 控制台输出现在会包含 `question_type / scenario / failure_types` 的聚合统计
-- `--report-dir` 会输出 `summary.json` 和 `failures.json`，方便在本地或 CI 比较回归结果
-- `backend/semantic_lint.py` 仍会检查 domain / semantic_view / query_profile / extractor 的关键一致性，但 semantic view 已不再是主执行依赖
-- 仓库已补 `.github/workflows/offline-regression.yml`
-- `push` / `pull_request` 时会自动执行 JSON 校验、semantic lint、`compileall`、离线回归，并上传回归 artifact
-- 这条流水线不依赖 MySQL 或业务数据连接，适合做规则层回归门禁
+- 当前主要用于收敛分类、规划和权限注入；LLM-first SQL 生成与 SQL 校验需要在 live 或 replay 链路验证
+- 控制台输出会包含 `question_type / scenario / failure_types` 的聚合统计
+- `--report-dir` 会输出 `summary.json` 和 `failures.json`
+- `.github/workflows/offline-regression.yml` 会执行 JSON 校验、semantic lint、`compileall` 和离线回归
 
-当前还未接入：
+## 相关阅读
 
-- 稳定可达的数据库网络环境
-- 真实向量库与更完整的向量索引基础设施
-
-进入真实数据与真实问题联调前，建议先阅读：
-
-- [REAL_DATA_TUNING_PLAYBOOK.md](/home/yang/code/text2sql/REAL_DATA_TUNING_PLAYBOOK.md)
-- [REAL_SCENARIO_DEBUG_GUIDE.md](/home/yang/code/text2sql/REAL_SCENARIO_DEBUG_GUIDE.md)
-- [OFFLINE_OPTIMIZATION_PLAN.md](/home/yang/code/text2sql/OFFLINE_OPTIMIZATION_PLAN.md)
-
-当前已补一版前端工作台，见 [frontend/README.md](/home/yang/code/text2sql/frontend/README.md)：
-
-- 登录 / 初始化管理员
-- 聊天工作台
-- SQL / Trace / State 侧栏
-- 管理台基础页面
-
-当前权限范围：
-
-- 以登录鉴权和基础管理员控制为主
-- 不以复杂组织树/RBAC/ABAC 为当前后端目标
+- [TEXT2SQL_ARCHITECTURE.md](../TEXT2SQL_ARCHITECTURE.md)
+- [frontend/README.md](../frontend/README.md)
+- [REAL_DATA_TUNING_PLAYBOOK.md](../REAL_DATA_TUNING_PLAYBOOK.md)
+- [REAL_SCENARIO_DEBUG_GUIDE.md](../REAL_SCENARIO_DEBUG_GUIDE.md)
 
 ## Structure
 
-- `app/api/routes`
-  - HTTP 路由层
-- `app/core`
-  - 应用装配、settings、异常处理
-- `app/models`
-  - 请求、响应、会话、检索、追踪、answer 模型
-- `app/repositories`
-  - 运行时数据库仓库、metadata 仓库
-- `app/services`
-  - 语义解析、分类、规划、权限、执行、会话、审计、prompt、llm、answer、metadata、evaluation、auth
+- `app/api/routes`：HTTP 路由层
+- `app/core`：应用装配、settings、异常处理
+- `app/models`：请求、响应、会话、检索、追踪、workspace 模型
+- `app/repositories`：运行时数据库仓库、metadata 仓库
+- `app/services`：语义解析、分类、规划、权限、执行、会话、审计、prompt、LLM、answer、evaluation、auth

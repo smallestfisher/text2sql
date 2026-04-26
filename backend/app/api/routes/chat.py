@@ -130,7 +130,7 @@ def get_my_trace_sql_audit(
     record = container.runtime_log_repository.get_sql_audit(trace_id)
     if record is None:
         raise HTTPException(status_code=404, detail="sql audit not found")
-    return record
+    return container.permission_service.apply_to_sql_audit(record, current_user)
 
 
 @router.get("/traces/{trace_id}/export")

@@ -208,19 +208,30 @@ class AuthService:
         request: UserUpsertRequest,
         existing: AuthUserRecord | None,
     ) -> AuthUserRecord:
+        provided_fields = request.model_fields_set
         password_hash = (
             self._hash_password(request.password)
             if request.password
             else (existing.password_hash if existing is not None else self._hash_password("change_me"))
         )
         created_at = existing.created_at if existing is not None else datetime.utcnow()
+        data_scope = (
+            request.data_scope
+            if "data_scope" in provided_fields or existing is None
+            else existing.data_scope
+        )
+        field_visibility = (
+            self._normalize_field_visibility(request.field_visibility)
+            if "field_visibility" in provided_fields or existing is None
+            else existing.field_visibility
+        )
         return AuthUserRecord(
             user_id=user_id,
             username=request.username,
             password_hash=password_hash,
             roles=request.roles or (existing.roles if existing is not None else ["viewer"]),
-            data_scope=request.data_scope,
-            field_visibility=self._normalize_field_visibility(request.field_visibility),
+            data_scope=data_scope,
+            field_visibility=field_visibility,
             can_view_sql=request.can_view_sql,
             can_execute_sql=request.can_execute_sql,
             can_download_results=request.can_download_results,

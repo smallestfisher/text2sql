@@ -4,6 +4,7 @@ import logging
 
 from backend.app.logging_config import clear_trace_id, set_trace_id
 from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.session_state import SessionState
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
 from backend.app.services.llm_client import LLMClient
@@ -109,6 +110,21 @@ class ConversationOrchestrator:
                     },
                 },
             )
+            self._sync_classification_with_query_plan(classification, query_plan)
+            terminal_reason = self._terminal_skip_reason(classification, query_plan)
+            if terminal_reason is not None:
+                self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
+                return self._finalize_terminal_response(
+                    trace=trace,
+                    request=request,
+                    session_state=session_state,
+                    semantic_parse=semantic_parse,
+                    classification=classification,
+                    query_plan=query_plan,
+                    warnings=warnings,
+                    retrieval=None,
+                    terminal_reason=terminal_reason,
+                )
 
             retrieval = self.retrieval_service.retrieve(semantic_parse)
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
@@ -187,16 +203,7 @@ class ConversationOrchestrator:
                 "completed",
                 "query plan compiled",
                 metadata={
-                    "compiled_plan": {
-                        "subject_domain": query_plan.subject_domain,
-                        "semantic_views": query_plan.semantic_views,
-                        "tables": query_plan.tables,
-                        "metrics": query_plan.metrics,
-                        "dimensions": query_plan.dimensions,
-                        "filter_fields": [item.field for item in query_plan.filters],
-                        "sort": [item.model_dump() for item in query_plan.sort],
-                        "limit": query_plan.limit,
-                    }
+                    "compiled_plan": query_plan.model_dump(mode="json")
                 },
             )
 
@@ -244,6 +251,28 @@ class ConversationOrchestrator:
                     "warnings": plan_warnings,
                 },
             )
+            self._sync_classification_with_query_plan(classification, query_plan)
+            terminal_reason = self._terminal_skip_reason(classification, query_plan)
+            if terminal_reason is not None:
+                self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
+                return self._finalize_terminal_response(
+                    trace=trace,
+                    request=request,
+                    session_state=session_state,
+                    semantic_parse=semantic_parse,
+                    classification=classification,
+                    query_plan=query_plan,
+                    warnings=warnings,
+                    retrieval=retrieval,
+                    terminal_reason=terminal_reason,
+                    plan_validation=ValidationResponse(
+                        valid=not plan_errors,
+                        errors=plan_errors,
+                        warnings=warnings,
+                        risk_level=plan_result.risk_level,
+                        risk_flags=plan_result.risk_flags,
+                    ),
+                )
 
             llm_sql = None
             sql_hint_metadata = {"mode": "stub", "used": False}
@@ -462,36 +491,7 @@ class ConversationOrchestrator:
                 self.session_service.append_assistant_message(request.session_id, assistant_text, trace.trace_id)
                 next_session_state.session_id = request.session_id
                 self.session_service.update_state(request.session_id, next_session_state, trace_id=trace.trace_id)
-            self.audit_service.finalize(trace, warnings=warnings + sql_warnings)
-            self.runtime_log_repository.log_retrieval(trace.trace_id, retrieval)
-            self.runtime_log_repository.log_sql_audit(
-                trace_id=trace.trace_id,
-                sql=sql,
-                plan_validation=plan_validation,
-                sql_validation=sql_validation,
-                execution=execution,
-            )
-            self.runtime_log_repository.log_query(
-                trace_id=trace.trace_id,
-                session_id=request.session_id,
-                user_id=request.user_context.user_id if request.user_context else None,
-                question=request.question,
-                question_type=classification.question_type,
-                subject_domain=classification.subject_domain,
-                answer_status=answer.status if answer else None,
-                plan_validation=plan_validation,
-                sql_validation=sql_validation,
-                execution=execution,
-                warnings=warnings + sql_warnings,
-            )
-            logger.info(
-                "chat completed trace_id=%s answer_status=%s plan_valid=%s sql_valid=%s",
-                trace.trace_id,
-                answer.status if answer else None,
-                plan_validation.valid,
-                sql_validation.valid,
-            )
-            return ChatResponse(
+            response = ChatResponse(
                 classification=classification,
                 semantic_parse=semantic_parse,
                 retrieval=retrieval,
@@ -504,5 +504,213 @@ class ConversationOrchestrator:
                 execution=execution,
                 next_session_state=next_session_state,
             )
+            self._append_response_snapshot(trace, response)
+            self._persist_runtime_artifacts(
+                trace=trace,
+                request=request,
+                retrieval=retrieval,
+                classification=classification,
+                answer=answer,
+                plan_validation=plan_validation,
+                sql_validation=sql_validation,
+                execution=execution,
+                sql=sql,
+                warnings=warnings + sql_warnings,
+            )
+            logger.info(
+                "chat completed trace_id=%s answer_status=%s plan_valid=%s sql_valid=%s",
+                trace.trace_id,
+                answer.status if answer else None,
+                plan_validation.valid,
+                sql_validation.valid,
+            )
+            return response
         finally:
             clear_trace_id()
+
+    def _sync_classification_with_query_plan(self, classification, query_plan) -> None:
+        if classification.question_type == "invalid":
+            return
+        if not query_plan.need_clarification:
+            return
+        query_plan.question_type = "clarification_needed"
+        classification.question_type = "clarification_needed"
+        classification.need_clarification = True
+        classification.inherit_context = False
+        classification.reason = query_plan.reason or classification.reason
+        classification.reason_code = query_plan.reason_code or classification.reason_code
+        classification.clarification_question = (
+            query_plan.clarification_question
+            or classification.clarification_question
+            or query_plan.reason
+            or "请补充查询目标、时间范围或统计口径。"
+        )
+
+    def _terminal_skip_reason(self, classification, query_plan) -> str | None:
+        if classification.question_type == "invalid":
+            return "terminal gate: invalid question, skip retrieval and SQL generation"
+        if classification.need_clarification or query_plan.need_clarification:
+            return "terminal gate: clarification required, skip SQL generation"
+        return None
+
+    def _finalize_terminal_response(
+        self,
+        *,
+        trace,
+        request: PlanRequest,
+        session_state: SessionState | None,
+        semantic_parse,
+        classification,
+        query_plan,
+        warnings: list[str],
+        retrieval,
+        terminal_reason: str,
+        plan_validation: ValidationResponse | None = None,
+    ) -> ChatResponse:
+        sql_validation = ValidationResponse(
+            valid=True,
+            errors=[],
+            warnings=[terminal_reason],
+            risk_level="low",
+            risk_flags=[],
+        )
+        if plan_validation is None:
+            plan_validation = ValidationResponse(
+                valid=True,
+                errors=[],
+                warnings=warnings + [terminal_reason],
+                risk_level="low",
+                risk_flags=[],
+            )
+        answer = self.answer_builder.build(
+            classification=classification,
+            query_plan=query_plan,
+            execution=None,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+        )
+        next_session_state = self._preserved_session_state(session_state, request.session_id)
+
+        if request.session_id:
+            self.session_service.append_user_message(request.session_id, request.question, trace.trace_id)
+            self.session_service.append_assistant_message(request.session_id, answer.summary, trace.trace_id)
+            next_session_state.session_id = request.session_id
+            self.session_service.update_state(request.session_id, next_session_state, trace_id=trace.trace_id)
+
+        response = ChatResponse(
+            classification=classification,
+            semantic_parse=semantic_parse,
+            retrieval=retrieval,
+            trace=trace,
+            answer=answer,
+            query_plan=query_plan,
+            sql=None,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+            execution=None,
+            next_session_state=next_session_state,
+        )
+        self._append_response_snapshot(trace, response)
+        self._persist_runtime_artifacts(
+            trace=trace,
+            request=request,
+            retrieval=retrieval,
+            classification=classification,
+            answer=answer,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+            execution=None,
+            sql=None,
+            warnings=warnings + sql_validation.warnings,
+        )
+        logger.info(
+            "chat completed trace_id=%s answer_status=%s terminal=%s",
+            trace.trace_id,
+            answer.status if answer else None,
+            classification.question_type,
+        )
+        return response
+
+    def _preserved_session_state(
+        self,
+        session_state: SessionState | None,
+        session_id: str | None,
+    ) -> SessionState:
+        if session_state is not None:
+            preserved = session_state.model_copy(deep=True)
+            if session_id:
+                preserved.session_id = session_id
+            return preserved
+        return SessionState(session_id=session_id or "session_pending")
+
+    def _persist_runtime_artifacts(
+        self,
+        *,
+        trace,
+        request: PlanRequest,
+        retrieval,
+        classification,
+        answer,
+        plan_validation: ValidationResponse,
+        sql_validation: ValidationResponse,
+        execution,
+        sql: str | None,
+        warnings: list[str],
+    ) -> None:
+        try:
+            self.audit_service.finalize(trace, warnings=warnings)
+        except Exception:
+            logger.exception("failed to persist audit trace trace_id=%s", trace.trace_id)
+
+        if retrieval is not None:
+            try:
+                self.runtime_log_repository.log_retrieval(trace.trace_id, retrieval)
+            except Exception:
+                logger.exception("failed to persist retrieval log trace_id=%s", trace.trace_id)
+
+        try:
+            self.runtime_log_repository.log_sql_audit(
+                trace_id=trace.trace_id,
+                sql=sql,
+                plan_validation=plan_validation,
+                sql_validation=sql_validation,
+                execution=execution,
+            )
+        except Exception:
+            logger.exception("failed to persist sql audit trace_id=%s", trace.trace_id)
+
+        try:
+            self.runtime_log_repository.log_query(
+                trace_id=trace.trace_id,
+                session_id=request.session_id,
+                user_id=request.user_context.user_id if request.user_context else None,
+                question=request.question,
+                question_type=classification.question_type,
+                subject_domain=classification.subject_domain,
+                answer_status=answer.status if answer else None,
+                plan_validation=plan_validation,
+                sql_validation=sql_validation,
+                execution=execution,
+                warnings=warnings,
+            )
+        except Exception:
+            logger.exception("failed to persist query log trace_id=%s", trace.trace_id)
+
+    def _append_response_snapshot(self, trace, response: ChatResponse) -> None:
+        payload = response.model_dump(mode="json", exclude={"trace", "sql"})
+        execution_payload = payload.get("execution")
+        if isinstance(execution_payload, dict):
+            execution_payload["sql"] = None
+        state_payload = payload.get("next_session_state")
+        if isinstance(state_payload, dict):
+            state_payload["last_sql"] = None
+        self.audit_service.append_step(
+            trace,
+            "response_snapshot",
+            "completed",
+            "response snapshot persisted",
+            metadata={
+                "schema_version": 1,
+                "response": payload,
+            },
+        )

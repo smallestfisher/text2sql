@@ -40,6 +40,25 @@ class QuestionClassifier:
                 need_clarification=False,
             ), warnings
 
+        relevance_hint = self._check_relevance_with_llm(
+            original_question=question,
+            semantic_parse=semantic_parse,
+            session_state=session_state,
+        )
+        if relevance_hint is not None and self._relevance_hint_is_out_of_scope(relevance_hint):
+            reason = relevance_hint.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                reason = "当前输入不属于当前系统支持的业务数据查询范围。"
+            return QuestionClassification(
+                question_type="invalid",
+                subject_domain="unknown",
+                inherit_context=False,
+                confidence=self._sanitize_confidence(relevance_hint.get("confidence"), 0.86),
+                reason=reason,
+                reason_code="llm_out_of_scope",
+                need_clarification=False,
+            ), warnings
+
         if not semantic_parse.matched_metrics and semantic_parse.subject_domain == "unknown":
             return QuestionClassification(
                 question_type="clarification_needed",
@@ -428,6 +447,47 @@ class QuestionClassifier:
             replace_time_context=semantic_parse.time_context,
             replace_version_context=semantic_parse.version_context,
         )
+
+    def _check_relevance_with_llm(
+        self,
+        original_question: str,
+        semantic_parse: SemanticParse,
+        session_state: SessionState | None,
+    ) -> dict | None:
+        if (
+            not self.classification_llm_enabled
+            or self.llm_client is None
+            or self.prompt_builder is None
+            or not self._should_run_relevance_guard(semantic_parse, session_state)
+        ):
+            return None
+        prompt_payload = self.prompt_builder.build_relevance_prompt(
+            question=original_question,
+            semantic_parse=semantic_parse,
+            session_state=session_state,
+        )
+        return self.llm_client.check_question_relevance(prompt_payload)
+
+    def _should_run_relevance_guard(
+        self,
+        semantic_parse: SemanticParse,
+        session_state: SessionState | None,
+    ) -> bool:
+        if semantic_parse.subject_domain == "unknown":
+            return True
+        if semantic_parse.matched_metrics:
+            return False
+        if semantic_parse.has_follow_up_cue and session_state is not None:
+            return False
+        return True
+
+    def _relevance_hint_is_out_of_scope(self, hint: dict) -> bool:
+        if hint.get("mode") != "live":
+            return False
+        if hint.get("decision") != "out_of_scope":
+            return False
+        confidence = self._sanitize_confidence(hint.get("confidence"), 0.0)
+        return confidence >= 0.7
 
     def _classify_with_llm(
         self,

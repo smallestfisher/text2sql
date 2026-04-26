@@ -4,124 +4,219 @@
 
 当前工程的主路径已经切换为 LLM-first：
 
-- `tables.json` 是真实数据库表和字段描述的主要来源
-- `readme.txt` 是真实业务关系和查询口径的主要补充
-- LLM 直接基于真实表结构、业务说明、Query Plan 和少量 few-shot 生成 MySQL SQL
-- Python 规则、语义层、检索和 Query Plan 只做辅助约束，不再承担主要 SQL 拼接职责
-- SQL validator / AST validator / permission service 负责安全、只读、来源范围、权限过滤和 LIMIT 治理
-- SQL 校验或执行失败时，允许一次 LLM repair，再重新校验
-- Prompt 上下文必须经过选择和预算控制，不能把所有 schema、业务说明和示例全量塞给 LLM
+- `tables.json` 提供真实数据库表、字段和关系描述
+- `business_knowledge.json` 提供结构化业务知识，是主业务说明来源
+- 根目录 `readme.txt` 只保留为 legacy fallback 文本说明
+- LLM 直接基于真实 schema、业务知识、Query Plan 和少量场景 few-shot 生成 MySQL SQL
+- 语义层、检索、Query Plan、权限和 validator 负责辅助约束，不再承担主 SQL 拼接职责
+- SQL 校验或执行失败时，允许一次基于原上下文的 LLM repair
+- Prompt 上下文必须经过选择和预算控制，不能把全量 schema、知识和样例直接塞给模型
 
-这意味着系统不要求真实数据库里存在 `semantic_demand_unpivot_view` 或其他 semantic view。复杂横表逻辑应优先由 LLM 在 SQL 中用 `WITH` CTE 展开，再由校验器治理。
+这意味着系统不要求真实数据库预建 `semantic_demand_unpivot_view` 或其他 semantic view。复杂横表逻辑优先由 LLM 在 SQL 中用 `WITH` CTE 展开，再由校验器治理。
 
-## 2. 端到端链路
+## 2. 核心配置与职责边界
+
+### 2.1 `tables.json`
+
+职责：
+
+- 描述真实表名、字段名、字段含义
+- 描述时间字段、版本字段、主业务键、常见 join 关系
+- 给 LLM 和调试人员提供真实 schema 依据
+
+不负责：
+
+- 本地拼 SQL
+- 存放大段业务规则
+
+### 2.2 `business_knowledge.json`
+
+职责：
+
+- 以 `domain / tables / keywords / notes` 形式维护稳定业务口径
+- 让 PromptBuilder 能按当前问题命中相关知识块
+- 为 LLM 提供横表映射、版本口径、指标解释、常见过滤约束
+
+不负责：
+
+- 本地 SQL 模板
+- 针对单题硬编码业务分支
+
+### 2.3 `semantic/semantic_layer.json`
+
+当前仅作为辅助配置：
+
+- 辅助语义解析、主题域判断和 follow-up 分类
+- 辅助检索和 Query Plan 收敛
+- 辅助 validator 判断已知来源、字段和风险
+
+它不是主 SQL 编译器。不要再往里面堆完整 SQL 模板。
+
+### 2.4 `readme.txt`
+
+职责很小：
+
+- 当结构化知识未命中时，提供中文 fallback 说明
+
+不应继续承担：
+
+- 仓库总文档
+- 规则库
+- 全量业务知识文本
+
+## 3. 端到端主链路
 
 一次查询的主链路如下：
 
 1. API 接收自然语言问题和用户上下文
-2. 分类器判断新问题、追问、澄清或无效问题
-3. 语义解析和检索补充 Query Plan 约束
-4. 权限服务把用户数据范围注入 Query Plan
-5. PromptBuilder 从 `tables.json`、`readme.txt`、Query Plan、业务提示和示例中选择相关上下文，构造 SQL prompt
-6. LLMClient 生成一条只读 `SELECT` 或 `WITH ... SELECT`
-7. SqlValidator 校验 SQL 来源、风险、权限过滤、时间/版本条件和 LIMIT
-8. 校验失败时，LLMClient 使用原 prompt 和错误信息 repair SQL
-9. SqlExecutor 在只读业务库执行 SQL
-10. AnswerBuilder 组织结果摘要，审计和会话服务落库
+2. `semantic_parse` 提取指标、实体、时间、版本和 follow-up 信号
+3. 分类器判断问题是首轮新问、同域新问、跨域新问、追问、澄清还是无效问题
+4. 对低信号问题触发 LLM relevance guard，先判断是否属于业务数据查询范围
+5. 如果被判为 `invalid` 或 `clarification_needed`，链路直接在 SQL 生成前终止
+6. Query Planner 生成基础 Query Plan
+7. 检索层补 example / metric / knowledge 命中结果，辅助收敛 Query Plan
+8. 权限服务把用户数据范围过滤条件注入 Query Plan
+9. PromptBuilder 从 `tables.json`、`business_knowledge.json`、Query Plan 和 few-shot 里选择相关上下文，必要时才回退到 `readme.txt`
+10. LLM 生成一条只读 `SELECT` 或 `WITH ... SELECT`
+11. SqlValidator / SqlAstValidator 校验来源范围、过滤条件、时间/版本一致性、权限和 LIMIT
+12. 如果校验或执行失败，LLM 使用原 prompt 和错误信息做一次 repair
+13. SqlExecutor 在只读业务库执行 SQL
+14. AnswerBuilder 组织回答摘要
+15. 审计、查询日志、会话消息和会话状态落到 runtime 库
+16. Trace 在落库前附带 `response_snapshot`，供历史会话恢复 `latest_response`
 
-## 3. 各层职责
+## 4. Prompt 与 token 控制
 
-### 3.1 LLM
+### 4.1 当前 prompt 方向
 
-LLM 是 SQL 生成主角，负责理解业务问题、选择真实表字段、展开横表、生成聚合、排序、TopN 和 CTE。
+当前 SQL、分类、相关性判断 prompt 统一以中文自然语言指令为主。表名、字段名和数据库对象名仍保持真实英文命名。
 
-LLM 不负责绕过治理。它输出的 SQL 必须经过 validator，失败后只能在原始上下文内 repair。
+### 4.2 上下文选择原则
 
-### 3.1.1 Prompt 上下文选择器
-
-LLM-first 不等于无限扩 prompt。当前 SQL prompt 的上下文选择原则是：
+LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
 
 - 只发送 Query Plan 命中的真实表结构；没有命中表时才使用主题域候选表
-- `readme.txt` 会被切成业务说明片段，并按当前 subject、tables、metrics、dimensions、filters、version field 打分，只发送相关片段
-- 业务说明有字符预算，当前由 `PromptBuilder.BUSINESS_NOTES_MAX_CHARS` 控制
-- few-shot 按场景选择；例如需求横表专项示例只在需求域或命中 `p_demand/v_demand` 时进入 prompt
-- prompt 中会携带 `context_budget`，方便 trace 和调试时判断本次发送了哪种上下文
+- 优先从 `business_knowledge.json` 里按 `domain / tables / keywords` 选择结构化知识块
+- `readme.txt` 只在结构化知识未命中时才参与
+- few-shot 按场景命中，不做全局注入
+- 业务说明受 `PromptBuilder.BUSINESS_NOTES_MAX_CHARS` 等预算控制
+- trace 的 `build_sql_prompt.metadata.context_summary` 会记录本次用了哪些来源、知识长度和 few-shot
 
-后续如果 `readme.txt` 继续增长，应把它拆成结构化知识块或接入检索，而不是继续扩大单次 prompt。
+### 4.3 维护规则
 
-### 3.2 Query Plan
+避免 token 爆炸时，遵守以下原则：
 
-Query Plan 是给 LLM 和 validator 的约束，不是 SQL 模板。它用于表达主题域、候选表、指标、维度、过滤、排序、limit、时间和版本上下文。
+- 不把全量 `tables.json` 放进 SQL prompt
+- 不把全量 `business_knowledge.json` 或 `readme.txt` 放进 SQL prompt
+- 不把所有 few-shot 一次性塞进 prompt
+- 新增业务知识时，优先写成短小、稳定、可命中的知识块
+- 高频失败样例进入 few-shot 或 eval case 前，先判断是否具有复用价值
 
-如果 Query Plan 不完整，LLM 仍可根据真实 schema 和业务说明生成 SQL；validator 负责拦截明显越界或危险 SQL。
+## 5. 多轮对话与会话恢复
 
-### 3.3 语义层
+当前系统支持多轮对话，但本质上是“会话状态 + 分类继承 + Query Plan 增量修改”的多轮，不是无限制的自由长对话记忆。
 
-`semantic/semantic_layer.json` 现在是辅助配置：
+关键机制：
 
-- 辅助分类和主题域判断
-- 辅助检索和 Query Plan 收敛
-- 辅助 validator 判断已知表、字段、权限和风险
+- 分类器会判断当前问题是否需要继承上一轮上下文
+- `context_delta` 用于表达时间替换、版本替换、维度替换、筛选追加等最小修改
+- `session_state` 记录当前域、指标、维度、过滤、时间、版本和最近一次 Query Plan
+- `response_snapshot` 记录安全可恢复的回答快照，供历史会话重开
 
-语义层不是主 SQL 编译器。不要为了一个业务问题继续在语义层里堆完整 SQL 模板。
+当前前端会话恢复的标准入口是：
 
-### 3.4 Semantic View
+- `GET /api/chat/sessions/{session_id}/workspace`
 
-Semantic view 只保留为 legacy 辅助能力：
+这个接口一次性返回：
 
-- 可以作为文档化的业务口径参考
-- 可以作为未来性能优化或稳定口径的候选落库对象
-- 不应作为 chat 和 `/api/query/sql` 的主执行依赖
-- 不要求在真实业务库里创建
+- 会话消息
+- 当前 `session_state`
+- `latest_response`
+- `latest_trace`
+- `latest_sql_audit`
+- `latest_query_logs`
+- 当前会话内每个 `trace_id` 对应的 `trace_artifacts`
 
-如果未来确实需要落库 semantic view，应先证明某类 SQL 高频、稳定、复杂且影响性能或治理，再单独评审。
+前端消息流里的结果卡和右侧详情面板都基于这份 `workspace` 数据，而不是再自己拼 `history + state + query_logs + trace + sql_audit`。这样可以避免“左边消息正确，右边详情像没执行过”的状态漂移。
 
-### 3.5 SQL 治理
+## 6. 前端工作台与权限脱敏
 
-SQL 治理是 LLM-first 的边界：
+### 6.1 用户工作台
 
-- 只允许只读 `SELECT` / `WITH ... SELECT`
-- 禁止 DDL/DML 和危险关键字
-- 校验引用来源是否在真实表、允许的辅助对象或 CTE 范围内
-- 校验 Query Plan 关键过滤、维度、排序、版本和 limit
-- 校验权限要求的过滤条件
-- 对大范围扫描、无时间条件、多源 join 等风险给出 warning 或 error
+当前用户工作台是三栏结构：
 
-## 4. 需求横表处理原则
+- 左侧：会话列表
+- 中间：消息流和助手结果卡
+- 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
 
-`p_demand` / `v_demand` 是横向需求表，不能简单理解成 `month = 202604`。
+快捷问题卡片只在空会话时显示；发送第一条消息后，消息流改为展示真实历史记录。
 
-正确方向是让 LLM 根据业务说明生成类似如下逻辑：
+### 6.2 结果卡与详情面板
 
-- `MONTH` 表示当前版本月
-- `REQUIREMENT_QTY` 对应当前月需求
-- `NEXT_REQUIREMENT` 对应下一个月需求
-- `LAST_REQUIREMENT` 和 `MONTH4` 至 `MONTH7` 按业务说明继续展开
-- 对“最新 N 版”先按版本字段取最新 N 个版本，再对目标需求月份选择对应列
-- 对“需求最多的 fgcode”按 `FGCODE` 聚合并排序
+每条 assistant 消息如果关联 `trace_id`，会在消息下方展示结果卡：
 
-这类逻辑应体现在 prompt 和 few-shot 中，不应依赖数据库预建 `semantic_demand_unpivot_view`。
+- 状态
+- 返回行数
+- 结果预览
+- `查看详情`
+- `下载`
 
-## 5. 维护优先级
+点击 `查看详情` 后，右侧详情面板会切换到对应 `trace_id` 的 `trace_artifact`。这意味着“详情”是按轮次切换，不只是看会话的最后一次结果。
+
+### 6.3 权限脱敏
+
+普通登录用户也可以打开详情面板，但权限仍然分层：
+
+- 没有 `can_view_sql` 时，`latest_response.sql`、`sql_audit.sql_text` 和 `session_state.last_sql` 会被清空
+- 没有 `can_download_results` 时，结果下载按钮不会可用
+- 会话与 trace 读取都经过权限服务脱敏处理
+
+因此，用户可以看回答、状态、trace 摘要，但不会因为 UI 保留 SQL/State 面板就自动拿到受限 SQL。
+
+## 7. demand 横表处理原则
+
+`p_demand` / `v_demand` 是横向需求表，不能简单理解成 `MONTH = 202604`。
+
+正确方向是让 LLM 根据业务说明生成如下逻辑：
+
+- `MONTH` 表示起始需求月份，通常以紧凑 `YYYYMM` 存储
+- `REQUIREMENT_QTY` 对应 base `MONTH`
+- `NEXT_REQUIREMENT` 对应 base `MONTH + 1`
+- `LAST_REQUIREMENT` 对应 base `MONTH + 2`
+- `MONTH4` 到 `MONTH7` 对应 base `MONTH + 3` 到 `+6`
+- “最新 N 版”要先按版本字段取最新 N 个版本
+- 如果外层还要按 `PM_VERSION` 过滤，展开后的 CTE 必须显式投影 `PM_VERSION`
+- 针对 `YYYYMM` 紧凑月份，不能直接对原始字符串做错误的日期函数运算
+
+当前这类逻辑主要通过：
+
+- `business_knowledge.json`
+- PromptBuilder 的 demand 专项指令
+- demand few-shot
+- SqlValidator 的 demand 月份映射和 `PM_VERSION` 投影校验
+
+来共同保证，而不是依赖数据库预建 `semantic_demand_unpivot_view`。
+
+## 8. Semantic view 的当前位置
+
+semantic view 现在是 legacy 辅助对象，不是运行时主依赖：
+
+- 可以作为业务口径参考
+- 可以继续留在语义配置和管理元数据里
+- 可以作为未来性能优化或稳定口径落库的候选
+- 不应作为 chat、`/api/query/sql` 或前端工作台的必需执行对象
+
+只有在真实联调证明某类逻辑高频、稳定、复杂且确实需要数据库侧固化时，才考虑单独评审是否创建视图或物化表。
+
+## 9. 维护优先级
 
 遇到准确率问题时，优先按这个顺序处理：
 
-1. 修 `tables.json` 字段描述和真实表关系
-2. 修 `readme.txt` 业务口径
-3. 补高质量 few-shot 示例
-4. 修 PromptBuilder 的通用指令
+1. 修 `tables.json` 的字段描述和真实表关系
+2. 修 `business_knowledge.json` 的业务口径
+3. 补高质量 few-shot 和 eval case
+4. 修 PromptBuilder 的通用指令和上下文选择
 5. 修 SQL validator 的边界和误拦截
 6. 最后才考虑新增局部规则
 
 局部规则只能用于分类、约束、校验或安全治理，不能重新变成业务 SQL 生成主路径。
-
-## 6. Token 控制策略
-
-为避免 LLM-first 演变成 token 爆炸，维护时遵守以下规则：
-
-- 不把全量 `tables.json` 放入 SQL prompt
-- 不把全量 `readme.txt` 放入 SQL prompt
-- 不把所有 few-shot 都放入 SQL prompt
-- 新增业务说明时优先写成可被关键词命中的短片段
-- 高频失败样例进入 eval/few-shot 前要判断是否具有复用价值
-- 如果某类问题需要大量背景知识，优先拆知识块和做检索，而不是提高固定 prompt 上限

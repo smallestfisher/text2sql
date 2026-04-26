@@ -16,6 +16,7 @@ import type {
   SessionCreateResponse,
   SessionHistoryResponse,
   SessionStateResponse,
+  SessionWorkspaceResponse,
   TraceRecord,
   UserContext,
   UserUpsertPayload,
@@ -129,6 +130,9 @@ export const api = {
   getSessionState(token: string, sessionId: string): Promise<SessionStateResponse> {
     return request(`/api/chat/state/${sessionId}`, { token });
   },
+  getSessionWorkspace(token: string, sessionId: string): Promise<SessionWorkspaceResponse> {
+    return request(`/api/chat/sessions/${sessionId}/workspace`, { token });
+  },
   listQueryLogs(token: string, sessionId: string): Promise<RuntimeQueryLogCollectionResponse> {
     return request(`/api/chat/query-logs?session_id=${encodeURIComponent(sessionId)}&limit=5`, { token });
   },
@@ -171,6 +175,8 @@ export const api = {
         username: payload.username,
         password: payload.password || null,
         roles: payload.roles,
+        data_scope: payload.data_scope,
+        field_visibility: payload.field_visibility,
         can_view_sql: payload.can_view_sql,
         can_execute_sql: payload.can_execute_sql,
         can_download_results: payload.can_download_results,

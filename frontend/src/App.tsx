@@ -12,8 +12,8 @@ import type {
   RuntimeQueryLogRecord,
   RuntimeSqlAuditRecord,
   RuntimeStatus,
-  SemanticSummary,
   SessionState,
+  SessionTraceWorkspaceRecord,
   TraceRecord,
   UserContext,
   UserUpsertPayload,
@@ -36,6 +36,14 @@ const emptyUserForm: UserUpsertPayload = {
   username: "",
   password: "",
   roles: ["viewer"],
+  data_scope: {
+    factories: [],
+    sbus: [],
+    bus: [],
+    customers: [],
+    products: [],
+  },
+  field_visibility: [],
   can_view_sql: true,
   can_execute_sql: true,
   can_download_results: true,
@@ -48,7 +56,6 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [authPending, setAuthPending] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
-  const [semanticSummary, setSemanticSummary] = useState<SemanticSummary | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("workspace");
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -61,6 +68,8 @@ function App() {
   const [latestTrace, setLatestTrace] = useState<TraceRecord | null>(null);
   const [latestSqlAudit, setLatestSqlAudit] = useState<RuntimeSqlAuditRecord | null>(null);
   const [latestQueryLogs, setLatestQueryLogs] = useState<RuntimeQueryLogRecord[]>([]);
+  const [traceArtifacts, setTraceArtifacts] = useState<SessionTraceWorkspaceRecord[]>([]);
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
   const [pendingQuestion, setPendingQuestion] = useState("");
   const [question, setQuestion] = useState("");
@@ -107,13 +116,6 @@ function App() {
 
   async function boot() {
     try {
-      const summary = await api.semanticSummary();
-      setSemanticSummary(summary);
-    } catch {
-      setSemanticSummary(null);
-    }
-
-    try {
       const status = await api.bootstrapStatus();
       setAuthMode(status.has_users ? "login" : "bootstrap");
     } catch (error) {
@@ -159,39 +161,46 @@ function App() {
     setLatestTrace(null);
     setLatestSqlAudit(null);
     setLatestQueryLogs([]);
+    setTraceArtifacts([]);
+    setActiveTraceId(null);
     setWorkspaceError("");
     window.localStorage.removeItem(SESSION_KEY);
+  }
+
+  function applyWorkspacePayload(workspace: { messages: ChatMessage[]; state?: SessionState | null; latest_response?: ChatResponse | null; latest_query_logs: RuntimeQueryLogRecord[]; latest_trace?: TraceRecord | null; latest_sql_audit?: RuntimeSqlAuditRecord | null; trace_artifacts: SessionTraceWorkspaceRecord[]; }) {
+    setMessages(normalizeMessages(workspace.messages || []));
+    setSessionState(workspace.state || null);
+    setLatestResponse(workspace.latest_response || null);
+    setLatestQueryLogs(workspace.latest_query_logs || []);
+    setLatestTrace(workspace.latest_trace || null);
+    setLatestSqlAudit(workspace.latest_sql_audit || null);
+    setTraceArtifacts(workspace.trace_artifacts || []);
+    setActiveTraceId(workspace.latest_trace?.trace_id || workspace.latest_response?.trace?.trace_id || null);
+  }
+
+  function primeImmediateTraceArtifact(response: ChatResponse) {
+    const traceId = response.trace?.trace_id;
+    if (!traceId) {
+      return;
+    }
+    setTraceArtifacts((current) =>
+      upsertTraceArtifact(current, {
+        trace_id: traceId,
+        response,
+        trace: response.trace,
+        sql_audit: null,
+        query_log: null,
+      }),
+    );
+    setActiveTraceId(traceId);
   }
 
   async function loadSession(authToken: string, sessionId: string) {
     window.localStorage.setItem(SESSION_KEY, sessionId);
     setSelectedSessionId(sessionId);
     setWorkspaceError("");
-
-    const [history, statePayload, queryLogsPayload] = await Promise.all([
-      api.getSessionHistory(authToken, sessionId),
-      api.getSessionState(authToken, sessionId),
-      api.listQueryLogs(authToken, sessionId),
-    ]);
-
-    setMessages(normalizeMessages(history.messages));
-    setSessionState(statePayload.state || null);
-    setLatestResponse(null);
-    setLatestQueryLogs(queryLogsPayload.query_logs || []);
-
-    const traceId = queryLogsPayload.query_logs?.[0]?.trace_id;
-    if (!traceId) {
-      setLatestTrace(null);
-      setLatestSqlAudit(null);
-      return;
-    }
-
-    const [trace, sqlAudit] = await Promise.all([
-      api.getTrace(authToken, traceId),
-      api.getTraceSqlAudit(authToken, traceId).catch(() => null),
-    ]);
-    setLatestTrace(trace);
-    setLatestSqlAudit(sqlAudit);
+    const workspace = await api.getSessionWorkspace(authToken, sessionId);
+    applyWorkspacePayload(workspace);
   }
 
   async function handleAuth(username: string, password: string) {
@@ -228,6 +237,8 @@ function App() {
     setLatestTrace(null);
     setLatestSqlAudit(null);
     setLatestQueryLogs([]);
+    setTraceArtifacts([]);
+    setActiveTraceId(null);
     setWorkspaceError("");
     setPendingQuestion("");
     setQuestion("");
@@ -285,8 +296,9 @@ function App() {
       setQuestion("");
     }
 
+    let response: ChatResponse | null = null;
+    let sessionId = selectedSessionId;
     try {
-      let sessionId = selectedSessionId;
       if (!sessionId) {
         const sessionTitle = trimmed.length > 18 ? `${trimmed.slice(0, 18)}...` : trimmed;
         const created = await api.createSession(token, sessionTitle);
@@ -296,16 +308,34 @@ function App() {
         window.localStorage.setItem(SESSION_KEY, sessionId);
       }
 
-      const response = await api.chatQuery(token, trimmed, sessionId);
+      response = await api.chatQuery(token, trimmed, sessionId);
       setLatestResponse(response);
       setSessionState(response.next_session_state);
+      primeImmediateTraceArtifact(response);
       await refreshSessions(token, sessionId);
       setLatestResponse(response);
       setActiveTab("result");
       setInspectorOpen(false);
     } catch (error) {
-      setMessages((current) => current.filter((message) => message.id !== pendingUserId && message.id !== pendingAssistantId));
-      setWorkspaceError(errorMessage(error));
+      if (response && sessionId) {
+        const resolvedSessionId = sessionId;
+        setMessages((current) =>
+          resolvePendingMessages(current, {
+            pendingUserId,
+            pendingAssistantId,
+            sessionId: resolvedSessionId,
+            assistantContent: response?.answer?.summary || "本次请求已完成，请查看详情面板。",
+          }),
+        );
+        setLatestResponse(response);
+        setSessionState(response.next_session_state);
+        primeImmediateTraceArtifact(response);
+        setActiveTab("result");
+        setWorkspaceError(`本次请求已完成，但会话刷新失败：${errorMessage(error)}`);
+      } else {
+        setMessages((current) => current.filter((message) => message.id !== pendingUserId && message.id !== pendingAssistantId));
+        setWorkspaceError(errorMessage(error));
+      }
     } finally {
       setPendingQuestion("");
       setChatPending(false);
@@ -415,6 +445,8 @@ function App() {
       await api.adminUpsertUser(token, user.user_id, {
         username: user.username || user.user_id,
         roles: user.roles,
+        data_scope: user.data_scope,
+        field_visibility: user.field_visibility,
         can_view_sql: user.can_view_sql,
         can_execute_sql: user.can_execute_sql,
         can_download_results: user.can_download_results,
@@ -465,17 +497,19 @@ function App() {
 
   const selectedSession = sessions.find((item) => item.id === selectedSessionId) || null;
   const displayMessages = messages;
-  const shouldShowWelcome = !displayMessages.length;
+  const shouldShowWelcome = !displayMessages.length && !chatPending && !pendingQuestion;
+  const activeTraceArtifact =
+    findTraceArtifact(traceArtifacts, activeTraceId)
+    || findTraceArtifact(traceArtifacts, latestTrace?.trace_id || latestResponse?.trace?.trace_id || null);
+  const inspectorResponse = activeTraceArtifact?.response || latestResponse;
+  const inspectorTrace = activeTraceArtifact?.trace || latestTrace;
+  const inspectorSqlAudit = activeTraceArtifact?.sql_audit || latestSqlAudit;
+  const inspectorQueryLogs = mergeQueryLogs(activeTraceArtifact?.query_log || null, latestQueryLogs);
 
   const contextChips = buildContextChips(sessionState);
   const isAdmin = (currentUser?.roles || []).includes("admin");
   const showAdminCenter = isAdmin && viewMode === "admin";
-  const showInspector = isAdmin && viewMode === "workspace";
-  const semanticCards = [
-    { label: "业务域", value: String(semanticSummary?.domains.length || 0) },
-    { label: "辅助语义对象", value: String(semanticSummary?.semantic_views.length || 0) },
-    { label: "指标", value: String(semanticSummary?.metrics.length || 0) },
-  ];
+  const showInspector = viewMode === "workspace";
 
   if (!currentUser) {
     return (
@@ -483,7 +517,6 @@ function App() {
         authMode={authMode}
         authError={authError}
         authPending={authPending}
-        semanticSummary={semanticSummary}
         onSubmit={handleAuth}
       />
     );
@@ -545,15 +578,6 @@ function App() {
                 <button className="primary-button" type="button" onClick={() => void createSession()}>
                   新建会话
                 </button>
-
-                <div className="metric-grid">
-                  {semanticCards.map((item) => (
-                    <div className="metric-card" key={item.label}>
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
-                    </div>
-                  ))}
-                </div>
               </>
             ) : (
               <div className="metric-grid">
@@ -708,7 +732,7 @@ function App() {
                 <div className="hero-stats">
                   <StatPill label="当前域" value={sessionState?.subject_domain || "unknown"} />
                   <StatPill label="会话数" value={String(sessions.length)} />
-                  <StatPill label="结果行数" value={String(latestResponse?.execution?.row_count ?? latestSqlAudit?.row_count ?? 0)} />
+                  <StatPill label="结果行数" value={String(inspectorResponse?.execution?.row_count ?? inspectorSqlAudit?.row_count ?? 0)} />
                 </div>
 
                 {contextChips.length ? (
@@ -748,18 +772,35 @@ function App() {
                     </div>
                   ) : (
                     <div className="thread-list">
-                      {displayMessages.map((message) => (
-                        <article key={message.id} className={`message${message.role === "user" ? " is-user" : ""}`}>
-                          <div className="message-avatar">{message.role === "user" ? "U" : "AI"}</div>
-                          <div className="message-body">
-                            <div className="message-meta">
-                              <span>{message.role === "user" ? "你" : "Text2SQL"}</span>
-                              <span>{formatDate(message.created_at)}</span>
+                      {displayMessages.map((message) => {
+                        const messageArtifact = message.trace_id ? findTraceArtifact(traceArtifacts, message.trace_id) : null;
+                        return (
+                          <article key={message.id} className={`message${message.role === "user" ? " is-user" : ""}`}>
+                            <div className="message-avatar">{message.role === "user" ? "U" : "AI"}</div>
+                            <div className="message-body">
+                              <div className="message-meta">
+                                <span>{message.role === "user" ? "你" : "Text2SQL"}</span>
+                                <span>{formatDate(message.created_at)}</span>
+                              </div>
+                              <div className="message-card">{message.content}</div>
+                              {message.role === "assistant" && messageArtifact ? (
+                                <ConversationResultCard
+                                  artifact={messageArtifact}
+                                  isActive={messageArtifact.trace_id === activeTraceId}
+                                  token={token}
+                                  currentUser={currentUser}
+                                  canInspect={showInspector}
+                                  onSelect={() => {
+                                    setActiveTraceId(messageArtifact.trace_id);
+                                    setActiveTab("result");
+                                    setInspectorOpen(true);
+                                  }}
+                                />
+                              ) : null}
                             </div>
-                            <div className="message-card">{message.content}</div>
-                          </div>
-                        </article>
-                      ))}
+                          </article>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -810,7 +851,7 @@ function App() {
                   <div>
                     <div className="panel-title">会话详情</div>
                     <div className="panel-subtitle">
-                      {sessionState?.subject_domain || latestResponse?.query_plan.subject_domain || "等待上下文"}
+                      {inspectorResponse?.query_plan.subject_domain || sessionState?.subject_domain || "等待上下文"}
                     </div>
                   </div>
 
@@ -829,17 +870,17 @@ function App() {
                 </div>
 
                 <div className="inspector-body">
-                  {activeTab === "result" && <ResultPanel latestResponse={latestResponse} workspaceError={workspaceError} token={token} latestTrace={latestTrace} currentUser={currentUser} />}
+                  {activeTab === "result" && <ResultPanel latestResponse={inspectorResponse} workspaceError={workspaceError} token={token} latestTrace={inspectorTrace} currentUser={currentUser} />}
                   {activeTab === "sql" && (
                     <SqlPanel
                       canViewSql={currentUser.can_view_sql}
-                      latestResponse={latestResponse}
-                      latestSqlAudit={latestSqlAudit}
+                      latestResponse={inspectorResponse}
+                      latestSqlAudit={inspectorSqlAudit}
                       sessionState={sessionState}
                     />
                   )}
-                  {activeTab === "trace" && <TracePanel latestTrace={latestTrace} latestQueryLogs={latestQueryLogs} />}
-                  {activeTab === "state" && <StatePanel latestResponse={latestResponse} sessionState={sessionState} />}
+                  {activeTab === "trace" && <TracePanel latestTrace={inspectorTrace} latestQueryLogs={inspectorQueryLogs} />}
+                  {activeTab === "state" && <StatePanel latestResponse={inspectorResponse} sessionState={sessionState} />}
                 </div>
               </aside>
             ) : null}
@@ -909,7 +950,6 @@ function AuthScreen(props: {
   authMode: AuthMode;
   authError: string;
   authPending: boolean;
-  semanticSummary: SemanticSummary | null;
   onSubmit: (username: string, password: string) => Promise<void>;
 }) {
   const [username, setUsername] = useState("");
@@ -926,12 +966,6 @@ function AuthScreen(props: {
           <div className="auth-title">面向业务分析的自然语言查询入口</div>
           <div className="auth-copy">
             登录后可以直接提问，系统会基于真实表结构和业务说明生成 SQL、执行查询，并把 Trace 与上下文状态保留在同一工作台里。
-          </div>
-
-          <div className="auth-metrics">
-            <StatPill label="业务域" value={String(props.semanticSummary?.domains.length || 0)} />
-            <StatPill label="辅助语义对象" value={String(props.semanticSummary?.semantic_views.length || 0)} />
-            <StatPill label="指标" value={String(props.semanticSummary?.metrics.length || 0)} />
           </div>
         </div>
 
@@ -1350,9 +1384,90 @@ function AdminView(props: {
   );
 }
 
+function ConversationResultCard(props: {
+  artifact: SessionTraceWorkspaceRecord;
+  isActive: boolean;
+  token: string | null;
+  currentUser: UserContext | null;
+  canInspect: boolean;
+  onSelect: () => void;
+}) {
+  const response = props.artifact.response;
+  const answer = response?.answer;
+  const execution = response?.execution;
+  const queryLog = props.artifact.query_log;
+  const domain = response?.query_plan.subject_domain || queryLog?.subject_domain || "unknown";
+  const status = execution?.status || answer?.status || queryLog?.answer_status || "unknown";
+  const rowCount = execution?.row_count ?? props.artifact.sql_audit?.row_count ?? queryLog?.row_count ?? 0;
+  const previewColumns = (execution?.columns || []).slice(0, 4);
+  const previewRows = (execution?.rows || []).slice(0, 5);
+  const canDownload = Boolean(
+    previewRows.length
+    && props.token
+    && props.currentUser?.can_download_results
+    && props.artifact.trace?.trace_id,
+  );
+
+  return (
+    <div className={`message-result-card${props.isActive ? " is-active" : ""}`}>
+      <div className="message-result-head">
+        <div className="message-result-summary">
+          <strong>{domain}</strong>
+          <span>{describeResponseStatus(status)}</span>
+          <span>{`结果 ${rowCount} 行`}</span>
+        </div>
+        <div className="message-result-actions">
+          {props.canInspect ? (
+            <button className="secondary-button message-result-button" type="button" onClick={props.onSelect}>
+              查看详情
+            </button>
+          ) : null}
+          {canDownload ? (
+            <button
+              className="secondary-button message-result-button"
+              type="button"
+              onClick={() => {
+                void downloadTraceCsv(props.token!, props.artifact.trace!.trace_id);
+              }}
+            >
+              下载
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {answer?.detail ? <div className="message-result-note">{answer.detail}</div> : null}
+      {answer?.follow_up_hint ? <div className="message-result-note">下一步：{answer.follow_up_hint}</div> : null}
+
+      {previewRows.length ? (
+        <div className="message-result-table-wrap">
+          <table className="message-result-table">
+            <thead>
+              <tr>
+                {previewColumns.map((column) => (
+                  <th key={column}>{column}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.map((row, index) => (
+                <tr key={`${props.artifact.trace_id}-${index}`}>
+                  {previewColumns.map((column) => (
+                    <td key={column}>{String(row[column] ?? "")}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 
 function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceError: string; token: string | null; latestTrace: TraceRecord | null; currentUser: UserContext | null }) {
-  if (props.workspaceError) {
+  if (props.workspaceError && !props.latestResponse) {
     return (
       <section className="tab-panel">
         <div className="detail-card accent-card">
@@ -1377,6 +1492,13 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
 
   return (
     <section className="tab-panel">
+      {props.workspaceError ? (
+        <div className="detail-card subtle-card">
+          <div className="detail-title">提示</div>
+          <div className="detail-copy">{props.workspaceError}</div>
+        </div>
+      ) : null}
+
       <div className="detail-card accent-card">
         <div className="panel-row">
           <div className="detail-title">回答</div>
@@ -1385,15 +1507,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
               className="secondary-button"
               type="button"
               onClick={() => {
-                void api.downloadTraceResult(props.token!, props.latestTrace!.trace_id).then((csv) => {
-                  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-                  const url = window.URL.createObjectURL(blob);
-                  const anchor = document.createElement("a");
-                  anchor.href = url;
-                  anchor.download = `trace-${props.latestTrace!.trace_id}.csv`;
-                  anchor.click();
-                  window.URL.revokeObjectURL(url);
-                }).catch(() => undefined);
+                void downloadTraceCsv(props.token!, props.latestTrace!.trace_id);
               }}
             >
               下载结果
@@ -1408,7 +1522,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       <div className="stats-row">
         <div className="compact-stat">
           <span>状态</span>
-          <strong>{execution?.status || "unknown"}</strong>
+          <strong>{describeResponseStatus(execution?.status || answer?.status || "unknown")}</strong>
         </div>
         <div className="compact-stat">
           <span>返回行数</span>
@@ -1554,7 +1668,7 @@ function TracePanel(props: {
           <div className="detail-title">最近查询</div>
           <div className="meta-stack">
             {props.latestQueryLogs.slice(0, 5).map((log) => (
-              <MetaRow key={log.trace_id} label={log.question || "未记录问题"} value={log.answer_status || "unknown"} />
+              <MetaRow key={log.trace_id} label={log.question || "未记录问题"} value={describeResponseStatus(log.answer_status || "unknown")} />
             ))}
           </div>
         </div>
@@ -1599,6 +1713,72 @@ function StatePanel(props: { latestResponse: ChatResponse | null; sessionState: 
         <pre className="json-block">{JSON.stringify(payload, null, 2)}</pre>
       </div>
     </section>
+  );
+}
+
+function findTraceArtifact(
+  items: SessionTraceWorkspaceRecord[],
+  traceId: string | null | undefined,
+) {
+  if (!traceId) {
+    return null;
+  }
+  return items.find((item) => item.trace_id === traceId) || null;
+}
+
+function mergeQueryLogs(
+  selectedLog: RuntimeQueryLogRecord | null,
+  latestQueryLogs: RuntimeQueryLogRecord[],
+) {
+  if (!selectedLog) {
+    return latestQueryLogs;
+  }
+  const nextItems = [selectedLog, ...latestQueryLogs.filter((item) => item.trace_id !== selectedLog.trace_id)];
+  return nextItems.slice(0, 5);
+}
+
+function upsertTraceArtifact(
+  items: SessionTraceWorkspaceRecord[],
+  artifact: SessionTraceWorkspaceRecord,
+) {
+  const existing = items.find((item) => item.trace_id === artifact.trace_id);
+  const nextItems = items.filter((item) => item.trace_id !== artifact.trace_id);
+  nextItems.unshift({
+    trace_id: artifact.trace_id,
+    response: artifact.response ?? existing?.response ?? null,
+    trace: artifact.trace ?? existing?.trace ?? null,
+    sql_audit: artifact.sql_audit ?? existing?.sql_audit ?? null,
+    query_log: artifact.query_log ?? existing?.query_log ?? null,
+  });
+  return nextItems;
+}
+
+function resolvePendingMessages(
+  current: ChatMessage[],
+  payload: {
+    pendingUserId: string;
+    pendingAssistantId: string;
+    sessionId: string;
+    assistantContent: string;
+  },
+) {
+  return normalizeMessages(
+    current.map((message) => {
+      if (message.id === payload.pendingUserId) {
+        return {
+          ...message,
+          session_id: payload.sessionId,
+        };
+      }
+      if (message.id === payload.pendingAssistantId) {
+        return {
+          ...message,
+          session_id: payload.sessionId,
+          content: payload.assistantContent,
+        };
+      }
+      return message;
+    }),
   );
 }
 
@@ -1670,6 +1850,26 @@ function buildContextChips(state: SessionState | null) {
   return Array.from(new Set(chips)).slice(0, 6);
 }
 
+function describeResponseStatus(status: string) {
+  const normalized = status.toLowerCase();
+  if (["success", "completed", "ok"].includes(normalized)) {
+    return "已完成";
+  }
+  if (["no_data", "empty"].includes(normalized)) {
+    return "无结果";
+  }
+  if (["clarification_needed"].includes(normalized)) {
+    return "需澄清";
+  }
+  if (["skipped"].includes(normalized)) {
+    return "已跳过";
+  }
+  if (["failed", "error", "invalid", "denied"].includes(normalized)) {
+    return "失败";
+  }
+  return status;
+}
+
 function describeHealth(value: Record<string, unknown> | null | undefined) {
   if (!value) {
     return "-";
@@ -1717,6 +1917,21 @@ function formatDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+async function downloadTraceCsv(token: string, traceId: string) {
+  try {
+    const csv = await api.downloadTraceResult(token, traceId);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `trace-${traceId}.csv`;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+  } catch {
+    return;
+  }
 }
 
 function errorMessage(error: unknown) {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from backend.app.config import README_TEXT_PATH, TABLES_METADATA_PATH
+from backend.app.config import BUSINESS_KNOWLEDGE_PATH, README_TEXT_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import SemanticParse
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.retrieval import RetrievalContext
@@ -12,12 +12,14 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 
 class PromptBuilder:
     BUSINESS_NOTES_MAX_CHARS = 2400
+    FALLBACK_README_MAX_CHARS = 1200
 
     def __init__(self, semantic_runtime: SemanticRuntime | None = None) -> None:
         self.semantic_runtime = semantic_runtime
         self._tables_metadata = self._load_tables_metadata()
         self._business_notes = self._load_business_notes()
         self._business_note_chunks = self._split_business_notes(self._business_notes)
+        self._business_knowledge = self._load_business_knowledge()
 
     def build_query_plan_prompt(
         self,
@@ -48,12 +50,12 @@ class PromptBuilder:
             "instructions": {
                 "return_format": "json",
                 "constraints": [
-                    "prefer real physical tables over semantic views",
-                    "semantic views are auxiliary hints only and may not exist in the database",
-                    "only use registered domains, real tables, metrics and fields",
-                    "respect base_plan and only refine filters, dimensions, sort, version_context and limit when needed",
-                    "do not invent new metrics, fields or tables outside the allowed lists",
-                    "for follow-up questions, preserve previous subject when the new question is only refining filters or time",
+                    "优先使用真实物理表，不要优先依赖语义视图。",
+                    "语义视图只是辅助提示，真实数据库里可能并不存在。",
+                    "只能使用系统已登记的 domain、真实表、指标和字段。",
+                    "尊重 base_plan，只在确有必要时微调 filters、dimensions、sort、version_context 和 limit。",
+                    "不要发明允许列表之外的新指标、新字段或新表。",
+                    "如果是追问，且当前问题只是在细化筛选或时间范围，应保留之前的主题。",
                 ],
                 "fields": [
                     "subject_domain",
@@ -111,50 +113,108 @@ class PromptBuilder:
                     "context_delta",
                 ],
                 "category_definitions": {
-                    "follow_up": "The current question should inherit the prior session context to execute correctly, and mainly refines or extends the prior analysis.",
-                    "new_related": "The current question stays in the same business domain but is independently executable without inheriting prior context.",
-                    "new_unrelated": "The current question switches to a different business topic and should not inherit prior context.",
-                    "clarification_needed": "The current question still lacks enough information for stable execution or context inheritance judgment.",
+                    "follow_up": "当前问题需要继承上一个会话上下文才能正确执行，本质上是在细化或延续之前的分析。",
+                    "new_related": "当前问题仍属于同一个业务域，但即使不继承上文也可以独立执行。",
+                    "new_unrelated": "当前问题切换到了新的业务主题，不应继承上文。",
+                    "clarification_needed": "当前问题信息仍然不足，暂时无法稳定判断执行方式或是否继承上下文。",
                 },
                 "context_delta_field_guide": {
-                    "add_filters": "Use when the current question adds new filter conditions while keeping the prior topic.",
-                    "remove_filters": "Use when the current question replaces prior filters from the same filter group, such as time or version fields.",
-                    "clear_filters": "Use only when the user explicitly wants to drop prior filters broadly.",
-                    "replace_entities": "Use when the referenced business entity changes within the same topic.",
-                    "replace_metrics": "Use when the user changes the metric, such as switching from plan input to actual output.",
-                    "replace_dimensions": "Use when the user changes the grouping dimension, such as switching to customer split.",
-                    "replace_sort": "Use when the user explicitly changes sort order or ranking preference.",
-                    "replace_time_context": "Use when the user changes only the time scope or time grain.",
-                    "replace_version_context": "Use when the user changes only the version scope.",
-                    "replace_limit": "Use when the user changes only the number of rows to return.",
+                    "add_filters": "当当前问题是在延续原主题，并新增筛选条件时使用。",
+                    "remove_filters": "当当前问题要替换同一类旧筛选时使用，例如时间或版本条件。",
+                    "clear_filters": "只有在用户明确要求大范围移除旧筛选时才使用。",
+                    "replace_entities": "当同一主题下关注的业务实体发生变化时使用。",
+                    "replace_metrics": "当用户切换指标时使用，例如从计划投入切换到实际产出。",
+                    "replace_dimensions": "当用户切换分组维度时使用，例如改为按客户拆分。",
+                    "replace_sort": "当用户明确修改排序方式或排名偏好时使用。",
+                    "replace_time_context": "当用户只修改时间范围或时间粒度时使用。",
+                    "replace_version_context": "当用户只修改版本范围时使用。",
+                    "replace_limit": "当用户只修改返回条数时使用。",
                 },
                 "context_delta_rules": [
-                    "Prefer the smallest valid context_delta instead of rewriting the whole state.",
-                    "If the user only changes time, populate replace_time_context and avoid changing metrics or dimensions.",
-                    "If the user only changes version, populate replace_version_context and avoid changing unrelated fields.",
-                    "If the user changes the metric within the same topic, use replace_metrics.",
-                    "If the user changes the grouping such as '按客户拆分', use replace_dimensions rather than add_filters.",
-                    "If the question_type is not follow_up, return an empty context_delta.",
+                    "优先返回最小可行的 context_delta，不要重写整个状态。",
+                    "如果用户只改时间，就填写 replace_time_context，不要顺带改 metrics 或 dimensions。",
+                    "如果用户只改版本，就填写 replace_version_context，不要改无关字段。",
+                    "如果用户在同一主题下切换指标，使用 replace_metrics。",
+                    "如果用户调整分组方式，例如“按客户拆分”，应使用 replace_dimensions，而不是 add_filters。",
+                    "如果 question_type 不是 follow_up，返回空的 context_delta。",
                 ],
                 "context_delta_examples": self._classification_delta_examples(),
                 "arbitration_checklist": [
-                    "First decide whether the current question truly requires prior session context to execute correctly.",
-                    "Then decide whether the question is independently executable inside the same domain.",
-                    "If the question stays in the same topic but only changes metric, time, version, grouping or filters, prefer follow_up with a minimal context_delta.",
-                    "If the current question switches business topic, prefer new_unrelated and do not inherit context.",
-                    "If the local top two candidates are close, explicitly justify why the winning candidate is more coherent than the runner-up.",
+                    "先判断当前问题是否真的需要依赖上一轮上下文才能正确执行。",
+                    "再判断这个问题在同一业务域内是否可以独立执行。",
+                    "如果问题主题没变，只是改了指标、时间、版本、分组或筛选，优先选择 follow_up，并给出最小 context_delta。",
+                    "如果当前问题切换了业务主题，优先选择 new_unrelated，并且不要继承上下文。",
+                    "如果本地前两名候选很接近，要明确说明为什么第一名比第二名更合理。",
                 ],
                 "business_few_shots": self._classification_business_examples(),
                 "constraints": [
-                    "choose question_type only from allowed_question_types",
-                    "respect structured semantic_parse and session_semantic_diff",
-                    "treat candidate_scores as local evidence to arbitrate rather than recompute from scratch",
-                    "use classification_evidence and arbitration_context to explain why the top candidate wins over the closest alternative",
-                    "if the question is a follow-up refinement, keep inherit_context true",
-                    "if question_type is follow_up, return a context_delta that describes what should be inherited, replaced, added or removed",
-                    "if question_type is not follow_up, keep context_delta empty",
-                    "if the question is independently executable, prefer not to inherit context",
-                    "if classification is clarification_needed, provide clarification_question",
+                    "question_type 只能从 allowed_question_types 中选择。",
+                    "必须尊重结构化的 semantic_parse 和 session_semantic_diff。",
+                    "把 candidate_scores 当作本地证据做裁决，不要完全推翻后从零重算。",
+                    "结合 classification_evidence 和 arbitration_context，解释为什么最终候选优于最接近的备选。",
+                    "如果问题是对上一轮的细化追问，保持 inherit_context=true。",
+                    "如果 question_type 是 follow_up，返回 context_delta，说明哪些内容需要继承、替换、新增或删除。",
+                    "如果 question_type 不是 follow_up，保持 context_delta 为空。",
+                    "如果问题本身可以独立执行，优先不要继承上下文。",
+                    "如果 classification 是 clarification_needed，提供 clarification_question。",
+                ],
+            },
+        }
+
+    def build_relevance_prompt(
+        self,
+        question: str,
+        semantic_parse: SemanticParse,
+        session_state: SessionState | None,
+    ) -> dict:
+        return {
+            "task": "question_relevance_guard",
+            "question": question,
+            "semantic_signals": {
+                "subject_domain": semantic_parse.subject_domain,
+                "matched_metrics": semantic_parse.matched_metrics,
+                "matched_entities": semantic_parse.matched_entities,
+                "requested_dimensions": semantic_parse.requested_dimensions,
+                "filter_fields": [item.field for item in semantic_parse.filters],
+                "time_grain": semantic_parse.time_context.grain,
+                "has_version_context": semantic_parse.version_context is not None,
+                "has_follow_up_cue": semantic_parse.has_follow_up_cue,
+                "has_explicit_slots": semantic_parse.has_explicit_slots,
+            },
+            "session_context": {
+                "subject_domain": session_state.subject_domain if session_state is not None else None,
+                "metrics": session_state.metrics if session_state is not None else [],
+                "dimensions": session_state.dimensions if session_state is not None else [],
+                "filter_fields": [item.field for item in session_state.filters] if session_state is not None else [],
+            },
+            "system_scope": {
+                "supported_domains": self._supported_domains(),
+                "supported_intent": "企业业务数据分析问题，能够映射为针对 inventory、demand、plan_actual、sales_financial、dimension 等数据的只读 SQL。",
+                "in_scope_examples": [
+                    "查 202604 的需求最多的 FGCODE",
+                    "继续，只看上个月库存",
+                    "按客户看销售业绩 top 10",
+                ],
+                "out_of_scope_examples": [
+                    "你好",
+                    "今天天气怎么样",
+                    "写一首诗",
+                    "你是谁",
+                ],
+            },
+            "instructions": {
+                "return_format": "json",
+                "fields": ["decision", "confidence", "reason", "suggested_reply"],
+                "decision_values": {
+                    "business_query": "该输入属于业务 Text2SQL 工作流范围内，即使还需要进一步澄清，也应继续留在流程里。",
+                    "out_of_scope": "该输入不属于本系统的业务数据查询或业务追问。",
+                    "uncertain": "该输入过于模糊，暂时无法高置信度判定为 out_of_scope。",
+                },
+                "constraints": [
+                    "如果输入是业务数据问题，只是信息不完整，应选择 business_query，而不是 out_of_scope。",
+                    "如果当前有会话上下文，且用户是在做简短业务追问，应选择 business_query。",
+                    "问候、闲聊、身份提问、天气、创作、翻译和无关请求都应判定为 out_of_scope。",
+                    "回复要简洁、可执行。",
                 ],
             },
         }
@@ -167,26 +227,30 @@ class PromptBuilder:
             if table_name in self._tables_metadata
         }
         sql_preferences = [
-            "Use query_plan tables as the primary source of truth for actual database objects.",
-            "Use query_plan dimensions, filters, sort and limit exactly unless they would produce invalid SQL.",
+            "以 query_plan.tables 为真实数据库对象的首要依据。",
+            "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。",
         ]
         few_shot = None
         if self._is_demand_plan(query_plan, selected_sources):
             sql_preferences = [
-                "For p_demand/v_demand horizontal demand tables, target demand month is computed from base MONTH plus offset: offset 0 REQUIREMENT_QTY, offset 1 NEXT_REQUIREMENT, offset 2 LAST_REQUIREMENT, offset 3 MONTH4, offset 4 MONTH5, offset 5 MONTH6, offset 6 MONTH7.",
-                "If query_plan filters contain demand_month='YYYYMM', build a CTE with columns PM_VERSION, FGCODE, customer dimensions, demand_month, demand_qty, then filter computed demand_month = 'YYYYMM'. Do not compare the base MONTH to future months as a CASE shortcut.",
-                "When query_plan filters contain PM_VERSION with op latest_n, compute latest distinct versions using SELECT PM_VERSION FROM <source table> GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT count.",
+                "对于 p_demand/v_demand 这类横向需求表，MONTH 是起始需求月份。REQUIREMENT_QTY 对应 base MONTH，NEXT_REQUIREMENT 对应 base MONTH 加 1 个月，LAST_REQUIREMENT 对应 base MONTH 加 2 个月，MONTH4 到 MONTH7 对应 base MONTH 加 3 到 6 个月。",
+                "如果 query_plan.filters 包含 demand_month='YYYYMM'，请先构造一个包含 PM_VERSION、FGCODE、客户维度、demand_month、demand_qty 的 CTE，并确保产出的每个 demand_month 都与筛选值保持相同的紧凑 YYYYMM 格式。",
+                "如果外层 SQL 还要按 PM_VERSION 过滤，或者要和 latest_versions 做 IN/JOIN 比较，那么 demand_unpivot 的每个 UNION ALL 分支都必须显式产出 PM_VERSION，不能在 CTE 外层引用一个未投影出来的 PM_VERSION。",
+                "当 MONTH 在真实表里以紧凑 YYYYMM 编码存储时，不要直接对原始 MONTH 调用 DATE_ADD、ADDDATE、DATE_FORMAT 或类似函数。应先把 MONTH 转成真实日期，再格式化回 YYYYMM；或者对于 REQUIREMENT_QTY 直接保留 base MONTH。",
+                "如果目标 demand_month 就是 base MONTH，本月需求应直接把 REQUIREMENT_QTY 映射到 MONTH，不要做日期运算。",
+                "如果 query_plan.filters 中 PM_VERSION 的 op 是 latest_n，应先用 SELECT PM_VERSION FROM <source table> GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT count 计算最新 N 个版本。",
                 *sql_preferences,
             ]
             few_shot = {
                 "question_pattern": "最新N版P版需求中，YYYYMM需求最多的FGCODE是哪一个",
                 "sql_shape": [
                     "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT N)",
-                    "demand_unpivot AS (UNION ALL rows where demand_month is MONTH plus each offset field)",
+                    "demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand ...)",
                     "SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month='YYYYMM' AND PM_VERSION IN (...) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1",
                 ],
             }
         business_notes = self._business_notes_for_plan(query_plan, selected_sources)
+        business_notes_source = self._business_notes_source_for_plan(query_plan, selected_sources)
         context_budget = {
             "business_notes_max_chars": self.BUSINESS_NOTES_MAX_CHARS,
             "business_notes_mode": "ranked_relevant_chunks",
@@ -196,8 +260,10 @@ class PromptBuilder:
             "selected_sources": selected_sources,
             "tables_metadata_count": len(source_schemas),
             "business_notes_chars": len(business_notes),
+            "business_notes_source": business_notes_source,
             "few_shot_used": few_shot is not None,
             "subject_domain": query_plan.subject_domain,
+            "business_knowledge_entry_ids": self._selected_business_knowledge_ids(query_plan, selected_sources),
         }
         return {
             "task": "sql_generation",
@@ -211,15 +277,15 @@ class PromptBuilder:
             "instructions": {
                 "return_format": "sql_only",
                 "constraints": [
-                    "generate MySQL readonly SQL using real physical tables first",
-                    "prefer WITH CTE over referencing semantic views that may not exist in the database",
-                    "only use real tables from tables_metadata",
-                    "do not reference semantic_demand_unpivot_view or other semantic views unless explicitly requested",
-                    "must include LIMIT",
-                    "if demand tables are horizontal, expand them with a CTE when needed",
-                    "do not use SELECT *",
-                    "aggregate metrics with GROUP BY all query_plan dimensions",
-                    "only return SQL, no markdown or explanation",
+                    "优先基于真实物理表生成 MySQL 只读 SQL。",
+                    "优先使用 WITH CTE，不要依赖数据库里可能不存在的语义视图。",
+                    "只能使用 tables_metadata 中出现的真实表。",
+                    "除非用户明确要求，否则不要引用 semantic_demand_unpivot_view 或其他语义视图。",
+                    "必须包含 LIMIT。",
+                    "如果需求表是横表，需要时请先用 CTE 展开。",
+                    "不要使用 SELECT *。",
+                    "如果有聚合指标，必须按照 query_plan.dimensions 完整 GROUP BY。",
+                    "只返回 SQL，不要返回 markdown 或解释。",
                 ],
                 "sql_preferences": sql_preferences,
                 "few_shot": few_shot,
@@ -237,6 +303,14 @@ class PromptBuilder:
             return README_TEXT_PATH.read_text(encoding="utf-8")
         except Exception:
             return ""
+
+    def _load_business_knowledge(self) -> list[dict]:
+        try:
+            payload = json.loads(BUSINESS_KNOWLEDGE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        entries = payload.get("entries", [])
+        return entries if isinstance(entries, list) else []
 
     def _split_business_notes(self, notes: str) -> list[str]:
         chunks: list[str] = []
@@ -261,6 +335,9 @@ class PromptBuilder:
         return bool(line[:2] and line[0].isdigit() and line[1] in {".", "、", ")"})
 
     def _business_notes_for_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> str:
+        structured_notes = self._structured_business_notes_for_plan(query_plan, selected_sources)
+        if structured_notes:
+            return structured_notes
         if not self._business_note_chunks:
             return ""
         terms = self._business_note_terms(query_plan, selected_sources)
@@ -281,10 +358,53 @@ class PromptBuilder:
                 continue
             selected_chunks.append(chunk)
             total_chars = projected
-            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+            if total_chars >= self.FALLBACK_README_MAX_CHARS:
                 break
         notes = "\n\n".join(selected_chunks)
-        return notes[: self.BUSINESS_NOTES_MAX_CHARS]
+        return notes[: self.FALLBACK_README_MAX_CHARS]
+
+    def _business_notes_source_for_plan(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+    ) -> str:
+        if self._select_business_knowledge_entries(query_plan, selected_sources):
+            return "structured_knowledge"
+        if self._business_note_chunks:
+            return "readme_fallback"
+        return "none"
+
+    def _structured_business_notes_for_plan(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+    ) -> str:
+        selected_entries = self._select_business_knowledge_entries(query_plan, selected_sources)
+        if not selected_entries:
+            return ""
+        sections: list[str] = []
+        total_chars = 0
+        for entry in selected_entries:
+            notes = entry.get("notes", [])
+            if not isinstance(notes, list) or not notes:
+                continue
+            title = str(entry.get("id", "business_note"))
+            tables = ", ".join(entry.get("tables", [])) if isinstance(entry.get("tables"), list) else ""
+            lines = [f"[{title}]"]
+            if tables:
+                lines.append(f"相关表: {tables}")
+            for note in notes:
+                lines.append(f"- {note}")
+            block = "\n".join(lines)
+            separator_chars = 2 if sections else 0
+            projected = total_chars + separator_chars + len(block)
+            if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
+                continue
+            sections.append(block)
+            total_chars = projected
+            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+                break
+        return "\n\n".join(sections)[: self.BUSINESS_NOTES_MAX_CHARS]
 
     def _business_note_terms(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> set[str]:
         terms = {
@@ -298,6 +418,56 @@ class PromptBuilder:
         if query_plan.version_context and query_plan.version_context.field:
             terms.add(query_plan.version_context.field)
         return {str(term).lower() for term in terms if term}
+
+    def _select_business_knowledge_entries(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+    ) -> list[dict]:
+        if not self._business_knowledge:
+            return []
+        terms = self._business_note_terms(query_plan, selected_sources)
+        selected: list[tuple[int, int, dict]] = []
+        for index, entry in enumerate(self._business_knowledge):
+            score = self._score_business_knowledge_entry(query_plan, selected_sources, terms, entry)
+            if score <= 0:
+                continue
+            selected.append((score, -index, entry))
+        selected.sort(reverse=True)
+        return [entry for _score, _negative_index, entry in selected]
+
+    def _selected_business_knowledge_ids(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+    ) -> list[str]:
+        return [
+            str(entry.get("id"))
+            for entry in self._select_business_knowledge_entries(query_plan, selected_sources)
+            if entry.get("id")
+        ]
+
+    def _score_business_knowledge_entry(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+        terms: set[str],
+        entry: dict,
+    ) -> int:
+        score = 0
+        domains = {str(item).lower() for item in entry.get("domains", []) if item}
+        if query_plan.subject_domain and query_plan.subject_domain.lower() in domains:
+            score += 5
+        entry_tables = {str(item).lower() for item in entry.get("tables", []) if item}
+        for source in selected_sources or []:
+            if source.lower() in entry_tables:
+                score += 4
+        for table_name in query_plan.tables:
+            if table_name.lower() in entry_tables:
+                score += 4
+        entry_keywords = {str(item).lower() for item in entry.get("keywords", []) if item}
+        score += sum(1 for term in terms if term in entry_keywords)
+        return score
 
     def _is_demand_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> bool:
         sources = set(selected_sources or []) | set(query_plan.tables)
@@ -331,6 +501,14 @@ class PromptBuilder:
             return None
         return self.semantic_runtime.domain_tables(subject_domain)
 
+    def _supported_domains(self) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+        return sorted(
+            domain_name
+            for domain_name in self.semantic_runtime.query_profiles.keys()
+            if domain_name != "unknown"
+        )
 
     def _allowed_semantic_views(self, subject_domain: str) -> list[str] | None:
         if self.semantic_runtime is None or subject_domain == "unknown":
@@ -451,7 +629,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The topic stays in plan_actual and the user is switching the metric while reusing the same analysis frame.",
+                    "reason": "主题仍然是 plan_actual，用户只是沿用同一分析框架切换指标。",
                     "context_delta": {"replace_metrics": ["actual_output_qty"]},
                 },
             },
@@ -466,7 +644,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The topic remains the same and the user is changing the grouping dimension rather than starting a new request.",
+                    "reason": "主题没有变化，用户只是修改分组维度，并不是发起一个全新的请求。",
                     "context_delta": {"replace_dimensions": ["customer"]},
                 },
             },
@@ -481,7 +659,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "new_unrelated",
                     "inherit_context": False,
-                    "reason": "The user switches from plan_actual analysis to inventory analysis, so prior context should not be inherited.",
+                    "reason": "用户从 plan_actual 分析切换到了 inventory 分析，因此不应继承之前的上下文。",
                     "context_delta": {},
                 },
             },
@@ -496,7 +674,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The user keeps the same inventory topic and only changes the time scope.",
+                    "reason": "用户保持同一个 inventory 主题，只修改了时间范围。",
                     "context_delta": {
                         "replace_time_context": {
                             "grain": "month",
@@ -516,7 +694,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The topic remains demand analysis and the user is only switching the version scope.",
+                    "reason": "主题仍然是 demand 分析，用户只是切换了版本范围。",
                     "context_delta": {
                         "remove_filters": ["PM_VERSION"],
                         "replace_version_context": {"field": "PM_VERSION", "value": "V2"},
@@ -534,7 +712,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The user keeps the same production topic and only replaces the factory filter.",
+                    "reason": "用户保持同一个生产主题，只是替换了工厂筛选条件。",
                     "context_delta": {
                         "remove_filters": ["factory"],
                         "add_filters": [{"field": "factory", "op": "=", "value": "ARRAY"}],
@@ -552,7 +730,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The topic stays the same and the user explicitly asks to drop the prior factory filter.",
+                    "reason": "主题保持不变，且用户明确要求去掉之前的工厂筛选。",
                     "context_delta": {
                         "remove_filters": ["factory_code"],
                     },
@@ -569,7 +747,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The user keeps the same topic and changes the analysis granularity from summary to daily breakdown.",
+                    "reason": "用户保持同一个主题，只是把分析粒度从汇总改成了按天展开。",
                     "context_delta": {
                         "replace_dimensions": ["biz_date"],
                         "replace_time_context": {
@@ -590,7 +768,7 @@ class PromptBuilder:
                 "expected": {
                     "question_type": "follow_up",
                     "inherit_context": True,
-                    "reason": "The topic stays the same and the user only changes ranking preference and result size.",
+                    "reason": "主题保持不变，用户只是调整了排序偏好和返回条数。",
                     "context_delta": {
                         "replace_sort": [{"field": "sales_qty", "order": "desc"}],
                         "replace_limit": 10,

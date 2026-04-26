@@ -16,10 +16,14 @@ class AnswerBuilder:
         sql_validation: ValidationResponse,
     ) -> AnswerPayload:
         if classification.question_type == "invalid":
+            summary = "当前输入不属于当前系统支持的业务数据查询范围。"
+            if classification.reason_code == "invalid_smalltalk":
+                summary = "当前输入不是有效的数据查询问题。"
             return AnswerPayload(
                 status="invalid",
-                summary="当前输入不是有效的数据查询问题。",
-                follow_up_hint="请直接描述要查询的指标、对象和时间范围。",
+                summary=summary,
+                detail=classification.reason,
+                follow_up_hint="请改成库存、需求、计划/实际、销售等业务数据查询，并尽量带上指标、对象和时间范围。",
             )
 
         if classification.need_clarification:

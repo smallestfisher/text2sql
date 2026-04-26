@@ -1,7 +1,22 @@
+export interface DataScope {
+  factories: string[];
+  sbus: string[];
+  bus: string[];
+  customers: string[];
+  products: string[];
+}
+
+export interface FieldVisibilityPolicy {
+  field_name: string;
+  mode: "visible" | "masked" | "hidden";
+}
+
 export interface UserContext {
   user_id: string;
   username?: string | null;
   roles: string[];
+  data_scope: DataScope;
+  field_visibility: FieldVisibilityPolicy[];
   can_view_sql: boolean;
   can_execute_sql: boolean;
   can_download_results: boolean;
@@ -82,6 +97,7 @@ export interface QueryPlan {
   need_clarification: boolean;
   clarification_question?: string | null;
   reason_code?: string | null;
+  analysis_mode?: string | null;
   sort: SortItem[];
   limit: number;
   reason?: string | null;
@@ -128,12 +144,15 @@ export interface RetrievalContext {
   retrieval_channels: string[];
   hits: RetrievalHit[];
   hit_count_by_source: Record<string, number>;
+  hit_count_by_channel: Record<string, number>;
 }
 
 export interface ValidationResponse {
   valid: boolean;
   errors: string[];
   warnings: string[];
+  risk_level?: string;
+  risk_flags?: string[];
 }
 
 export interface TraceStep {
@@ -181,8 +200,11 @@ export interface SessionState {
   metrics: string[];
   dimensions: string[];
   filters: FilterItem[];
+  sort: SortItem[];
+  limit?: number | null;
   time_context?: TimeContext | null;
   version_context?: VersionContext | null;
+  analysis_mode?: string | null;
   last_question_type?: string | null;
   last_query_plan?: QueryPlan | null;
   last_sql?: string | null;
@@ -241,6 +263,25 @@ export interface SessionStateResponse {
   state?: SessionState | null;
 }
 
+export interface SessionWorkspaceResponse {
+  session: ChatSession;
+  messages: ChatMessage[];
+  state?: SessionState | null;
+  latest_response?: ChatResponse | null;
+  latest_trace?: TraceRecord | null;
+  latest_sql_audit?: RuntimeSqlAuditRecord | null;
+  latest_query_logs: RuntimeQueryLogRecord[];
+  trace_artifacts: SessionTraceWorkspaceRecord[];
+}
+
+export interface SessionTraceWorkspaceRecord {
+  trace_id: string;
+  response?: ChatResponse | null;
+  trace?: TraceRecord | null;
+  sql_audit?: RuntimeSqlAuditRecord | null;
+  query_log?: RuntimeQueryLogRecord | null;
+}
+
 export interface RuntimeQueryLogRecord {
   trace_id: string;
   session_id?: string | null;
@@ -250,7 +291,11 @@ export interface RuntimeQueryLogRecord {
   subject_domain?: string | null;
   answer_status?: string | null;
   plan_valid?: boolean | null;
+  plan_risk_level?: string | null;
+  plan_risk_flags?: string[];
   sql_valid?: boolean | null;
+  sql_risk_level?: string | null;
+  sql_risk_flags?: string[];
   executed?: boolean | null;
   row_count?: number | null;
   warnings: string[];
@@ -268,7 +313,11 @@ export interface RuntimeSqlAuditRecord {
   trace_id: string;
   sql_text?: string | null;
   plan_valid: boolean;
+  plan_risk_level?: string | null;
+  plan_risk_flags?: string[];
   sql_valid: boolean;
+  sql_risk_level?: string | null;
+  sql_risk_flags?: string[];
   executed: boolean;
   row_count?: number | null;
   warnings: string[];
@@ -370,6 +419,8 @@ export interface UserUpsertPayload {
   username: string;
   password?: string;
   roles: string[];
+  data_scope: DataScope;
+  field_visibility: FieldVisibilityPolicy[];
   can_view_sql: boolean;
   can_execute_sql: boolean;
   can_download_results: boolean;

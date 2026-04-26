@@ -20,6 +20,33 @@ from backend.app.models.api import (
 router = APIRouter(prefix="/api/query", tags=["query"])
 
 
+def _sync_classification_with_query_plan(classification, query_plan) -> None:
+    if classification.question_type == "invalid":
+        return
+    if not query_plan.need_clarification:
+        return
+    query_plan.question_type = "clarification_needed"
+    classification.question_type = "clarification_needed"
+    classification.need_clarification = True
+    classification.inherit_context = False
+    classification.reason = query_plan.reason or classification.reason
+    classification.reason_code = query_plan.reason_code or classification.reason_code
+    classification.clarification_question = (
+        query_plan.clarification_question
+        or classification.clarification_question
+        or query_plan.reason
+        or "请补充查询目标、时间范围或统计口径。"
+    )
+
+
+def _sql_skip_warning(query_plan) -> str | None:
+    if query_plan.question_type == "invalid":
+        return "sql generation skipped: query plan is invalid"
+    if query_plan.need_clarification:
+        return "sql generation skipped: query plan requires clarification"
+    return None
+
+
 @router.post("/classify", response_model=ClassificationResponse)
 def classify_query(
     request: PlanRequest,
@@ -61,6 +88,7 @@ def create_query_plan(
         query_plan=query_plan,
         user_context=request.user_context,
     )
+    _sync_classification_with_query_plan(classification, query_plan)
     return PlanResponse(
         classification=classification,
         semantic_parse=semantic_parse,
@@ -111,7 +139,8 @@ def generate_sql(
     plan_warnings = plan_result.warnings
     sql_prompt = None
     generated_sql = None
-    if not plan_errors:
+    skip_warning = _sql_skip_warning(query_plan)
+    if not plan_errors and skip_warning is None:
         sql_prompt = container.prompt_builder.build_sql_prompt(query_plan)
         generated_sql = container.llm_client.generate_sql_hint(sql_prompt)
     required_filter_fields = container.permission_service.required_filter_fields(
@@ -122,7 +151,9 @@ def generate_sql(
     sql_warnings: list[str] = []
     sql_risk_level = "low"
     sql_risk_flags: list[str] = []
-    if generated_sql is None and not plan_errors:
+    if skip_warning is not None:
+        sql_errors = [skip_warning]
+    if generated_sql is None and not plan_errors and skip_warning is None:
         sql_errors = ["sql is empty"]
     elif generated_sql is not None:
         sql_result = container.sql_validator.validate_detailed(
@@ -162,7 +193,7 @@ def generate_sql(
     validation = ValidationResponse(
         valid=not (plan_errors or sql_errors),
         errors=plan_errors + sql_errors,
-        warnings=permission_warnings + plan_warnings + sql_warnings,
+        warnings=permission_warnings + plan_warnings + ([skip_warning] if skip_warning else []) + sql_warnings,
         risk_level=sql_risk_level,
         risk_flags=sql_risk_flags,
     )

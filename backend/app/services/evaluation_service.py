@@ -34,6 +34,7 @@ class EvaluationService:
         session_repository=None,
         runtime_log_repository=None,
         auth_service=None,
+        response_restore_service=None,
     ) -> None:
         self.orchestrator = orchestrator
         self.eval_cases_path = eval_cases_path
@@ -41,6 +42,7 @@ class EvaluationService:
         self.session_repository = session_repository
         self.runtime_log_repository = runtime_log_repository
         self.auth_service = auth_service
+        self.response_restore_service = response_restore_service
         self.eval_cases_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.eval_cases_path.exists():
             self.eval_cases_path.write_text('[]\n', encoding='utf-8')
@@ -498,6 +500,8 @@ class EvaluationService:
         return session_questions
 
     def _build_original_response_snapshot(self, trace_id: str):
+        if self.response_restore_service is not None:
+            return self.response_restore_service.build_from_trace_id(trace_id)
         if self.runtime_log_repository is None or not hasattr(self.orchestrator, "audit_service"):
             return None
         trace = self.orchestrator.audit_service.get_trace(trace_id)

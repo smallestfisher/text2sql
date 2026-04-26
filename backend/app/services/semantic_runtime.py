@@ -634,6 +634,8 @@ class SemanticRuntime:
         profile = self.query_profiles.get(query_plan.subject_domain, {})
         compiled = query_plan.model_copy(deep=True)
 
+        compiled = self._apply_explicit_source_table(compiled)
+
         if not compiled.semantic_views:
             compiled.semantic_views = profile.get("default_semantic_views", [])
 
@@ -680,6 +682,35 @@ class SemanticRuntime:
             compiled.clarification_question = rule.get("clarification_question")
             break
 
+        return compiled
+
+    def _apply_explicit_source_table(self, query_plan: QueryPlan) -> QueryPlan:
+        compiled = query_plan.model_copy(deep=True)
+        explicit_source = next(
+            (
+                item.value
+                for item in compiled.filters
+                if item.field in {"source_table", "demand_source"}
+                and item.op == "="
+                and isinstance(item.value, str)
+                and self.is_known_table(item.value)
+            ),
+            None,
+        )
+        if not explicit_source:
+            return compiled
+
+        allowed_domain_tables = set(self.domain_tables(compiled.subject_domain))
+        if allowed_domain_tables and explicit_source not in allowed_domain_tables:
+            return compiled
+
+        demand_tables = {"p_demand", "v_demand"}
+        other_tables = [
+            table
+            for table in compiled.tables
+            if table != explicit_source and table not in demand_tables
+        ]
+        compiled.tables = [explicit_source, *other_tables]
         return compiled
 
     def resolve_join_path(self, tables: list[str]) -> list[str]:

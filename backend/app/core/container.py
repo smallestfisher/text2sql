@@ -11,6 +11,7 @@ from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
 from backend.app.services.auth_service import AuthService
+from backend.app.services.chat_response_restore_service import ChatResponseRestoreService
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.evaluation_service import EvaluationService
 from backend.app.services.execution_cache_service import ExecutionCacheService
@@ -30,6 +31,7 @@ from backend.app.services.semantic_loader import SemanticLayerLoader
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
+from backend.app.services.session_workspace_service import SessionWorkspaceService
 from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_executor import SqlExecutor
 from backend.app.services.sql_validator import SqlValidator
@@ -127,6 +129,18 @@ class AppContainer:
         self.metadata_repository = FileMetadataRepository()
         self.session_service = SessionService(self.session_repository)
         self.audit_service = AuditService(self.audit_repository)
+        self.chat_response_restore_service = ChatResponseRestoreService(
+            audit_service=self.audit_service,
+            runtime_log_repository=self.runtime_log_repository,
+            permission_service=self.permission_service,
+        )
+        self.session_workspace_service = SessionWorkspaceService(
+            session_service=self.session_service,
+            runtime_log_repository=self.runtime_log_repository,
+            audit_service=self.audit_service,
+            response_restore_service=self.chat_response_restore_service,
+            permission_service=self.permission_service,
+        )
         self.feedback_service = FeedbackService(self.feedback_repository)
         self.metadata_service = MetadataService(
             metadata_repository=self.metadata_repository,
@@ -161,4 +175,5 @@ class AppContainer:
             session_repository=self.session_repository,
             runtime_log_repository=self.runtime_log_repository,
             auth_service=self.auth_service,
+            response_restore_service=self.chat_response_restore_service,
         )

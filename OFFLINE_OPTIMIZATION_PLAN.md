@@ -2,35 +2,38 @@
 
 ## 1. 目标
 
-在没有真实数据和真实问题的阶段，不能证明业务准确率，但可以先把工程基础打牢：
+在没有真实数据和真实问题的阶段，不能证明最终业务准确率，但可以先把工程基础打牢：
 
 - LLM SQL 生成上下文可控
 - 失败能定位到具体层
 - 合成问题能覆盖主要交互形态
 - validator 能兜住明显风险
-- 真实问题到来后能快速沉淀为 replay / eval case
+- 真实问题到来后能快速沉淀为 replay / eval case / example
 
-## 2. 执行顺序
+## 2. 当前已经完成的基础
 
-### P0 Prompt 上下文治理
+下面这些基础能力已经落到当前实现：
 
 - SQL prompt 只带 Query Plan 命中的真实表结构
-- `readme.txt` 按业务片段选择，不全量进入 prompt
-- few-shot 按场景进入 prompt，不全局注入
-- trace 里记录本次 prompt 选了哪些表、业务说明长度、是否使用 few-shot
+- `business_knowledge.json` 是主业务知识来源，不做全量注入
+- `readme.txt` 仅作为 fallback 文本说明
+- few-shot 按场景命中，不做全局注入
+- `build_sql_prompt` trace 已带 `context_budget` 和 `context_summary`
+- query log 和 replay diff 已能看到 prompt context summary
+- `workspace` 聚合接口已成为前端会话恢复主入口
+- `response_snapshot` 已支撑历史会话恢复
+- demand 横表已补专项 prompt 指令和 validator 校验
 
-验收：
+## 3. 后续执行顺序
 
-- `build_sql_prompt` payload 带 `context_budget` 和 `context_summary`
-- chat trace 的 `build_sql_prompt` 步骤能看到上下文摘要
+### P0 合成评测覆盖
 
-### P1 合成评测覆盖
-
-补充不依赖真实数据的合成 case：
+继续补不依赖真实数据的合成 case：
 
 - 多轮追问时间替换
 - 多轮追问版本替换
-- 需求横表目标月份
+- demand 横表目标月份
+- latest N 版本
 - TopN 排序
 - 澄清问题
 - 无效问题
@@ -39,59 +42,62 @@
 验收：
 
 - `eval/evaluation_cases.json` 有明确 `scenario` 和 `coverage_tags`
-- 离线回归能跑分类、计划和权限层
+- 离线回归能稳定覆盖分类、规划和权限层
 
-### P2 Validator 和 Repair 可调试性
+### P1 Validator 和 Repair 可调试性
 
-- validator 错误信息要可读、可被 LLM repair 使用
-- SQL validation trace 记录错误、warning、risk flags
-- repair 成功/失败要在 trace 中可见
+继续增强：
+
+- validator 错误信息的可读性
+- SQL validation trace 对 `errors / warnings / risk_flags` 的可观察性
+- repair 成功 / 失败差异的可追踪性
 
 验收：
 
-- `validate_sql` trace metadata 包含 errors / warnings / risk_flags
-- repair 结果可从 warnings 或 trace metadata 观察
+- `validate_sql` trace metadata 能稳定带上错误、warning 和风险标记
+- replay diff 能清晰看到 SQL validation 和执行状态差异
 
-### P3 Replay / Eval 闭环
+### P2 Replay / Eval 闭环
 
-- 失败 trace 可物化为 eval case
-- replay 后能看到分类、计划、SQL、执行差异
-- 管理端能查看最近失败并复跑
-- 查询日志能看到 prompt 上下文摘要，包括选中数据源、业务说明长度、few-shot 使用情况
-- replay diff 能比较 prompt 上下文是否变化
+继续增强：
+
+- 失败 trace 更方便物化为 eval case 或 example
+- replay 后更明确展示分类、计划、SQL、执行差异
+- 管理端更容易筛选失败样本
 
 验收：
 
 - 真实问题进入后，能按 `trace_id -> materialize-case -> replay` 闭环
-- 管理端最近查询日志展示 prompt context summary
-- 复跑结果展示 prompt context 是否变化
+- 管理端和日志里都能看到 prompt context summary
 
-### P4 文档和使用边界
+### P3 文档与边界治理
 
-- 文档明确不能天然覆盖所有真实场景
-- 文档说明真实场景覆盖依赖样本矩阵和持续回归
-- 文档说明不能通过无限加 prompt 解决所有问题
+继续保持：
+
+- 文档明确当前是 LLM-first，不回退到规则主驱动
+- 文档明确不能天然覆盖全部真实场景
+- 文档明确不能靠无限加 prompt 解决所有问题
 
 验收：
 
+- `README.md`
+- `TEXT2SQL_ARCHITECTURE.md`
 - `REAL_SCENARIO_DEBUG_GUIDE.md`
 - `REAL_DATA_TUNING_PLAYBOOK.md`
-- `TEXT2SQL_ARCHITECTURE.md`
 
-## 3. 不做事项
+## 4. 不做事项
 
 当前阶段不做：
 
 - 重新引入本地 SQL 模板生成器
-- 创建真实数据库 semantic view
+- 创建真实数据库 semantic view 作为运行时前置条件
 - 为单个假问题写业务 SQL 分支
 - 在没有真实样本时接入重型向量库
 - 承诺覆盖全部长尾业务问题
 
-## 4. 当前优先执行项
+## 5. 当前优先执行项
 
-1. Prompt 上下文摘要进入 payload 和 trace
-2. 补合成 eval case
-3. 增强 SQL validation trace metadata
-4. 更新 README 文档入口
-5. 跑 `compileall`、前端 build、离线回归
+1. 继续补合成 eval case
+2. 继续增强 replay diff 和 validator 观测
+3. 继续优化 prompt 预算和上下文选择
+4. 在 CI 中稳定跑 `compileall`、前端 build 和离线回归

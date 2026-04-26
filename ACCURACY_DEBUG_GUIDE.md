@@ -2,89 +2,87 @@
 
 ## 1. 目的
 
-本文面向当前仓库已经实现的 LLM-first Text2SQL 主链路，说明在用户输入一个问题之后，应该如何沿现有架构定位问题、提升准确度。当前优先把改进沉淀到真实 schema 上下文、业务说明、few-shot 示例和 SQL 治理层，而不是把所有场景写成 Python 规则或 SQL 模板。
+本文面向当前已经落地的 LLM-first Text2SQL 主链路，说明一个问题进来后，应该怎么判断错在哪一层，以及应该把修复沉淀到哪里。
 
-适用范围：
+当前默认原则是：
 
-- 当前 `backend/app/services/orchestrator.py` 主链路
-- 当前前端管理端、会话详情、Trace 和 replay 能力
-- 当前 `tables.json + readme.txt + examples + query_plan + LLM SQL generation + sql validation` 这套结构
+- 优先修真实 schema 上下文
+- 优先修业务知识和 few-shot
+- 优先修 Query Plan 和 validator 的边界
+- 不把问题重新改成 Python 规则或本地 SQL 模板
 
-## 2. 当前链路怎么看
+## 2. 先看哪条链路
 
-一次 `POST /api/chat/query` 进入系统后，当前主链路大致是：
+一次 `POST /api/chat/query` 的关键步骤大致是：
 
-1. `chat.py` 接口接收问题和用户上下文
-2. `orchestrator.py` 生成 trace，并加载 `session_state`
-3. `query_planner.py` 先做 `semantic_parse`，再做问题分类和基础 Query Plan
-4. `retrieval_service.py` 基于 parse 结果做 example / metric / knowledge / vector 检索，semantic view 仅作为辅助上下文
-5. `llm_client + query_plan_compiler.py` 尝试给 Query Plan 注入 LLM hint，并做边界收缩
-6. `permission_service.py` 把权限过滤条件注入 Query Plan
-7. `query_plan_validator` 校验 Query Plan
-8. `llm_client.py` 基于真实表结构、业务说明和 Query Plan 生成 SQL
-9. `sql_validator.py` 和 `sql_ast_validator.py` 校验 SQL；失败时触发 LLM repair
-10. `sql_executor.py` 执行 SQL
-11. `answer_builder.py` 组织回答
-12. `runtime_log_repository`、`audit_service`、`session_service` 落日志、trace、会话消息、SQL 审计和快照
+1. 读取当前 `session_state`
+2. 语义解析，提指标、实体、时间、版本和 follow-up 信号
+3. 问题分类，判断首轮新问、同域新问、跨域新问、追问、澄清或无效问题
+4. 对低信号问题触发 LLM relevance guard
+5. 生成基础 Query Plan
+6. 检索 example / knowledge / metric，辅助收敛上下文
+7. 注入权限过滤条件
+8. 根据真实表结构、结构化业务知识和 few-shot 生成 SQL prompt
+9. LLM 生成 SQL
+10. validator 校验 SQL，必要时触发一次 repair
+11. 执行 SQL
+12. 组织回答、落查询日志、落 trace、落 response snapshot
 
-因此，准确度问题不要笼统看成“模型答错了”，而要先判定它属于哪一层：
+因此，“答错了”本质上通常属于下面几类之一：
 
 - 语义解析错
-- 问题分类错
-- LLM SQL prompt 上下文不足
+- 分类错
+- prompt 上下文不对
 - Query Plan 错
 - 权限注入影响结果
-- LLM SQL 生成错或 repair 未收敛
-- SQL 校验过松或过严
-- 执行环境或底层数据口径问题
+- SQL 生成错
+- validator 误拦或漏拦
+- 数据本身或执行环境有问题
 
 ## 3. 调试入口
 
-当前仓库已经有几类可直接用的调试入口。
-
 ### 3.1 用户工作台
 
-前端用户工作台可直接看：
+当前前端工作台已经足够做单题排查：
 
-- 回答结果
-- SQL 面板
-- Trace 面板
-- State 面板
+- 消息流里可以直接看每轮 assistant 的结果卡
+- 右侧详情栏可以切到 `结果 / SQL / Trace / 状态`
+- 普通用户也能看详情栏，但 SQL 是否可见受 `can_view_sql` 控制
 
-适合做单次问题的快速定位。
+如果问题是“为什么这轮回答不准”，优先直接在消息对应的结果卡点 `查看详情`。
 
 ### 3.2 管理端
 
-管理端目前可看：
+管理端适合做历史问题和批量问题排查：
 
-- 最近查询日志
-- SQL 审计
-- 运行状态
-- 最近运行会话
-- 失败日志复跑
+- 最近 query logs
+- SQL audit
+- runtime 状态
+- replay
+- materialize case / materialize example
 
-其中最新补上的 replay 能力最重要，因为它让你可以直接对历史 `trace_id` 复跑，避免“问题已经过去了，但无法复现”。
+其中最重要的是 replay，因为它能让你基于原 `trace_id` 复跑，不用靠人工重复构造环境。
 
-### 3.3 API 级别调试
+### 3.3 API
 
-当前可直接用的接口包括：
+当前最常用的调试接口是：
 
 - `POST /api/chat/query`
-- `GET /api/chat/query-logs`
+- `GET /api/chat/sessions/{session_id}/workspace`
 - `GET /api/chat/traces/{trace_id}`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/retrieval`
 - `GET /api/chat/traces/{trace_id}/export`
 - `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+- `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
+- `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
 - `POST /api/admin/eval/cases/{case_id}/replay`
 
-如果问题是线上历史问题，优先走 `trace_id -> replay`；如果是新问题，优先直接在会话里发问，然后拿 trace 看链路。
+如果问题是新问题，优先先发起一次真实查询；如果问题是历史问题，优先走 `trace_id -> replay`。
 
-## 4. 先判断是哪一层出错
+## 4. 先分流，不要先改 SQL
 
-### 4.1 回答状态先分流
-
-先看返回里的这些字段：
+先看这些字段：
 
 - `classification.question_type`
 - `classification.subject_domain`
@@ -93,275 +91,271 @@
 - `sql_validation.valid`
 - `execution.status`
 
-粗分规则：
+推荐的粗分规则：
 
-- `clarification_needed` 或 `invalid`：优先看分类和语义解析，不要先改 SQL
-- `plan_validation` 失败：优先看 Query Plan、语义域、指标和视图选择
-- `sql_validation` 失败：优先看 SQL 生成和字段映射
-- `execution.db_error / timeout / empty_result`：优先看 SQL、权限注入、时间条件、底表口径
-- 执行成功但答案不准：优先看真实 schema、业务说明、few-shot、Query Plan 和 SQL 口径
+- `invalid`：先看 relevance guard 是否把问题判成非业务查询
+- `clarification_needed`：先看语义槽位是否不足，不要先改 SQL
+- `plan_validation.valid = false`：先看 Query Plan、表选择、维度、过滤、时间、版本
+- `sql_validation.valid = false`：先看 SQL 生成、字段引用、权限过滤和 validator
+- `execution.status = db_error`：先看 SQL 语法、字段大小写、真实库字段是否存在
+- `execution.status = empty_result`：先看过滤条件、时间、版本、权限和底层数据
+- 执行成功但答案不准：优先看 schema、业务口径、few-shot、聚合口径和排序
 
-### 4.2 先看 Trace，不要先猜
+## 5. 先看 workspace 和 trace
 
-`trace` 里至少能回答几个关键问题：
+### 5.1 `workspace` 看什么
 
-- 会话状态是否正确加载
-- 检索是否命中相关 example / metric / knowledge
-- LLM hint 是否被接受，还是被 reject 后回退
-- 计划校验和 SQL 校验在哪一步失败
+优先看：
 
-如果 trace 显示 SQL 校验失败或 repair 失败，先看 prompt 上下文是否缺少真实表字段、业务说明或 few-shot 示例，再看 SQL 校验器是否过严。不要把这类问题改成 Python 模板优先，否则会退回维护不完的规则系统。
+- `messages`
+- `state`
+- `latest_response`
+- `latest_trace`
+- `latest_sql_audit`
+- `trace_artifacts`
 
-## 5. 分层调试方法
+为什么先看这个：
 
-### 5.1 语义解析层
+- 它是当前前端真正消费的聚合接口
+- 它能直接告诉你“前端展示错了”还是“后端恢复错了”
+- 它能确认每条 assistant 消息是否挂到了正确的 `trace_id`
 
-代码入口：
+如果左侧消息对，但右侧详情不对，先看 `workspace` 返回是否已经错位，再决定是查后端恢复逻辑还是查前端状态消费。
 
-- `backend/app/services/semantic_parser.py`
-- `backend/app/services/semantic_runtime.py`
+### 5.2 `trace` 看什么
+
+当前最有价值的 trace 步骤通常是：
+
+- `terminal_gate`
+- `retrieve`
+- `compile_plan`
+- `build_sql_prompt`
+- `validate_sql`
+- `execute`
+- `response_snapshot`
 
 重点看：
 
-- `matched_metrics` 是否识别对
-- `matched_entities` 是否识别对
-- `filters` 是否提对
-- `time_context` / `version_context` 是否提对
-- `subject_domain` 是否推断对
+- 是否在 SQL 前被 `invalid` 或 `clarification_needed` 短路
+- 检索是否命中相关 example / knowledge
+- `build_sql_prompt.metadata.context_summary` 里本次选了哪些表、知识块和 few-shot
+- validator 到底是误拦还是正确拦
+- `response_snapshot` 是否已经正确持久化
+
+## 6. 分层调试方法
+
+### 6.1 语义解析层
+
+看：
+
+- `semantic_parse.matched_metrics`
+- `semantic_parse.matched_entities`
+- `semantic_parse.filters`
+- `semantic_parse.time_context`
+- `semantic_parse.version_context`
+- `semantic_parse.subject_domain`
 
 典型症状：
 
-- 明明问库存，却跑到计划域
-- 时间没提出来，导致全表扫
-- 版本口径没提出来，导致结果偏大
-- 指标别名没识别，后续全链路都开始漂
+- 明明问库存，却识别成计划/实际
+- 时间没提出来，导致宽范围扫描
+- 版本没提出来，导致结果偏大
+- 指标别名没识别，后面全链路都漂
 
-优先修复方式：
+优先修：
 
-- 给语义层补指标别名、实体别名、domain inference 特征
-- 给时间/版本提取规则补更稳定的表达
-- 不要先在 SQL 生成器里硬写一个 if 去救这个问题
+- 指标别名、实体别名、domain inference
+- 时间/版本提取
+- follow-up cue
 
-### 5.2 问题分类层
+### 6.2 分类层
 
-代码入口：
+看：
 
-- `backend/app/services/question_classifier.py`
-- `backend/app/services/query_planner.py`
-
-重点看：
-
-- 当前问题被判成 `new / follow_up / clarification_needed / invalid` 是否合理
-- `inherit_context` 是否正确
-- `context_delta` 是否符合预期
-- 是否因为分类器过保守，导致过度澄清
+- `classification.question_type`
+- `classification.inherit_context`
+- `classification.context_delta`
+- `classification.reason_code`
 
 典型症状：
 
-- 用户明显在追问，却被当成新问题
-- 用户已经切题到新域，却还继承老上下文
-- 明明信息足够，却总被打成 `clarification_needed`
+- 明明是追问，却被当成新问题
+- 明明切到新域，却还继承老上下文
+- 信息足够，却总被打成 `clarification_needed`
+- 无关问题没有被 relevance guard 挡住
 
-优先修复方式：
+优先修：
 
-- 先补 `classification_rules`、follow-up cue、澄清文案和 `session_semantic_diff`
-- 再考虑是否需要打开或调整 classification LLM
-- 不要直接在前端把问题改写后再塞给后端，这会污染真实链路
+- `classification_rules`
+- follow-up 线索
+- 澄清文案
+- relevance guard 的判断边界
 
-### 5.3 检索层
+### 6.3 检索与 prompt 上下文层
 
-代码入口：
+看：
 
-- `backend/app/services/retrieval_service.py`
-- `backend/app/services/vector_retriever.py`
-
-重点看：
-
-- top hits 是否命中了正确 example / metric / knowledge
-- `retrieval_terms` 是否合理
-- `retrieval_channels` 和 `hit_count_by_source` 是否异常
+- `retrieval_terms`
+- `retrieval_channels`
+- hits 命中了哪些 example / knowledge
+- `build_sql_prompt.metadata.context_summary`
 
 典型症状：
 
-- 问题被分到对的域，但命中的 example 很偏
-- 真实表或业务说明没有进入有效 prompt 上下文
-- example 命中很多，但都是低质量样例
+- 选对了业务域，但没有把关键知识块放进 prompt
+- few-shot 命中了很多，但都不相关
+- 同一个问题多次执行时，上下文摘要波动很大
 
-优先修复方式：
+优先修：
 
-- 补 example，尤其是高频问法和 follow-up 样例
-- 补 `tables.json` 字段说明和 `readme.txt` 业务口径
-- 补 metric alias 和高质量 example
-- 如果问题是召回排序错，不要先改 SQL 生成
+- `tables.json`
+- `business_knowledge.json`
+- example / few-shot
+- PromptBuilder 的上下文选择规则
 
-### 5.4 Query Plan 层
+### 6.4 Query Plan 层
 
-代码入口：
+看：
 
-- `backend/app/services/query_planner.py`
-- `backend/app/services/query_plan_compiler.py`
-- `backend/app/services/query_plan_validator.py`
-
-重点看：
-
-- `tables / metrics / dimensions / filters / time_context` 是否稳定
-- LLM plan hint 是否被接受
-- fallback 到本地 planner 后是否恢复正常
-
-典型症状：
-
-- 指标对，但候选真实表或字段上下文不对
-- 维度没带，导致 group by 不对
-- filter 丢失，导致结果集过大
-- LLM hint 想加越界字段，被 reject 后又退回保守版本
-
-优先修复方式：
-
-- 优先增强 Query Plan 的可解释性和约束
-- 补真实表、字段、时间、版本和权限上下文
-- 如果某类问题稳定失败，优先沉淀到 `readme.txt`、few-shot 或 validator，而不是新增 SQL 模板
-
-### 5.5 权限层
-
-代码入口：
-
-- `backend/app/services/permission_service.py`
-- `backend/app/services/policy_engine.py`
-
-重点看：
-
-- Query Plan 是否被注入了额外权限过滤条件
-- `required_filter_fields` 是否和 SQL 对齐
-- 结果是否因字段 masking / hidden 被裁掉
+- `tables`
+- `metrics`
+- `dimensions`
+- `filters`
+- `time_context`
+- `version_context`
+- `sort`
+- `limit`
 
 典型症状：
 
-- 管理员看到数据正常，普通用户为空
-- SQL 校验一直报缺少权限过滤条件
-- 结果字段缺失，其实是字段可见性策略生效
+- 指标对，但表选错了
+- 维度缺失，导致 group by 不对
+- filter 丢失，结果集过大
+- latest_n / 版本条件没落下来
 
-优先修复方式：
+优先修：
 
-- 先核对用户角色、data scope、field visibility
-- 再核对 domain 的 `permission_scope_fields` 是否配对
-- 不要把权限问题误判成模型理解问题
+- Query Plan 约束
+- 真实表和字段上下文
+- 版本/时间提取
+- plan validator
 
-### 5.6 SQL 生成与校验层
+### 6.5 权限层
 
-代码入口：
+看：
 
-- `backend/app/services/llm_client.py`
-- `backend/app/services/prompt_builder.py`
-- `backend/app/services/sql_validator.py`
-- `backend/app/services/sql_ast_validator.py`
+- Query Plan 里是否注入了权限过滤
+- validator 是否因为缺权限字段报错
+- SQL 是否真的包含必须的过滤条件
+- 返回结果是否被 field visibility 裁掉
 
-重点看：
+典型症状：
 
-- SQL 是否来自 LLM-first 生成链路
+- 管理员能查到，普通用户为空
+- SQL 校验总报缺少权限过滤
+- 结果字段缺失，其实是被隐藏或脱敏
+
+优先修：
+
+- 用户角色、data scope、field visibility
+- `permission_scope_fields`
+- 权限注入和 SQL 校验的一致性
+
+### 6.6 SQL 生成与校验层
+
+看：
+
+- SQL 是否只用了真实表和字段
 - 是否引用了 Query Plan 外的 source
 - 是否缺过滤条件、group by、sort、time filter、limit
+- validator 报错是否足够明确，便于 repair
 
 典型症状：
 
-- SQL 字段名错
-- SQL 用了错误的 source
-- SQL 聚合正确但 group by 漏维度
-- SQL 没有时间条件，扫描过大
+- 字段名错
+- 来源表错
+- 聚合对了但 group by 漏维度
+- 缺时间条件或 limit
 
-优先修复方式：
+优先修：
 
-- 优先修 `tables.json`、`readme.txt`、metric 定义和 few-shot
-- 再补 SQL validator 的一致性检查和 repair 错误信息
-- 不要重新引入本地 SQL 模板生成器去堆业务 case 分支
+- `tables.json`
+- `business_knowledge.json`
+- few-shot
+- PromptBuilder 的通用指令
+- validator 和 repair 错误信息
 
-### 5.7 执行与结果层
+### 6.7 执行与结果层
 
-代码入口：
+看：
 
-- `backend/app/services/sql_executor.py`
-- `backend/app/services/answer_builder.py`
-
-重点看：
-
-- `execution.status` 是什么
-- `row_count` 是否异常
-- 是否被 truncate
-- SQL 在业务库上是否真实能返回结果
+- `execution.status`
+- `row_count`
+- `elapsed_ms`
+- `truncated`
+- 真实业务库是否存在预期数据
 
 典型症状：
 
 - SQL 合法但没有数据
-- 数据被截断后回答误导用户
-- 数据库慢查询导致 timeout
+- 慢查询导致 timeout
+- 结果被截断后误读
 
-优先修复方式：
+优先修：
 
 - 补时间范围和默认 limit
-- 补更清晰的时间范围、业务口径和 prompt 约束，减少无边界扫表
-- 补执行结果状态说明，避免把“执行成功但空结果”误读成“回答正确”
+- 补清晰业务口径
+- 优化 SQL 风险治理
 
-## 6. 提高准确度时的优先级顺序
+## 7. demand 横表专项检查
+
+对 `p_demand` / `v_demand` 类问题，排查时务必确认：
+
+- 目标月份不是简单的 `MONTH = YYYYMM`
+- `MONTH` 是起始月份，不同列对应不同偏移月
+- latest N 版本逻辑是否先取了最新版本集合
+- 展开的 CTE 是否显式带了 `PM_VERSION`
+- 对紧凑 `YYYYMM` 是否做了正确日期转换
+
+这类问题如果不准，优先修：
+
+- `business_knowledge.json`
+- demand few-shot
+- PromptBuilder 的 demand 指令
+- SqlValidator 的 demand 相关校验
+
+不要回退到预建 `semantic_demand_unpivot_view` 作为运行时必需对象。
+
+## 8. 单题调试标准流程
+
+建议固定按下面步骤走：
+
+1. 在工作台或 API 里复现问题，拿到 `session_id` 和 `trace_id`
+2. 看 `workspace`，确认消息、详情和 `trace_artifacts` 是否一致
+3. 看 `trace`、`sql-audit` 和 `retrieval`
+4. 判断问题属于解析、分类、上下文、Query Plan、SQL、validator、执行还是权限
+5. 按最小必要原则修 `tables.json`、`business_knowledge.json`、few-shot、PromptBuilder 或 validator
+6. 用 `replay` 复跑同一条 `trace_id`
+7. 对比 replay diff，尤其看分类、Query Plan、SQL、执行状态和 prompt context summary 是否变化
+8. 如果问题具有代表性，物化成 eval case 或 example
+
+## 9. 修复优先级
 
 建议严格按这个顺序修：
 
 1. 先确认是不是数据口径或权限问题
 2. 再确认语义解析和分类是否正确
-3. 再看 prompt 是否拿到了正确 schema、业务说明和样例
+3. 再看 prompt 是否拿到了正确 schema、业务说明和 few-shot
 4. 再看 Query Plan 是否稳定
-5. 再看 SQL 生成和校验
-6. 最后才考虑 prompt 或 LLM 参数微调
+5. 再看 SQL 生成和 validator
+6. 最后才考虑模型参数或临时补丁
 
-原因很简单：
+原因是：
 
-- 如果前面层错了，后面层再聪明也只能在错误目标上优化
-- schema、业务说明和示例库的修复可以复用到一类问题
-- 只针对单题的硬编码补丁通常只能救一个问题，且很难维护
-
-## 7. 推荐的提准动作
-
-### 7.1 最优先做的
-
-- 补高频业务问法 example，尤其是真实失败问题
-- 补 `tables.json`、`readme.txt`、metric alias、entity alias、domain inference 特征
-- 把高频复杂问法沉淀为 few-shot 和 eval case
-- 用 replay 把失败问题稳定复现，再做回归验证
-
-### 7.2 第二优先做的
-
-- 补 Query Plan 校验与 SQL 校验的一致性检查
-- 补权限字段覆盖和时间条件检查
-- 为 runtime 日志和 replay 增加更细的 diff 观测
-
-### 7.3 最后再做的
-
-- 放宽 SQL validator
-- 增加临时业务分支逻辑
-- 创建真实数据库 semantic view
-
-## 8. 建议的单题调试流程
-
-对于一个不准的问题，建议固定按下面步骤走：
-
-1. 在工作台或 API 里复现问题，拿到 `trace_id`
-2. 看 `trace` 和 `sql-audit`，先判断错在分类、检索、规划、SQL 还是执行
-3. 在管理端对该 `trace_id` 做 replay，确认是否稳定复现
-4. 如果是解析/分类问题，优先改语义层和分类规则
-5. 如果是检索问题，补 example、业务说明、metric alias
-6. 如果是规划问题，补 query profile / plan sanitize / 真实表字段上下文
-7. 如果是 SQL 问题，先修 `tables.json`、`readme.txt`、prompt 和 validator，再看 repair
-8. 修复后再次 replay 原问题，确认链路稳定
-9. 如果问题具有代表性，把它沉淀成 evaluation case 或 example
-
-## 9. 当前架构下最值得继续补的调试能力
-
-虽然现在已经能调，但还差几项会明显提升提准效率：
-
-- replay 结果和原 trace 的字段级 diff
-- 检索 top hits 的管理端可视化
-- evaluation case 列表、单 case 复跑和失败筛选
-- 下载与 replay 的审计日志
-- 更明确的失败样本沉淀流程
+- 前面层错了，后面层再聪明也只是对错误目标优化
+- schema、业务知识和样例的修复可以复用到一类问题
+- 单题硬编码补丁维护成本最高
 
 ## 10. 一句话原则
 
-在当前架构里，提升准确度最有效的方法不是继续写 SQL 模板，而是把失败问题往 `tables.json / readme.txt / few-shot / SQL validator / repair / eval replay` 这几层持续下沉。
+当前架构下，提升准确度最有效的方法不是继续写 SQL 模板，而是把失败问题持续下沉到 `tables.json / business_knowledge.json / few-shot / PromptBuilder / validator / replay / eval case` 这几层。
