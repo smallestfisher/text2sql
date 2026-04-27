@@ -956,6 +956,24 @@ class SemanticRuntime:
                 "context": TimeContext(grain="month", range=TimeRange(start=start, end=end)),
             }
 
+        if rule_type == "calendar_year":
+            year = int(match.group(1))
+            start = f"{year:04d}-01-01"
+            end = f"{year:04d}-12-31"
+            return {
+                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
+                "context": TimeContext(grain="day", range=TimeRange(start=start, end=end)),
+            }
+
+        if rule_type == "short_calendar_year":
+            year = 2000 + int(match.group(1))
+            start = f"{year:04d}-01-01"
+            end = f"{year:04d}-12-31"
+            return {
+                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
+                "context": TimeContext(grain="day", range=TimeRange(start=start, end=end)),
+            }
+
         if rule_type == "compact_month":
             value = match.group(1)
             return {

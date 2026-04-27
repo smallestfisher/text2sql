@@ -29,6 +29,11 @@ class QueryIntentParser:
         filters = self._extract_filters(question)
         time_context = self._extract_time_context(question)
         version_context = self.semantic_runtime.extract_version_context(question)
+        matched_metrics = self._apply_metric_heuristics(
+            normalized_question=normalized_question,
+            matched_metrics=matched_metrics,
+            filters=filters,
+        )
         requested_sort = self.semantic_runtime.extract_sort(question, matched_metrics)
         requested_limit = self.semantic_runtime.extract_limit(question)
         demand_shortcuts = self._extract_demand_shortcuts(question, matched_metrics)
@@ -74,6 +79,32 @@ class QueryIntentParser:
             has_follow_up_cue=has_follow_up_cue,
             has_explicit_slots=has_explicit_slots,
         )
+
+    def _apply_metric_heuristics(
+        self,
+        normalized_question: str,
+        matched_metrics: list[str],
+        filters: list[FilterItem],
+    ) -> list[str]:
+        metrics = list(matched_metrics)
+        if metrics:
+            return metrics
+
+        if "物量" not in normalized_question:
+            return metrics
+
+        act_types = {
+            str(item.value)
+            for item in filters
+            if item.field == "act_type" and item.op == "=" and item.value
+        }
+        if "投入" in act_types or "投入" in normalized_question:
+            metrics.append("actual_input_panel_qty")
+        elif "产出" in act_types or "产出" in normalized_question:
+            metrics.append("actual_output_qty")
+        elif "报废" in act_types or "报废" in normalized_question:
+            metrics.append("defect_qty")
+        return metrics
 
     def _build_metric_index(self) -> dict[str, str]:
         index: dict[str, str] = {}

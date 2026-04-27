@@ -219,6 +219,7 @@ class PromptBuilder:
             for table_name in selected_sources
             if table_name in self._tables_metadata
         }
+        field_resolution = self._field_resolution(query_plan)
         sql_preferences = [
             "以 query_plan.tables 为真实数据库对象的首要依据。",
             "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。",
@@ -262,7 +263,8 @@ class PromptBuilder:
             "task": "sql_generation",
             "query_plan": query_plan.model_dump(),
             "allowed_sources": selected_sources,
-            "allowed_fields": sorted(self._allowed_fields(query_plan)),
+            "allowed_fields": sorted(self._sql_allowed_fields(query_plan)),
+            "field_resolution": field_resolution,
             "tables_metadata": source_schemas,
             "business_notes": business_notes,
             "context_budget": context_budget,
@@ -273,6 +275,8 @@ class PromptBuilder:
                     "优先基于真实物理表生成 MySQL 只读 SQL。",
                     "优先使用 WITH CTE，不要依赖数据库里可能不存在的预建分析对象。",
                     "只能使用 tables_metadata 中出现的真实表。",
+                    "query_plan 中的维度、过滤和指标名可能是语义字段，写 SQL 前必须先映射到 tables_metadata 里的真实物理列。",
+                    "优先使用 field_resolution 里的 physical_candidates，不要把只存在于 query_plan 中的逻辑字段名直接写进 SQL。",
                     "除非用户明确要求，否则不要引用数据库里预建的展开对象或其他额外分析对象。",
                     "必须包含 LIMIT。",
                     "如果需求表是横表，需要时请先用 CTE 展开。",
@@ -432,6 +436,73 @@ class PromptBuilder:
         if self.semantic_runtime is None:
             return set()
         return self.semantic_runtime.allowed_fields_for_plan(query_plan)
+
+    def _sql_allowed_fields(self, query_plan: QueryPlan) -> set[str]:
+        if self.semantic_runtime is None:
+            return self._allowed_fields(query_plan)
+
+        fields: set[str] = set()
+        for table_name in query_plan.tables:
+            fields.update(self.semantic_runtime.table_fields(table_name))
+        for metric_name in query_plan.metrics:
+            fields.update(
+                self.semantic_runtime.metric_expression_columns(
+                    metric_name,
+                    table_names=query_plan.tables,
+                )
+            )
+        return fields or self._allowed_fields(query_plan)
+
+    def _field_resolution(self, query_plan: QueryPlan) -> dict[str, dict[str, list[str]]]:
+        return {
+            "dimensions": self._field_resolution_map(query_plan, query_plan.dimensions),
+            "filters": self._field_resolution_map(
+                query_plan,
+                [item.field for item in query_plan.filters],
+            ),
+            "metrics": {
+                metric_name: self._physical_metric_candidates(query_plan, metric_name)
+                for metric_name in query_plan.metrics
+                if self._physical_metric_candidates(query_plan, metric_name)
+            },
+            "sort": self._field_resolution_map(
+                query_plan,
+                [item.field for item in query_plan.sort],
+            ),
+        }
+
+    def _field_resolution_map(
+        self,
+        query_plan: QueryPlan,
+        fields: list[str],
+    ) -> dict[str, list[str]]:
+        resolved: dict[str, list[str]] = {}
+        for field in fields:
+            physical_candidates = self._physical_candidates(query_plan, field)
+            if physical_candidates:
+                resolved[field] = physical_candidates
+        return resolved
+
+    def _physical_candidates(self, query_plan: QueryPlan, logical_field: str) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+        resolved = self.semantic_runtime.resolve_field_candidates(
+            query_plan.subject_domain,
+            query_plan.tables,
+            logical_field,
+        )
+        physical_allowed = self._sql_allowed_fields(query_plan)
+        return sorted(item for item in resolved if item in physical_allowed)
+
+    def _physical_metric_candidates(self, query_plan: QueryPlan, metric_name: str) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+        return sorted(
+            self.semantic_runtime.metric_expression_columns(
+                metric_name,
+                table_names=query_plan.tables,
+            )
+        )
 
     def _domain_tables(self, subject_domain: str) -> list[str] | None:
         if self.semantic_runtime is None or subject_domain == "unknown":

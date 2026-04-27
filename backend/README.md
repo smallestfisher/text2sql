@@ -145,6 +145,12 @@ Unknown column 'can_download_results' in 'field list'
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
 
+说明：
+
+- `examples/nl2sql_examples.template.json` 现在默认可以为空。
+- 在线样例只应从真实调试链路通过 `materialize-example` 物化进入，不再手写假设样例。
+- `eval/evaluation_cases.json` 也只应保留真实问题或真实 trace 物化出的回归样本，不再维护假设 case。
+
 ### Admin Users / Roles
 
 - `GET /api/admin/users`

@@ -188,6 +188,7 @@
       "plan_input_qty": "plan_actual",
       "actual_output_qty": "plan_actual",
       "actual_input_qty": "plan_actual",
+      "actual_input_panel_qty": "plan_actual",
       "demand_qty": "demand",
       "sales_qty": "sales_financial",
       "financial_qty": "sales_financial"
@@ -241,6 +242,18 @@
         "type": "compact_month",
         "field": "biz_month",
         "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b"
+      },
+      {
+        "name": "cn_year",
+        "type": "calendar_year",
+        "field": "biz_date",
+        "pattern": "(20\\d{2})年(?!\\d)"
+      },
+      {
+        "name": "cn_year_short",
+        "type": "short_calendar_year",
+        "field": "biz_date",
+        "pattern": "(?<!\\d)(\\d{2})年(?!\\d)"
       }
     ],
     "filters": [
@@ -251,6 +264,21 @@
         "op": "=",
         "candidates": ["CELL", "ARRAY", "CF"],
         "flags": ["uppercase"]
+      },
+      {
+        "name": "plan_actual_factory_named",
+        "type": "regex",
+        "field": "factory",
+        "op": "=",
+        "pattern": "(?<![A-Z0-9_])((?!ERP\\b)[A-Z0-9._-]+)工厂",
+        "flags": ["uppercase"]
+      },
+      {
+        "name": "production_actual_act_type",
+        "type": "keyword_enum",
+        "field": "act_type",
+        "op": "=",
+        "candidates": ["投入", "产出", "报废"]
       },
       {
         "name": "factory_code_pattern",
@@ -466,6 +494,12 @@
         "flags": ["ignorecase"]
       },
       {
+        "field": "__matched_metric__",
+        "order": "desc",
+        "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
+        "flags": ["ignorecase"]
+      },
+      {
         "field": "customer",
         "order": "desc",
         "pattern": "(?:按|依)?客户(?:从高到低|降序|倒序)",
@@ -555,6 +589,19 @@
         {
           "table": "production_actuals",
           "expression": "sum(GLS_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "actual_input_panel_qty",
+      "aliases": ["投入物量", "投入panel量", "投入panel数量"],
+      "semantic_column": "actual_input_panel_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "production_actuals",
+          "expression": "sum(Panel_qty)",
           "grain": "day"
         }
       ]
@@ -704,6 +751,7 @@
         "plan_input_qty",
         "approved_input_qty",
         "actual_input_qty",
+        "actual_input_panel_qty",
         "actual_output_qty",
         "defect_qty"
       ],
@@ -717,6 +765,7 @@
         "plan_input_qty": ["target_qty", "target_IN_glass_qty"],
         "approved_input_qty": ["target_IN_glass_qty", "target_in_panel_qty"],
         "actual_input_qty": ["GLS_qty"],
+        "actual_input_panel_qty": ["Panel_qty"],
         "actual_output_qty": ["Panel_qty"],
         "defect_qty": ["defect_qty"]
       },

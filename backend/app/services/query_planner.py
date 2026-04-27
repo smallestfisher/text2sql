@@ -113,6 +113,19 @@ class QueryPlanner:
             reason=classification.reason,
         )
         plan = self.semantic_runtime.sanitize_query_plan(plan)
+        if (
+            query_intent.requested_limit is not None
+            and not query_intent.requested_dimensions
+            and analysis_mode != "trend"
+        ):
+            metric_fields = {
+                self.semantic_runtime.metric_column(metric_name)
+                for metric_name in plan.metrics
+            }
+            if any(item.field in metric_fields for item in plan.sort):
+                plan.dimensions = [
+                    item for item in plan.dimensions if item not in {"biz_date", "biz_month"}
+                ]
         if analysis_mode == "compare" and not plan.dimensions and not query_intent.requested_sort:
             plan.sort = []
 

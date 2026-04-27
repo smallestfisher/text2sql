@@ -59,8 +59,19 @@
       "tables": ["monthly_plan_approved", "production_actuals"],
       "keywords": ["actual_input", "monthly_plan_approved", "production_actuals", "投入", "产出"],
       "notes": [
-        "monthly_plan_approved 常用于实际投入量查询。",
-        "如果要看实际投产和产出对比，monthly_plan_approved 通常与 production_actuals 关联。"
+        "monthly_plan_approved 常用于已审批计划口径查询，不应直接替代 production_actuals 的实际投入/产出/报废事实口径。",
+        "如果要对比计划与实际，可以把 monthly_plan_approved 作为计划侧来源，把 production_actuals 作为实际侧来源。"
+      ]
+    },
+    {
+      "id": "production_actuals_act_type_panel_volume",
+      "domains": ["plan_actual"],
+      "tables": ["production_actuals"],
+      "keywords": ["production_actuals", "act_type", "投入", "产出", "报废", "物量", "panel", "Panel_qty", "型号", "top"],
+      "notes": [
+        "production_actuals.act_type 的中文枚举是 投入、产出、报废，问句里出现这些词时应优先落为 act_type 过滤条件。",
+        "在工厂语境下，物量默认指 panel 数量；如果问题问投入型号及其物量，应使用 Panel_qty 而不是 GLS_qty。",
+        "像“26年MDL工厂top10投入型号及其物量”这类问题，应基于 production_actuals，按 product_ID 分组，过滤 FACTORY=MDL 且 act_type=投入，并按 SUM(Panel_qty) 降序取前 10。"
       ]
     }
   ]

@@ -51,6 +51,12 @@
 
 这些样本优先进入 eval case、replay 或 few-shot，而不是写成代码分支。
 
+补充约束：
+
+- `examples/nl2sql_examples.template.json` 初始应保持为空，避免假设样例污染在线检索。
+- 只有真实问题、真实 trace、且 SQL 与业务结果都人工确认后，才通过 `materialize-example` 增加样例。
+- `eval/evaluation_cases.json` 也只保留真实问题、真实 trace 或真实 replay 沉淀出的 case，不保留假设回归样本。
+
 ### 3.3 补业务知识时控制 prompt 增长
 
 当前 prompt 主要是中文自然语言指令，但表名、字段名要保持真实英文命名。补业务知识时建议：

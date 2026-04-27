@@ -136,7 +136,7 @@ class SqlValidator:
                 missing_sort_fields = [
                     field
                     for field in expected_sort_fields
-                    if not self._field_candidates(query_plan, field).intersection(actual_order_by_fields)
+                    if not self._sort_field_candidates(query_plan, field).intersection(actual_order_by_fields)
                 ]
                 if missing_sort_fields:
                     warnings.append(
@@ -250,8 +250,43 @@ class SqlValidator:
             query_plan.tables,
             logical_field,
         )
+        physical_candidates = self._physical_field_candidates(query_plan, resolved)
+        if physical_candidates:
+            return physical_candidates
         candidates.update(item.lower() for item in resolved if item)
         return candidates
+
+    def _sort_field_candidates(self, query_plan: QueryPlan, logical_field: str) -> set[str]:
+        candidates = self._field_candidates(query_plan, logical_field)
+        if self.semantic_runtime is None:
+            return candidates
+        metric_columns = {
+            self.semantic_runtime.metric_column(metric_name).lower()
+            for metric_name in query_plan.metrics
+            if self.semantic_runtime.metric_column(metric_name)
+        }
+        if logical_field.lower() in metric_columns:
+            candidates.add(logical_field.lower())
+        return candidates
+
+    def _physical_field_candidates(self, query_plan: QueryPlan, resolved_fields: set[str]) -> set[str]:
+        if self.semantic_runtime is None:
+            return set()
+        physical_allowed: set[str] = set()
+        for table_name in query_plan.tables:
+            physical_allowed.update(self.semantic_runtime.table_fields(table_name))
+        for metric_name in query_plan.metrics:
+            physical_allowed.update(
+                self.semantic_runtime.metric_expression_columns(
+                    metric_name,
+                    table_names=query_plan.tables,
+                )
+            )
+        return {
+            item.lower()
+            for item in resolved_fields
+            if item and item in physical_allowed
+        }
 
     def _validate_time_context(
         self,
