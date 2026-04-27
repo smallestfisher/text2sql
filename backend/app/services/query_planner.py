@@ -4,6 +4,7 @@ from typing import Any
 
 from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.query_plan import QueryPlan
+from backend.app.models.query_plan import SortItem
 from backend.app.models.session_state import SessionState
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
@@ -88,6 +89,7 @@ class QueryPlanner:
             matched_entities=matched_entities,
             filters=filters,
             time_context=time_context,
+            version_context=version_context,
             analysis_mode=analysis_mode,
         )
 
@@ -129,6 +131,14 @@ class QueryPlanner:
         if analysis_mode == "compare" and not plan.dimensions and not query_intent.requested_sort:
             plan.sort = []
 
+        if (
+            plan.subject_domain == "demand"
+            and plan.dimensions == ["demand_month"]
+            and "demand_qty" in plan.metrics
+            and not query_intent.requested_sort
+        ):
+            plan.sort = [SortItem(field="demand_month", order="asc")]
+
         if plan.need_clarification:
             classification.question_type = "clarification_needed"
             classification.need_clarification = True
@@ -154,6 +164,7 @@ class QueryPlanner:
         matched_entities: list[str],
         filters,
         time_context,
+        version_context,
         analysis_mode: str | None = None,
     ) -> list[str]:
         filter_fields = {item.field for item in filters}
@@ -168,6 +179,8 @@ class QueryPlanner:
             preferred_time_dimension = 'biz_month' if time_context.grain == 'month' else 'biz_date'
             if preferred_time_dimension not in dimensions:
                 dimensions = dimensions + [preferred_time_dimension]
+        if version_context is not None and 'PM_VERSION' in dimensions and 'PM_VERSION' not in requested_dimensions:
+            dimensions = [item for item in dimensions if item != 'PM_VERSION']
         return dimensions
 
     def _merge_filters(self, current_filters, new_filters, remove_fields=None):

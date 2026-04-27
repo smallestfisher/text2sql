@@ -3,94 +3,204 @@
   "domains": [
     {
       "name": "demand",
-      "tables": ["v_demand", "p_demand", "sales_financial_perf"],
-      "primary_entities": ["fg_product", "customer"]
+      "tables": [
+        "v_demand",
+        "p_demand",
+        "sales_financial_perf"
+      ],
+      "primary_entities": [
+        "fg_product",
+        "customer"
+      ]
     },
     {
       "name": "sales_financial",
-      "tables": ["sales_financial_perf"],
-      "primary_entities": ["fg_product", "customer"]
+      "tables": [
+        "sales_financial_perf"
+      ],
+      "primary_entities": [
+        "fg_product",
+        "customer"
+      ]
     },
     {
       "name": "inventory",
-      "tables": ["daily_inventory", "oms_inventory"],
-      "primary_entities": ["stage_product"]
+      "tables": [
+        "daily_inventory",
+        "oms_inventory"
+      ],
+      "primary_entities": [
+        "stage_product"
+      ]
     },
     {
       "name": "plan_actual",
-      "tables": ["daily_PLAN", "monthly_plan_approved", "weekly_rolling_plan", "production_actuals"],
-      "primary_entities": ["stage_product", "factory", "plan_time"]
+      "tables": [
+        "daily_PLAN",
+        "monthly_plan_approved",
+        "weekly_rolling_plan",
+        "production_actuals"
+      ],
+      "primary_entities": [
+        "stage_product",
+        "factory",
+        "plan_time"
+      ]
     },
     {
       "name": "dimension",
-      "tables": ["product_attributes", "product_mapping"],
-      "primary_entities": ["stage_product", "fg_product"]
+      "tables": [
+        "product_attributes",
+        "product_mapping"
+      ],
+      "primary_entities": [
+        "stage_product",
+        "fg_product"
+      ]
     }
   ],
   "entities": [
     {
       "name": "fg_product",
-      "aliases": ["FGCODE", "成品型号", "成品编码", "需求型号", "销售型号"],
+      "aliases": [
+        "FGCODE",
+        "成品型号",
+        "成品编码",
+        "需求型号",
+        "销售型号"
+      ],
       "description": "成品阶段产品实体，主要用于需求和销售财务分析。"
     },
     {
       "name": "stage_product",
-      "aliases": ["product_ID", "型号", "产品型号", "产品编码"],
+      "aliases": [
+        "product_ID",
+        "型号",
+        "产品型号",
+        "产品编码"
+      ],
       "description": "生产阶段产品实体，存在 Cell/Array/CF 等阶段编码。"
     },
     {
       "name": "factory",
-      "aliases": ["factory", "FACTORY", "工厂"],
+      "aliases": [
+        "factory",
+        "FACTORY",
+        "工厂"
+      ],
       "description": "计划/实际等生产域中的工厂概念。"
     },
     {
       "name": "factory_code",
-      "aliases": ["factory_code", "工厂代码"],
+      "aliases": [
+        "factory_code",
+        "工厂代码"
+      ],
       "description": "库存域中的工厂代码字段。"
     },
     {
       "name": "erp_factory",
-      "aliases": ["ERP_FACTORY", "erp_factory", "ERP工厂"],
+      "aliases": [
+        "ERP_FACTORY",
+        "erp_factory",
+        "ERP工厂"
+      ],
       "description": "ERP 体系下的工厂字段。"
     },
     {
       "name": "customer",
-      "aliases": ["CUSTOMER", "客户"],
+      "aliases": [
+        "CUSTOMER",
+        "客户"
+      ],
       "description": "客户实体。"
     },
     {
       "name": "plan_time",
-      "aliases": ["日期", "月份", "周版本", "计划日期", "结算月份", "版本"],
+      "aliases": [
+        "日期",
+        "月份",
+        "周版本",
+        "计划日期",
+        "结算月份",
+        "版本"
+      ],
       "description": "时间和版本相关实体，用于承载日、月、周版本和计划版本语义。"
     }
   ],
   "time_semantics": [
     {
       "name": "day_level",
-      "tables": ["daily_inventory", "daily_PLAN", "production_actuals", "weekly_rolling_plan", "monthly_plan_approved"],
-      "fields": ["report_date", "PLAN_date", "work_date", "plan_date"],
+      "tables": [
+        "daily_inventory",
+        "daily_PLAN",
+        "production_actuals",
+        "weekly_rolling_plan",
+        "monthly_plan_approved"
+      ],
+      "fields": [
+        "report_date",
+        "PLAN_date",
+        "work_date",
+        "plan_date"
+      ],
       "description": "日粒度查询。"
     },
     {
       "name": "month_level",
-      "tables": ["v_demand", "p_demand", "oms_inventory", "sales_financial_perf", "monthly_plan_approved"],
-      "fields": ["MONTH", "report_month", "plan_month"],
+      "tables": [
+        "v_demand",
+        "p_demand",
+        "oms_inventory",
+        "sales_financial_perf",
+        "monthly_plan_approved"
+      ],
+      "fields": [
+        "MONTH",
+        "report_month",
+        "plan_month"
+      ],
       "description": "月粒度查询。"
     },
     {
       "name": "versioned",
-      "tables": ["v_demand", "p_demand", "weekly_rolling_plan"],
-      "fields": ["PM_VERSION"],
+      "tables": [
+        "v_demand",
+        "p_demand",
+        "weekly_rolling_plan"
+      ],
+      "fields": [
+        "PM_VERSION"
+      ],
       "description": "带版本语义的查询对象。"
     }
   ],
   "question_understanding": {
-    "invalid_exact_patterns": ["你好", "hello", "hi", "谢谢", "thanks"],
-    "follow_up_cues": ["只看", "换成", "那", "再看", "改成", "分别", "继续", "然后"],
+    "invalid_exact_patterns": [
+      "你好",
+      "hello",
+      "hi",
+      "谢谢",
+      "thanks"
+    ],
+    "follow_up_cues": [
+      "只看",
+      "换成",
+      "那",
+      "再看",
+      "改成",
+      "分别",
+      "继续",
+      "然后"
+    ],
     "metric_resolution_rules": [
       {
         "name": "actual_input_panel_qty_from_volume_and_input",
-        "text_any": ["物量", "panel量", "panel数量"],
+        "text_any": [
+          "物量",
+          "panel量",
+          "panel数量"
+        ],
         "required_filters": [
           {
             "field": "act_type",
@@ -98,11 +208,17 @@
             "value": "投入"
           }
         ],
-        "metrics": ["actual_input_panel_qty"]
+        "metrics": [
+          "actual_input_panel_qty"
+        ]
       },
       {
         "name": "actual_output_qty_from_volume_and_output",
-        "text_any": ["物量", "panel量", "panel数量"],
+        "text_any": [
+          "物量",
+          "panel量",
+          "panel数量"
+        ],
         "required_filters": [
           {
             "field": "act_type",
@@ -110,11 +226,17 @@
             "value": "产出"
           }
         ],
-        "metrics": ["actual_output_qty"]
+        "metrics": [
+          "actual_output_qty"
+        ]
       },
       {
         "name": "defect_qty_from_scrap",
-        "text_any": ["报废量", "报废数量", "报废物量"],
+        "text_any": [
+          "报废量",
+          "报废数量",
+          "报废物量"
+        ],
         "required_filters": [
           {
             "field": "act_type",
@@ -122,13 +244,20 @@
             "value": "报废"
           }
         ],
-        "metrics": ["defect_qty"]
+        "metrics": [
+          "defect_qty"
+        ]
       }
     ],
     "context_management": {
       "replace_filter_groups": {
-        "time": ["biz_date", "biz_month"],
-        "version": ["PM_VERSION"]
+        "time": [
+          "biz_date",
+          "biz_month"
+        ],
+        "version": [
+          "PM_VERSION"
+        ]
       }
     },
     "classification": {
@@ -142,8 +271,13 @@
           "reason": "当前问题缺少完整主体，但明显在延续上一轮查询。",
           "when": {
             "session_required": true,
-            "subject_domain_in": ["unknown"],
-            "any_signals": ["has_follow_up_cue", "has_explicit_slots"]
+            "subject_domain_in": [
+              "unknown"
+            ],
+            "any_signals": [
+              "has_follow_up_cue",
+              "has_explicit_slots"
+            ]
           }
         },
         {
@@ -234,23 +368,51 @@
     "hints": [
       {
         "domain": "inventory",
-        "entities": ["factory_code", "erp_factory"],
-        "filter_fields": ["factory_code", "ERP_FACTORY", "ERP_LOCATION", "product_ID"]
+        "entities": [
+          "factory_code",
+          "erp_factory"
+        ],
+        "filter_fields": [
+          "factory_code",
+          "ERP_FACTORY",
+          "ERP_LOCATION",
+          "product_ID"
+        ]
       },
       {
         "domain": "plan_actual",
-        "entities": ["factory"],
-        "filter_fields": ["factory", "stage_product_id"],
-        "keywords": ["计划", "实际", "产出", "投入"]
+        "entities": [
+          "factory"
+        ],
+        "filter_fields": [
+          "factory",
+          "stage_product_id"
+        ],
+        "keywords": [
+          "计划",
+          "实际",
+          "产出",
+          "投入"
+        ]
       },
       {
         "domain": "demand",
-        "entities": ["fg_product", "customer"],
-        "filter_fields": ["FGCODE", "customer", "PM_VERSION"]
+        "entities": [
+          "fg_product",
+          "customer"
+        ],
+        "filter_fields": [
+          "FGCODE",
+          "customer",
+          "PM_VERSION"
+        ]
       },
       {
         "domain": "sales_financial",
-        "filter_fields": ["sales_qty", "financial_qty"]
+        "filter_fields": [
+          "sales_qty",
+          "financial_qty"
+        ]
       }
     ],
     "fallback_to_session": true
@@ -282,6 +444,12 @@
         "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b"
       },
       {
+        "name": "recent_n_months",
+        "type": "relative_recent_months",
+        "field": "biz_month",
+        "pattern": "(?:最近|近|过去)\\s*(\\d{1,2})\\s*个?月"
+      },
+      {
         "name": "cn_year",
         "type": "calendar_year",
         "field": "biz_date",
@@ -300,8 +468,14 @@
         "type": "keyword_enum",
         "field": "factory",
         "op": "=",
-        "candidates": ["CELL", "ARRAY", "CF"],
-        "flags": ["uppercase"]
+        "candidates": [
+          "CELL",
+          "ARRAY",
+          "CF"
+        ],
+        "flags": [
+          "uppercase"
+        ]
       },
       {
         "name": "plan_actual_factory_named",
@@ -309,14 +483,20 @@
         "field": "factory",
         "op": "=",
         "pattern": "(?<![A-Z0-9_])((?!ERP\\b)[A-Z0-9._-]+)工厂",
-        "flags": ["uppercase"]
+        "flags": [
+          "uppercase"
+        ]
       },
       {
         "name": "production_actual_act_type",
         "type": "keyword_enum",
         "field": "act_type",
         "op": "=",
-        "candidates": ["投入", "产出", "报废"]
+        "candidates": [
+          "投入",
+          "产出",
+          "报废"
+        ]
       },
       {
         "name": "factory_code_pattern",
@@ -324,7 +504,9 @@
         "field": "factory_code",
         "op": "=",
         "pattern": "\\b([A-Z]\\d+_[A-Z]+)\\b",
-        "flags": ["uppercase"]
+        "flags": [
+          "uppercase"
+        ]
       },
       {
         "name": "erp_factory_explicit",
@@ -332,7 +514,9 @@
         "field": "ERP_FACTORY",
         "op": "=",
         "pattern": "(?:ERP_FACTORY|ERP工厂)\\s*[:：]?\\s*([A-Za-z0-9._-]+)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "erp_location_explicit",
@@ -340,7 +524,9 @@
         "field": "ERP_LOCATION",
         "op": "=",
         "pattern": "(?:ERP_LOCATION|ERP库位|库位)\\s*[:：]?\\s*([A-Za-z0-9._-]+)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "stage_product_explicit",
@@ -348,7 +534,9 @@
         "field": "product_ID",
         "op": "=",
         "pattern": "(?:product_ID|型号|产品型号|产品编码)\\s*[:：]?\\s*([A-Za-z0-9._/-]+)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "fgcode_explicit",
@@ -356,7 +544,9 @@
         "field": "FGCODE",
         "op": "=",
         "pattern": "(?:FGCODE|成品型号|成品编码|需求型号|销售型号)\\s*[:：]?\\s*([A-Za-z0-9._/-]+)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "customer_explicit",
@@ -364,7 +554,9 @@
         "field": "customer",
         "op": "=",
         "pattern": "(?:CUSTOMER|customer|客户)\\s*(?:[:：=]|为|是)\\s*([A-Za-z0-9._\\-\\u4e00-\\u9fa5]+)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "demand_month_compact",
@@ -372,7 +564,9 @@
         "field": "demand_month",
         "op": "=",
         "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b(?=\\s*需求)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "demand_source_p",
@@ -381,7 +575,9 @@
         "op": "=",
         "pattern": "(?:^|[^A-Za-z0-9])P版(?:[^A-Za-z0-9]|$)",
         "value": "p_demand",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "demand_source_v",
@@ -390,7 +586,9 @@
         "op": "=",
         "pattern": "(?:^|[^A-Za-z0-9])V版(?:[^A-Za-z0-9]|$)",
         "value": "v_demand",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       }
     ],
     "dimensions": [
@@ -399,93 +597,146 @@
         "type": "regex",
         "field": "customer",
         "pattern": "(?:按|按照|只看)\\s*(?:CUSTOMER|customer|客户)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_factory_code",
         "type": "regex",
         "field": "factory_code",
         "pattern": "(?:按|按照|只看)\\s*factory_code(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_factory",
         "type": "regex",
         "field": "factory",
         "pattern": "(?:按|按照|只看)\\s*(?:FACTORY|factory|工厂)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_erp_factory",
         "type": "regex",
         "field": "ERP_FACTORY",
         "pattern": "(?:按|按照|只看)\\s*(?:ERP_FACTORY|ERP工厂)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_stage_product",
         "type": "regex",
         "field": "product_ID",
         "pattern": "(?:按|按照|只看)\\s*(?:product_ID|型号|产品型号|产品编码)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_fgcode",
         "type": "regex",
         "field": "FGCODE",
         "pattern": "(?:按|按照|只看)\\s*(?:FGCODE|成品型号|成品编码|需求型号|销售型号)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_date",
         "type": "regex",
         "field": "biz_date",
         "pattern": "(?:按|按照|只看)\\s*(?:日|天|日期)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_month",
         "type": "regex",
         "field": "biz_month",
         "pattern": "(?:按|按照|只看)\\s*(?:月|月份)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "name": "group_by_version",
         "type": "regex",
         "field": "PM_VERSION",
         "pattern": "(?:按|按照|只看)\\s*(?:版本|PM_VERSION)(?:维度)?(?:拆分|分组|查看|统计|看)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_demand_month_ttl_recent_window",
+        "type": "regex",
+        "field": "demand_month",
+        "pattern": "(?:(?:最近|近|过去)\\s*\\d{1,2}\\s*个?月.*(?:ttl|total)|(?:ttl|total).*?(?:最近|近|过去)\\s*\\d{1,2}\\s*个?月)",
+        "flags": [
+          "ignorecase"
+        ]
       }
     ],
     "version": [
       {
         "field": "PM_VERSION",
         "pattern": "(?:版本|version|PM_VERSION)\\s*[:：]?\\s*([A-Za-z0-9._-]+)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "PM_VERSION",
         "pattern": "([A-Za-z0-9._-]+)\\s*(?:版本|version)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "PM_VERSION",
         "pattern": "最新\\s*(\\d{1,2})\\s*版",
         "value_template": "LATEST_N:{match}",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "最新\\s*p\\s*(?:版|版本)",
+        "value": "LATEST_N:1",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "最新\\s*v\\s*(?:版|版本)",
+        "value": "LATEST_N:1",
+        "flags": [
+          "ignorecase"
+        ]
       }
     ],
     "analysis": [
       {
         "mode": "trend",
         "pattern": "趋势|走势|变化趋势",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "mode": "compare",
         "pattern": "对比|比较|对照",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       }
     ],
     "sort": [
@@ -493,85 +744,115 @@
         "field": "sales_qty",
         "order": "desc",
         "pattern": "(?:按|依)?销售(?:业绩|量)?(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "financial_qty",
         "order": "desc",
         "pattern": "(?:按|依)?财务(?:业绩|量)?(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "inventory_qty",
         "order": "desc",
         "pattern": "(?:按|依)?库存(?:量|数量)?(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "demand_qty",
         "order": "desc",
         "pattern": "(?:按|依)?需求(?:量)?(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "demand_qty",
         "order": "desc",
         "pattern": "(?:需求最多|最多的(?:fgcode|成品型号)|需求最高|最高需求)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "actual_output_qty",
         "order": "desc",
         "pattern": "(?:按|依)?实际产出(?:量)?(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "plan_input_qty",
         "order": "desc",
         "pattern": "(?:按|依)?计划投入(?:量)?(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "__matched_metric__",
         "order": "desc",
         "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "customer",
         "order": "desc",
         "pattern": "(?:按|依)?客户(?:从高到低|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "biz_month",
         "order": "desc",
         "pattern": "(?:按|依)?月份?(?:从新到旧|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "field": "biz_date",
         "order": "desc",
         "pattern": "(?:按|依)?日期(?:从新到旧|降序|倒序)",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       }
     ],
     "limit": [
       {
         "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       },
       {
         "pattern": "(?:哪一个|哪个)",
         "value": 1,
-        "flags": ["ignorecase"]
+        "flags": [
+          "ignorecase"
+        ]
       }
     ]
   },
   "metrics": [
     {
       "name": "inventory_qty",
-      "aliases": ["库存", "库存量", "库存数量"],
+      "aliases": [
+        "库存",
+        "库存量",
+        "库存数量"
+      ],
       "semantic_column": "inventory_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -589,7 +870,11 @@
     },
     {
       "name": "plan_input_qty",
-      "aliases": ["计划投入", "投入量", "计划投入量"],
+      "aliases": [
+        "计划投入",
+        "投入量",
+        "计划投入量"
+      ],
       "semantic_column": "plan_input_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -607,7 +892,10 @@
     },
     {
       "name": "actual_output_qty",
-      "aliases": ["实际产出", "产出量"],
+      "aliases": [
+        "实际产出",
+        "产出量"
+      ],
       "semantic_column": "actual_output_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -620,7 +908,10 @@
     },
     {
       "name": "actual_input_qty",
-      "aliases": ["实际投入", "实际投产"],
+      "aliases": [
+        "实际投入",
+        "实际投产"
+      ],
       "semantic_column": "actual_input_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -633,7 +924,11 @@
     },
     {
       "name": "actual_input_panel_qty",
-      "aliases": ["投入物量", "投入panel量", "投入panel数量"],
+      "aliases": [
+        "投入物量",
+        "投入panel量",
+        "投入panel数量"
+      ],
       "semantic_column": "actual_input_panel_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -646,7 +941,12 @@
     },
     {
       "name": "demand_qty",
-      "aliases": ["需求", "需求量", "V版需求", "P版需求"],
+      "aliases": [
+        "需求",
+        "需求量",
+        "V版需求",
+        "P版需求"
+      ],
       "semantic_column": "demand_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -664,7 +964,10 @@
     },
     {
       "name": "sales_qty",
-      "aliases": ["销售业绩", "销售量"],
+      "aliases": [
+        "销售业绩",
+        "销售量"
+      ],
       "semantic_column": "sales_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -677,7 +980,10 @@
     },
     {
       "name": "financial_qty",
-      "aliases": ["财务业绩", "财务量"],
+      "aliases": [
+        "财务业绩",
+        "财务量"
+      ],
       "semantic_column": "financial_qty",
       "aggregate_function": "SUM",
       "definitions": [
@@ -709,17 +1015,35 @@
         "bu_desc"
       ],
       "field_aliases": {
-        "biz_date": ["report_date"],
-        "biz_month": ["report_month"],
-        "customer": ["CUSTOMER"],
-        "sbu_desc": ["SBU_DESC"],
-        "bu_desc": ["BU_DESC"],
-        "inventory_qty": ["TTL_Qty", "panel_qty"],
-        "hold_qty": ["HOLD_Qty"]
+        "biz_date": [
+          "report_date"
+        ],
+        "biz_month": [
+          "report_month"
+        ],
+        "customer": [
+          "CUSTOMER"
+        ],
+        "sbu_desc": [
+          "SBU_DESC"
+        ],
+        "bu_desc": [
+          "BU_DESC"
+        ],
+        "inventory_qty": [
+          "TTL_Qty",
+          "panel_qty"
+        ],
+        "hold_qty": [
+          "HOLD_Qty"
+        ]
       },
       "default_limit": 200,
       "max_limit": 200,
-      "time_filter_fields": ["biz_date", "biz_month"],
+      "time_filter_fields": [
+        "biz_date",
+        "biz_month"
+      ],
       "warn_if_missing_time_filter": true,
       "table_selection": {
         "prefer_metric_tables": true,
@@ -738,44 +1062,84 @@
       },
       "dimension_preferences": [
         {
-          "entities": ["factory_code"],
-          "exclude_filter_fields": ["factory_code"],
-          "add_dimensions": ["factory_code"]
+          "entities": [
+            "factory_code"
+          ],
+          "exclude_filter_fields": [
+            "factory_code"
+          ],
+          "add_dimensions": [
+            "factory_code"
+          ]
         },
         {
-          "entities": ["erp_factory"],
-          "exclude_filter_fields": ["ERP_FACTORY"],
-          "add_dimensions": ["ERP_FACTORY"]
+          "entities": [
+            "erp_factory"
+          ],
+          "exclude_filter_fields": [
+            "ERP_FACTORY"
+          ],
+          "add_dimensions": [
+            "ERP_FACTORY"
+          ]
         },
         {
-          "entities": ["stage_product"],
-          "exclude_filter_fields": ["product_ID"],
-          "add_dimensions": ["product_ID"]
+          "entities": [
+            "stage_product"
+          ],
+          "exclude_filter_fields": [
+            "product_ID"
+          ],
+          "add_dimensions": [
+            "product_ID"
+          ]
         },
         {
-          "entities": ["customer"],
-          "exclude_filter_fields": ["customer"],
-          "add_dimensions": ["customer"]
+          "entities": [
+            "customer"
+          ],
+          "exclude_filter_fields": [
+            "customer"
+          ],
+          "add_dimensions": [
+            "customer"
+          ]
         },
         {
           "time_grain": "day",
-          "exclude_filter_fields": ["biz_date"],
-          "add_dimensions": ["biz_date"]
+          "exclude_filter_fields": [
+            "biz_date"
+          ],
+          "add_dimensions": [
+            "biz_date"
+          ]
         }
       ],
       "clarification_rules": [
         {
-          "entities": ["factory"],
-          "exclude_entities": ["factory_code", "erp_factory"],
-          "exclude_filter_fields": ["factory_code", "ERP_FACTORY"],
+          "entities": [
+            "factory"
+          ],
+          "exclude_entities": [
+            "factory_code",
+            "erp_factory"
+          ],
+          "exclude_filter_fields": [
+            "factory_code",
+            "ERP_FACTORY"
+          ],
           "reason_code": "inventory_factory_ambiguous",
           "question_type": "clarification_needed",
           "reason": "库存域中的工厂语义不明确。",
           "clarification_question": "库存查询请明确使用 factory_code 还是 ERP_FACTORY。"
         }
       ],
-      "drop_dimensions": ["factory"],
-      "drop_filters": ["factory"]
+      "drop_dimensions": [
+        "factory"
+      ],
+      "drop_filters": [
+        "factory"
+      ]
     },
     "plan_actual": {
       "allowed_fields": [
@@ -794,22 +1158,55 @@
         "defect_qty"
       ],
       "field_aliases": {
-        "biz_date": ["PLAN_date", "work_date", "plan_date"],
-        "biz_month": ["plan_month"],
-        "version_code": ["PM_VERSION"],
-        "factory": ["factory_code", "FACTORY", "factory"],
-        "stage_product_id": ["product_ID"],
-        "fg_product_id": ["FGCODE"],
-        "plan_input_qty": ["target_qty", "target_IN_glass_qty"],
-        "approved_input_qty": ["target_IN_glass_qty", "target_in_panel_qty"],
-        "actual_input_qty": ["GLS_qty"],
-        "actual_input_panel_qty": ["Panel_qty"],
-        "actual_output_qty": ["Panel_qty"],
-        "defect_qty": ["defect_qty"]
+        "biz_date": [
+          "PLAN_date",
+          "work_date",
+          "plan_date"
+        ],
+        "biz_month": [
+          "plan_month"
+        ],
+        "version_code": [
+          "PM_VERSION"
+        ],
+        "factory": [
+          "factory_code",
+          "FACTORY",
+          "factory"
+        ],
+        "stage_product_id": [
+          "product_ID"
+        ],
+        "fg_product_id": [
+          "FGCODE"
+        ],
+        "plan_input_qty": [
+          "target_qty",
+          "target_IN_glass_qty"
+        ],
+        "approved_input_qty": [
+          "target_IN_glass_qty",
+          "target_in_panel_qty"
+        ],
+        "actual_input_qty": [
+          "GLS_qty"
+        ],
+        "actual_input_panel_qty": [
+          "Panel_qty"
+        ],
+        "actual_output_qty": [
+          "Panel_qty"
+        ],
+        "defect_qty": [
+          "defect_qty"
+        ]
       },
       "default_limit": 200,
       "max_limit": 200,
-      "time_filter_fields": ["biz_date", "biz_month"],
+      "time_filter_fields": [
+        "biz_date",
+        "biz_month"
+      ],
       "warn_if_missing_time_filter": true,
       "table_selection": {
         "prefer_metric_tables": true,
@@ -828,21 +1225,37 @@
       "dimension_preferences": [
         {
           "time_grain": "day",
-          "add_dimensions": ["biz_date"]
+          "add_dimensions": [
+            "biz_date"
+          ]
         },
         {
           "time_grain": "month",
-          "add_dimensions": ["biz_month"]
+          "add_dimensions": [
+            "biz_month"
+          ]
         },
         {
-          "entities": ["factory"],
-          "exclude_filter_fields": ["factory"],
-          "add_dimensions": ["factory"]
+          "entities": [
+            "factory"
+          ],
+          "exclude_filter_fields": [
+            "factory"
+          ],
+          "add_dimensions": [
+            "factory"
+          ]
         },
         {
-          "entities": ["stage_product"],
-          "exclude_filter_fields": ["stage_product_id"],
-          "add_dimensions": ["stage_product_id"]
+          "entities": [
+            "stage_product"
+          ],
+          "exclude_filter_fields": [
+            "stage_product_id"
+          ],
+          "add_dimensions": [
+            "stage_product_id"
+          ]
         }
       ]
     },
@@ -863,10 +1276,19 @@
         "month_offset"
       ],
       "field_aliases": {
-        "sbu_desc": ["SBU_DESC"],
-        "bu_desc": ["BU_DESC"],
-        "customer": ["CUSTOMER"],
-        "biz_month": ["MONTH", "report_month"],
+        "sbu_desc": [
+          "SBU_DESC"
+        ],
+        "bu_desc": [
+          "BU_DESC"
+        ],
+        "customer": [
+          "CUSTOMER"
+        ],
+        "biz_month": [
+          "MONTH",
+          "report_month"
+        ],
         "demand_qty": [
           "REQUIREMENT_QTY",
           "NEXT_REQUIREMENT",
@@ -876,12 +1298,17 @@
           "MONTH6",
           "MONTH7"
         ],
-        "financial_qty": ["FINANCIAL_qty"]
+        "financial_qty": [
+          "FINANCIAL_qty"
+        ]
       },
       "default_limit": 200,
       "max_limit": 200,
       "version_field": "PM_VERSION",
-      "time_filter_fields": ["demand_month", "biz_month"],
+      "time_filter_fields": [
+        "demand_month",
+        "biz_month"
+      ],
       "warn_if_missing_time_filter": true,
       "table_selection": {
         "prefer_metric_tables": true,
@@ -900,27 +1327,49 @@
       "dimension_preferences": [
         {
           "time_grain": "month",
-          "exclude_filter_fields": ["biz_month"],
-          "add_dimensions": ["biz_month"]
+          "exclude_filter_fields": [
+            "biz_month"
+          ],
+          "add_dimensions": [
+            "biz_month"
+          ]
         },
         {
-          "entities": ["fg_product"],
-          "exclude_filter_fields": ["FGCODE"],
-          "add_dimensions": ["FGCODE"]
+          "entities": [
+            "fg_product"
+          ],
+          "exclude_filter_fields": [
+            "FGCODE"
+          ],
+          "add_dimensions": [
+            "FGCODE"
+          ]
         },
         {
-          "entities": ["customer"],
-          "exclude_filter_fields": ["customer"],
-          "add_dimensions": ["customer"]
+          "entities": [
+            "customer"
+          ],
+          "exclude_filter_fields": [
+            "customer"
+          ],
+          "add_dimensions": [
+            "customer"
+          ]
         },
         {
-          "exclude_filter_fields": ["PM_VERSION"],
-          "add_dimensions": ["PM_VERSION"]
+          "exclude_filter_fields": [
+            "PM_VERSION"
+          ],
+          "add_dimensions": [
+            "PM_VERSION"
+          ]
         }
       ],
       "clarification_rules": [
         {
-          "metrics": ["demand_qty"],
+          "metrics": [
+            "demand_qty"
+          ],
           "missing_version_context": true,
           "reason_code": "missing_version",
           "question_type": "clarification_needed",
@@ -944,16 +1393,28 @@
         "financial_qty"
       ],
       "field_aliases": {
-        "sbu_desc": ["SBU_DESC"],
-        "bu_desc": ["BU_DESC"],
-        "customer": ["CUSTOMER"],
-        "biz_month": ["report_month"],
-        "financial_qty": ["FINANCIAL_qty"]
+        "sbu_desc": [
+          "SBU_DESC"
+        ],
+        "bu_desc": [
+          "BU_DESC"
+        ],
+        "customer": [
+          "CUSTOMER"
+        ],
+        "biz_month": [
+          "report_month"
+        ],
+        "financial_qty": [
+          "FINANCIAL_qty"
+        ]
       },
       "default_limit": 200,
       "max_limit": 200,
       "version_field": "PM_VERSION",
-      "time_filter_fields": ["biz_month"],
+      "time_filter_fields": [
+        "biz_month"
+      ],
       "warn_if_missing_time_filter": true,
       "table_selection": {
         "prefer_metric_tables": true,
@@ -972,18 +1433,34 @@
       "dimension_preferences": [
         {
           "time_grain": "month",
-          "exclude_filter_fields": ["biz_month"],
-          "add_dimensions": ["biz_month"]
+          "exclude_filter_fields": [
+            "biz_month"
+          ],
+          "add_dimensions": [
+            "biz_month"
+          ]
         },
         {
-          "entities": ["fg_product"],
-          "exclude_filter_fields": ["FGCODE"],
-          "add_dimensions": ["FGCODE"]
+          "entities": [
+            "fg_product"
+          ],
+          "exclude_filter_fields": [
+            "FGCODE"
+          ],
+          "add_dimensions": [
+            "FGCODE"
+          ]
         },
         {
-          "entities": ["customer"],
-          "exclude_filter_fields": ["customer"],
-          "add_dimensions": ["customer"]
+          "entities": [
+            "customer"
+          ],
+          "exclude_filter_fields": [
+            "customer"
+          ],
+          "add_dimensions": [
+            "customer"
+          ]
         }
       ]
     }

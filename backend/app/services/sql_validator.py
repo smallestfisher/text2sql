@@ -171,6 +171,9 @@ class SqlValidator:
             select_dimension_errors = self._validate_selected_dimensions(query_plan, inspection)
             errors.extend(select_dimension_errors)
 
+            monthly_demand_shape_errors = self._validate_demand_monthly_shape(query_plan, inspection)
+            errors.extend(monthly_demand_shape_errors)
+
         if required_filter_fields:
             if query_plan is None:
                 missing_filter_fields = list(required_filter_fields)
@@ -461,6 +464,39 @@ class SqlValidator:
                 + ", ".join(sorted(set(missing_dimensions)))
             ]
         return []
+
+    def _validate_demand_monthly_shape(
+        self,
+        query_plan: QueryPlan,
+        inspection,
+    ) -> list[str]:
+        if query_plan.subject_domain != 'demand':
+            return []
+        if query_plan.dimensions != ['demand_month']:
+            return []
+        if 'demand_qty' not in query_plan.metrics:
+            return []
+
+        select_fields = {field.lower() for field in inspection.select_fields}
+        group_by_fields = {field.lower() for field in inspection.group_by_fields}
+        demand_month_candidates = {field.lower() for field in self._field_candidates(query_plan, 'demand_month')}
+        if not demand_month_candidates:
+            demand_month_candidates = {'demand_month'}
+
+        errors: list[str] = []
+        if not demand_month_candidates.intersection(select_fields):
+            errors.append('monthly demand sql must project demand_month')
+        if inspection.functions and not demand_month_candidates.intersection(group_by_fields):
+            errors.append('monthly demand sql must group by demand_month')
+
+        forbidden_dimension_candidates = set()
+        for field in ('FGCODE', 'customer', 'PM_VERSION'):
+            forbidden_dimension_candidates.update(item.lower() for item in self._field_candidates(query_plan, field))
+        if forbidden_dimension_candidates.intersection(select_fields):
+            errors.append('monthly demand sql must not project FGCODE, customer, or PM_VERSION in outer select')
+        if forbidden_dimension_candidates.intersection(group_by_fields):
+            errors.append('monthly demand sql must not group by FGCODE, customer, or PM_VERSION')
+        return errors
 
     def _build_risk_warnings(self, inspection, used_sources: list[str]) -> list[str]:
         warnings: list[str] = []

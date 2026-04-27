@@ -228,21 +228,36 @@ class PromptBuilder:
         if self._is_demand_plan(query_plan, selected_sources):
             sql_preferences = [
                 "对于 p_demand/v_demand 这类横向需求表，MONTH 是起始需求月份。REQUIREMENT_QTY 对应 base MONTH，NEXT_REQUIREMENT 对应 base MONTH 加 1 个月，LAST_REQUIREMENT 对应 base MONTH 加 2 个月，MONTH4 到 MONTH7 对应 base MONTH 加 3 到 6 个月。",
-                "如果 query_plan.filters 包含 demand_month='YYYYMM'，请先构造一个包含 PM_VERSION、FGCODE、客户维度、demand_month、demand_qty 的 CTE，并确保产出的每个 demand_month 都与筛选值保持相同的紧凑 YYYYMM 格式。",
+                "如果 query_plan.filters 包含 demand_month='YYYYMM' 或 demand_month BETWEEN 两个月份，请先构造一个包含 PM_VERSION、FGCODE、客户维度、demand_month、demand_qty 的 CTE，并确保产出的每个 demand_month 都与筛选值保持相同的紧凑 YYYYMM 格式。",
                 "如果外层 SQL 还要按 PM_VERSION 过滤，或者要和 latest_versions 做 IN/JOIN 比较，那么 demand_unpivot 的每个 UNION ALL 分支都必须显式产出 PM_VERSION，不能在 CTE 外层引用一个未投影出来的 PM_VERSION。",
                 "当 MONTH 在真实表里以紧凑 YYYYMM 编码存储时，不要直接对原始 MONTH 调用 DATE_ADD、ADDDATE、DATE_FORMAT 或类似函数。应先把 MONTH 转成真实日期，再格式化回 YYYYMM；或者对于 REQUIREMENT_QTY 直接保留 base MONTH。",
                 "如果目标 demand_month 就是 base MONTH，本月需求应直接把 REQUIREMENT_QTY 映射到 MONTH，不要做日期运算。",
                 "如果 query_plan.filters 中 PM_VERSION 的 op 是 latest_n，应先用 SELECT PM_VERSION FROM <source table> GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT count 计算最新 N 个版本。",
                 *sql_preferences,
             ]
-            few_shot = {
-                "question_pattern": "最新N版P版需求中，YYYYMM需求最多的FGCODE是哪一个",
-                "sql_shape": [
-                    "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT N)",
-                    "demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand ...)",
-                    "SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month='YYYYMM' AND PM_VERSION IN (...) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1",
-                ],
-            }
+            if query_plan.dimensions == ["demand_month"] and "demand_qty" in query_plan.metrics:
+                sql_preferences = [
+                    "当 query_plan.dimensions 只有 demand_month 时，结果必须按 demand_month 聚合并返回 demand_month，不能改成按 FGCODE、customer、PM_VERSION 或其他维度分组。",
+                    "对于 ttl/total 类型的月度需求问题，外层 SELECT 应返回 demand_month 和聚合后的 demand_qty；GROUP BY 必须是 demand_month；ORDER BY 应按 demand_month。",
+                    *sql_preferences,
+                ]
+                few_shot = {
+                    "question_pattern": "最新p版，最近6个月的ttl需求物量",
+                    "sql_shape": [
+                        "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 1)",
+                        "demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand ...)",
+                        "SELECT demand_month, SUM(demand_qty) AS ttl_demand_qty FROM demand_unpivot WHERE demand_month BETWEEN 'YYYYMM' AND 'YYYYMM' AND PM_VERSION IN (...) GROUP BY demand_month ORDER BY demand_month LIMIT 200",
+                    ],
+                }
+            else:
+                few_shot = {
+                    "question_pattern": "最新N版P版需求中，YYYYMM需求最多的FGCODE是哪一个",
+                    "sql_shape": [
+                        "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT N)",
+                        "demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand ...)",
+                        "SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month='YYYYMM' AND PM_VERSION IN (...) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1",
+                    ],
+                }
         business_notes = self._business_notes_for_plan(query_plan, selected_sources)
         business_notes_source = self._business_notes_source_for_plan(query_plan, selected_sources)
         context_budget = {

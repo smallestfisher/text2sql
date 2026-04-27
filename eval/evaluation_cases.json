@@ -62,5 +62,37 @@
     ],
     "expected_status": null,
     "notes": "真实问题回归样本。当前校验目标是最新 5 版 P 版需求 + 202604 + FGCODE top1 的语义解析链路。"
+  },
+  {
+    "id": "eval_real_demand_latest_p_recent6m_ttl_001",
+    "question": "最新p版，最近6个月的ttl需求物量",
+    "session_questions": [],
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "real",
+      "demand",
+      "horizontal_table",
+      "latest_version",
+      "recent_months",
+      "ttl"
+    ],
+    "expected_domain": "demand",
+    "expected_question_type": "new",
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "biz_month"
+    ],
+    "expected_sort_fields": [
+      "biz_month"
+    ],
+    "expected_filter_fields": [
+      "source_table",
+      "demand_month",
+      "PM_VERSION"
+    ],
+    "expected_status": null,
+    "notes": "真实问题回归样本。当前校验目标是最新 1 版 P 版需求 + 最近 6 个月 + 月度 total 需求物量的语义解析链路。"
   }
 ]

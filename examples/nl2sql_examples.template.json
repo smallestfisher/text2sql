@@ -106,5 +106,59 @@
     "sql": "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 5), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 2 MONTH), '%Y%m') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 3 MONTH), '%Y%m') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 4 MONTH), '%Y%m') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 5 MONTH), '%Y%m') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 6 MONTH), '%Y%m') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month = '202604' AND PM_VERSION IN (SELECT PM_VERSION FROM latest_versions) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1;",
     "result_shape": "top_1_table",
     "notes": "真实调试样例。当前记录的是 live LLM 生成出的 demand 横表展开 SQL。"
+  },
+  {
+    "id": "demand_latest_p_recent6m_ttl_001",
+    "question": "最新p版，最近6个月的ttl需求物量",
+    "normalized_question": "最新p版，最近6个月的ttl需求物量",
+    "intent": "查询最新 1 版 P 版需求在最近 6 个月各需求月份的 total 需求物量",
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "demand",
+      "real",
+      "horizontal_table",
+      "latest_version",
+      "recent_months",
+      "ttl"
+    ],
+    "subject_domain": "demand",
+    "question_type": "new",
+    "tables": [
+      "p_demand"
+    ],
+    "entities": [],
+    "metrics": [
+      "demand_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "filters": [
+      {
+        "field": "source_table",
+        "op": "=",
+        "value": "p_demand"
+      },
+      {
+        "field": "PM_VERSION",
+        "op": "latest_n",
+        "value": {
+          "count": 1,
+          "source_table": "p_demand"
+        }
+      },
+      {
+        "field": "demand_month",
+        "op": "between",
+        "value": [
+          "relative_recent_6m_start",
+          "relative_current_month_end"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "WITH latest_version AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 1), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CUSTOMER, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 2 MONTH), '%Y%m') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 3 MONTH), '%Y%m') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 4 MONTH), '%Y%m') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 5 MONTH), '%Y%m') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 6 MONTH), '%Y%m') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT demand_month, SUM(COALESCE(demand_qty, 0)) AS ttl_demand_qty FROM demand_unpivot WHERE PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_month BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y%m') AND DATE_FORMAT(CURDATE(), '%Y%m') GROUP BY demand_month ORDER BY demand_month;",
+    "result_shape": "monthly_series",
+    "notes": "真实调试样例。当前校验目标是最新 1 版 P 版需求 + 最近 6 个月 + 月度 total 需求物量的语义解析与 SQL 结构。"
   }
 ]

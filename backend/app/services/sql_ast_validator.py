@@ -242,9 +242,10 @@ class SqlAstValidator:
         )
 
     def _extract_select_fields(self, sql: str) -> list[str]:
+        outer_sql = self._outer_query_sql(sql)
         match = re.search(
             r"\bSELECT\b(.*?)(?:\bFROM\b|$)",
-            sql,
+            outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
         if not match:
@@ -252,9 +253,10 @@ class SqlAstValidator:
         return self._extract_fields_from_clause(match.group(1))
 
     def _extract_where_clause(self, sql: str) -> str:
+        outer_sql = self._outer_query_sql(sql)
         match = re.search(
             r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|$)",
-            sql,
+            outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
         if not match:
@@ -280,9 +282,10 @@ class SqlAstValidator:
         return joins
 
     def _extract_group_by_fields(self, sql: str) -> list[str]:
+        outer_sql = self._outer_query_sql(sql)
         match = re.search(
             r"\bGROUP\s+BY\b(.*?)(?:\bORDER\s+BY\b|\bLIMIT\b|\bHAVING\b|$)",
-            sql,
+            outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
         if not match:
@@ -290,9 +293,10 @@ class SqlAstValidator:
         return self._extract_fields_from_clause(match.group(1))
 
     def _extract_order_by_fields(self, sql: str) -> list[str]:
+        outer_sql = self._outer_query_sql(sql)
         match = re.search(
             r"\bORDER\s+BY\b(.*?)(?:\bLIMIT\b|$)",
-            sql,
+            outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
         if not match:
@@ -309,6 +313,20 @@ class SqlAstValidator:
             if field not in result:
                 result.append(field)
         return result
+
+    def _outer_query_sql(self, sql: str) -> str:
+        stripped = sql.strip()
+        if not re.match(r"^WITH\b", stripped, re.IGNORECASE):
+            return stripped
+        depth = 0
+        for index, char in enumerate(stripped):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth = max(0, depth - 1)
+            elif depth == 0 and stripped[index:index+6].upper() == 'SELECT':
+                return stripped[index:]
+        return stripped
 
     def _extract_referenced_fields(
         self,

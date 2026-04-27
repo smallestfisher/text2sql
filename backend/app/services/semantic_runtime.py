@@ -5,6 +5,7 @@ from collections import deque
 import calendar
 import json
 import re
+from datetime import date
 
 from backend.app.config import TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
@@ -1038,6 +1039,24 @@ class SemanticRuntime:
                 "context": TimeContext(grain="month", range=TimeRange(start=value, end=value)),
             }
 
+        if rule_type == "relative_recent_months":
+            try:
+                month_count = max(1, int(match.group(1)))
+            except (IndexError, TypeError, ValueError):
+                return None
+            today = date.today()
+            current_month_index = today.year * 12 + (today.month - 1)
+            start_month_index = current_month_index - (month_count - 1)
+            start_year = start_month_index // 12
+            start_month = start_month_index % 12 + 1
+            start = f"{start_year:04d}-{start_month:02d}-01"
+            end_day = calendar.monthrange(today.year, today.month)[1]
+            end = f"{today.year:04d}-{today.month:02d}-{end_day:02d}"
+            return {
+                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
+                "context": TimeContext(grain="month", range=TimeRange(start=start, end=end)),
+            }
+
         return None
 
     def _prepare_text(self, question: str, rule: dict) -> str:
@@ -1151,10 +1170,13 @@ class SemanticRuntime:
         }
         time_key = f"{time_filter.field}:{time_filter.op}:{repr(time_filter.value)}"
         if time_key in existing:
+            compiled.filters = [
+                item for item in compiled.filters if item.field not in set(candidate_fields) or item.field == time_filter.field
+            ]
             return compiled
 
         compiled.filters = [
-            item for item in compiled.filters if item.field != time_filter.field
+            item for item in compiled.filters if item.field not in set(candidate_fields)
         ] + [time_filter]
         return compiled
 
