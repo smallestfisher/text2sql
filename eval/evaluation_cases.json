@@ -30,5 +30,37 @@
     ],
     "expected_status": null,
     "notes": "真实问题回归样本。当前校验目标是 production_actuals + act_type=投入 + Panel_qty 物量口径的 SQL 生成链路。"
+  },
+  {
+    "id": "eval_real_demand_latest5_p_202604_top_fgcode_001",
+    "question": "最新5版p版需求中，202604需求量最多的fgcode是哪一个",
+    "session_questions": [],
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "real",
+      "demand",
+      "horizontal_table",
+      "latest_version",
+      "topn",
+      "fgcode"
+    ],
+    "expected_domain": "demand",
+    "expected_question_type": "new",
+    "expected_metrics": [
+      "demand_qty"
+    ],
+    "expected_dimensions": [
+      "FGCODE"
+    ],
+    "expected_sort_fields": [
+      "demand_qty"
+    ],
+    "expected_filter_fields": [
+      "source_table",
+      "demand_month",
+      "PM_VERSION"
+    ],
+    "expected_status": null,
+    "notes": "真实问题回归样本。当前校验目标是最新 5 版 P 版需求 + 202604 + FGCODE top1 的语义解析链路。"
   }
 ]

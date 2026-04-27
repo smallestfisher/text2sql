@@ -53,5 +53,58 @@
     "sql": "SELECT product_ID, SUM(Panel_qty) AS actual_input_panel_qty FROM production_actuals WHERE work_date BETWEEN '2026-01-01' AND '2026-12-31' AND FACTORY = 'MDL' AND act_type = '投入' GROUP BY product_ID ORDER BY actual_input_panel_qty DESC LIMIT 10;",
     "result_shape": "top_n_table",
     "notes": "真实调试样例。LLM 生成 SQL 已经按生产实绩表、act_type=投入、Panel_qty 物量口径校验通过。"
+  },
+  {
+    "id": "demand_latest5_p_202604_top_fgcode_001",
+    "question": "最新5版p版需求中，202604需求量最多的fgcode是哪一个",
+    "normalized_question": "最新5版p版需求中，202604需求量最多的fgcode是哪一个",
+    "intent": "查询最新 5 版 P 版需求中 202604 需求量最高的 FGCODE",
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "demand",
+      "real",
+      "horizontal_table",
+      "latest_version",
+      "topn",
+      "fgcode"
+    ],
+    "subject_domain": "demand",
+    "question_type": "new",
+    "tables": [
+      "p_demand"
+    ],
+    "entities": [
+      "fg_product"
+    ],
+    "metrics": [
+      "demand_qty"
+    ],
+    "dimensions": [
+      "FGCODE"
+    ],
+    "filters": [
+      {
+        "field": "source_table",
+        "op": "=",
+        "value": "p_demand"
+      },
+      {
+        "field": "demand_month",
+        "op": "=",
+        "value": "202604"
+      },
+      {
+        "field": "PM_VERSION",
+        "op": "latest_n",
+        "value": {
+          "count": 5,
+          "source_table": "p_demand"
+        }
+      }
+    ],
+    "join_path": [],
+    "sql": "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 5), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 2 MONTH), '%Y%m') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 3 MONTH), '%Y%m') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 4 MONTH), '%Y%m') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 5 MONTH), '%Y%m') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 6 MONTH), '%Y%m') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month = '202604' AND PM_VERSION IN (SELECT PM_VERSION FROM latest_versions) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1;",
+    "result_shape": "top_1_table",
+    "notes": "真实调试样例。当前记录的是 live LLM 生成出的 demand 横表展开 SQL。"
   }
 ]
