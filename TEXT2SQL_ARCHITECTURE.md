@@ -252,6 +252,19 @@ LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
 - `物量` 在工厂语境下默认指 panel，是业务口径问题，优先放业务知识；如果多条真实问题都验证稳定，再谨慎放配置消歧
 - 最终 SQL 如何写，仍然交给 LLM
 
+再看一个 demand 横表场景：`最新p版，最近6个月的ttl需求物量`
+
+- `最新p版` 是问题理解能力，可以进配置，落成 `PM_VERSION = latest_n(1)`
+- `最近6个月` 是相对时间解析，可以进配置，落成月度时间窗口
+- `ttl` 如果只是表达“按月份看 total”，本质上仍然是结果形态约束，不应该在配置里直接决定 SQL
+- 横表展开成 `demand_unpivot`、外层按 `demand_month` 聚合、以及 `GROUP BY demand_month` 这类 SQL 结构，仍然属于 prompt / example / validator 的职责
+
+这个例子说明：
+
+- 配置负责把问题翻译成稳定的 `QueryPlan`
+- PromptBuilder 负责把 `QueryPlan` 翻译成正确 SQL 形状
+- validator 负责拦截被 few-shot 或模型惯性带偏的 SQL
+
 ### 10.5 治理要求
 
 为了避免系统滑回规则驱动，建议遵守：
@@ -260,3 +273,10 @@ LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
 - 定期清理只服务单题的规则
 - 新增规则必须配真实 `eval case` 或 replay 验证
 - 如果规则已经在决定 SQL 结构，就必须退回 prompt / knowledge / example 路径
+
+再补一个工程化判断标准：
+
+- 如果新增内容是在回答“这句话是什么意思”，优先考虑 `domain_config`
+- 如果新增内容是在回答“这条 SQL 应该按什么维度聚合”，优先考虑 `PromptBuilder` 或 validator
+- 如果新增内容是在表达稳定业务事实，例如横表字段含义、物量口径、版本含义，优先考虑 `business_knowledge.json`
+- 如果某条 few-shot 只能覆盖单题、不能覆盖一类真实问题，就不应长期保留
