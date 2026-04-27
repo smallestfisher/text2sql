@@ -47,14 +47,10 @@ Unknown column 'can_download_results' in 'field list'
 
 ## 文档导航
 
-- [TEXT2SQL_ARCHITECTURE.md](TEXT2SQL_ARCHITECTURE.md)：当前 LLM-first 架构、会话恢复和 demand 横表处理原则
-- [backend/README.md](backend/README.md)：后端运行方式、配置、API 和 runtime 库说明
+- [TEXT2SQL_ARCHITECTURE.md](TEXT2SQL_ARCHITECTURE.md)：LLM-first 架构、职责边界、配置规则边界和 demand 横表原则
+- [DEBUG_PLAYBOOK.md](DEBUG_PLAYBOOK.md)：单题调试、真实联调、样本沉淀和离线回归入口
+- [backend/README.md](backend/README.md)：后端运行方式、配置、API、runtime 库和回归说明
 - [frontend/README.md](frontend/README.md)：前端工作台、详情侧栏、权限和数据加载方式
-- [ACCURACY_DEBUG_GUIDE.md](ACCURACY_DEBUG_GUIDE.md)：单题准确度调试手册
-- [REAL_SCENARIO_DEBUG_GUIDE.md](REAL_SCENARIO_DEBUG_GUIDE.md)：真实场景联调和覆盖边界
-- [REAL_DATA_TUNING_PLAYBOOK.md](REAL_DATA_TUNING_PLAYBOOK.md)：接入真实数据后的调优顺序
-- [OFFLINE_OPTIMIZATION_PLAN.md](OFFLINE_OPTIMIZATION_PLAN.md)：无真实数据阶段的优化计划
-- [BACKEND_GAP_ANALYSIS.md](BACKEND_GAP_ANALYSIS.md)：当前后端缺口与后续优先级
 
 ## 一句话原则
 

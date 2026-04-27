@@ -271,9 +271,8 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 ## 相关阅读
 
 - [TEXT2SQL_ARCHITECTURE.md](../TEXT2SQL_ARCHITECTURE.md)
+- [DEBUG_PLAYBOOK.md](../DEBUG_PLAYBOOK.md)
 - [frontend/README.md](../frontend/README.md)
-- [REAL_DATA_TUNING_PLAYBOOK.md](../REAL_DATA_TUNING_PLAYBOOK.md)
-- [REAL_SCENARIO_DEBUG_GUIDE.md](../REAL_SCENARIO_DEBUG_GUIDE.md)
 
 ## Structure
 

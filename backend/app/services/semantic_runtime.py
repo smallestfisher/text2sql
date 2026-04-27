@@ -65,6 +65,32 @@ class SemanticRuntime:
         classification = self.question_understanding.get("classification", {})
         return list(classification.get("rules", []))
 
+    def metric_resolution_rules(self) -> list[dict]:
+        return list(self.question_understanding.get("metric_resolution_rules", []))
+
+    def resolve_metrics(
+        self,
+        question: str,
+        matched_metrics: list[str],
+        filters: list[FilterItem],
+    ) -> list[str]:
+        metrics = [
+            metric
+            for metric in self._unique_strings(matched_metrics)
+            if self.is_known_metric(metric)
+        ]
+        if metrics:
+            return metrics
+
+        normalized_question = question.strip().lower()
+        for rule in self.metric_resolution_rules():
+            if not self._metric_resolution_rule_matches(normalized_question, filters, rule):
+                continue
+            for metric in rule.get("metrics", []):
+                if isinstance(metric, str) and self.is_known_metric(metric) and metric not in metrics:
+                    metrics.append(metric)
+        return metrics
+
     def metric_column(self, metric_name: str) -> str:
         metric = self.metric_catalog.get(metric_name, {})
         return metric.get("semantic_column", metric_name)
@@ -853,6 +879,37 @@ class SemanticRuntime:
         except (IndexError, TypeError, ValueError):
             return None
         return max(1, value)
+
+    def _metric_resolution_rule_matches(
+        self,
+        normalized_question: str,
+        filters: list[FilterItem],
+        rule: dict,
+    ) -> bool:
+        text_any = [str(item).lower() for item in rule.get("text_any", []) if item]
+        text_all = [str(item).lower() for item in rule.get("text_all", []) if item]
+        text_none = [str(item).lower() for item in rule.get("text_none", []) if item]
+
+        if text_any and not any(token in normalized_question for token in text_any):
+            return False
+        if text_all and not all(token in normalized_question for token in text_all):
+            return False
+        if text_none and any(token in normalized_question for token in text_none):
+            return False
+
+        required_filters = rule.get("required_filters", [])
+        for expected in required_filters:
+            if not isinstance(expected, dict):
+                return False
+            field = expected.get("field")
+            op = expected.get("op", "=")
+            value = expected.get("value")
+            if not any(
+                item.field == field and item.op == op and item.value == value
+                for item in filters
+            ):
+                return False
+        return True
 
     def _extract_filter(self, question: str, rule: dict) -> FilterItem | None:
         rule_type = rule.get("type")

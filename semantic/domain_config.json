@@ -87,6 +87,44 @@
   "question_understanding": {
     "invalid_exact_patterns": ["你好", "hello", "hi", "谢谢", "thanks"],
     "follow_up_cues": ["只看", "换成", "那", "再看", "改成", "分别", "继续", "然后"],
+    "metric_resolution_rules": [
+      {
+        "name": "actual_input_panel_qty_from_volume_and_input",
+        "text_any": ["物量", "panel量", "panel数量"],
+        "required_filters": [
+          {
+            "field": "act_type",
+            "op": "=",
+            "value": "投入"
+          }
+        ],
+        "metrics": ["actual_input_panel_qty"]
+      },
+      {
+        "name": "actual_output_qty_from_volume_and_output",
+        "text_any": ["物量", "panel量", "panel数量"],
+        "required_filters": [
+          {
+            "field": "act_type",
+            "op": "=",
+            "value": "产出"
+          }
+        ],
+        "metrics": ["actual_output_qty"]
+      },
+      {
+        "name": "defect_qty_from_scrap",
+        "text_any": ["报废量", "报废数量", "报废物量"],
+        "required_filters": [
+          {
+            "field": "act_type",
+            "op": "=",
+            "value": "报废"
+          }
+        ],
+        "metrics": ["defect_qty"]
+      }
+    ],
     "context_management": {
       "replace_filter_groups": {
         "time": ["biz_date", "biz_month"],

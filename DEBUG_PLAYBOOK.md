@@ -1,0 +1,403 @@
+# 调试与联调手册
+
+## 1. 这份文档解决什么问题
+
+这份文档把原来分散的几类内容合在一起：
+
+- 单题准确度调试
+- 真实场景联调
+- 真实数据接入后的调优顺序
+- 样本沉淀和 replay / eval / example 的使用方式
+
+如果你面对的是一个真实业务问题，优先看这份文档。
+
+---
+
+## 2. 先记住总原则
+
+当前工程是 **LLM-first Text2SQL**。
+
+遇到问题时，优先按这个顺序处理：
+
+1. 修 `tables.json`
+2. 修 `business_knowledge.json`
+3. 补 `example / eval case / replay`
+4. 修 `PromptBuilder`
+5. 修 `validator`
+6. 最后才考虑加局部规则
+
+不要一上来就把问题改成 Python 分支或本地 SQL 模板。
+
+---
+
+## 3. 一个问题进来后，先看哪条链路
+
+一次 `POST /api/chat/query` 的关键步骤大致是：
+
+1. 读取当前 `session_state`
+2. 提取指标、实体、时间、版本和 follow-up 信号
+3. 判断是首轮新问、追问、跨域新问、澄清还是无效问题
+4. 对低信号问题触发 relevance guard
+5. 生成基础 `Query Plan`
+6. 检索 example / knowledge / metric 辅助上下文
+7. 注入权限过滤
+8. 构造 SQL prompt
+9. LLM 生成 SQL
+10. validator 校验，必要时触发 repair
+11. 执行 SQL
+12. 组织回答并落 trace / query log / response snapshot
+
+所以“答错了”通常属于下面几类之一：
+
+- 语义解析错
+- 分类错
+- prompt 上下文不对
+- Query Plan 错
+- SQL 生成错
+- validator 误拦或漏拦
+- 权限影响结果
+- 执行环境或数据问题
+
+---
+
+## 4. 推荐调试入口
+
+### 4.1 优先入口
+
+推荐按这条路径排：
+
+1. 在前端工作台或 `POST /api/chat/query` 复现问题
+2. 看 `GET /api/chat/sessions/{session_id}/workspace`
+3. 看 `GET /api/chat/traces/{trace_id}`、`/sql-audit`、`/retrieval`
+4. 历史问题优先走 `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+5. 有代表性的失败样本再物化为 `eval case` 或 `example`
+
+### 4.2 为什么先看 `workspace`
+
+因为它已经是前端主入口，一次性带回：
+
+- 消息历史
+- `session_state`
+- `latest_response`
+- `latest_trace`
+- `latest_sql_audit`
+- `trace_artifacts`
+
+如果左边消息对、右边详情不对，先看 `workspace` 返回是不是已经错位。
+
+---
+
+## 5. 先分流，不要先改 SQL
+
+先看这几个字段：
+
+- `classification.question_type`
+- `classification.subject_domain`
+- `answer.status`
+- `plan_validation.valid`
+- `sql_validation.valid`
+- `execution.status`
+
+### 5.1 常见分流方式
+
+- `invalid`：先看 relevance guard 是否误判为非业务查询
+- `clarification_needed`：先看是否缺指标、时间、版本或主体
+- `plan_validation.valid = false`：先看 Query Plan
+- `sql_validation.valid = false`：先看 SQL 生成和 validator
+- `execution.status = db_error`：先看 SQL、字段大小写、真实库对象
+- `execution.status = empty_result`：先看过滤条件、时间、版本、权限和底层数据
+
+---
+
+## 6. 分层调试方法
+
+### 6.1 语义解析层
+
+看：
+
+- `query_intent.matched_metrics`
+- `query_intent.matched_entities`
+- `query_intent.filters`
+- `query_intent.time_context`
+- `query_intent.version_context`
+- `query_intent.subject_domain`
+
+典型症状：
+
+- 问库存却识别成计划/实际
+- 时间没提出来
+- 版本没提出来
+- 指标别名没识别
+
+优先修：
+
+- 指标别名、实体别名、domain inference
+- 时间/版本提取
+- follow-up cue
+
+### 6.2 分类层
+
+看：
+
+- `classification.question_type`
+- `classification.inherit_context`
+- `classification.context_delta`
+- `classification.reason_code`
+
+典型症状：
+
+- 明明是追问，却被当成新问题
+- 明明切到新域，却还继承老上下文
+- 信息足够，却总被判成 `clarification_needed`
+
+优先修：
+
+- `classification_rules`
+- follow-up 线索
+- 澄清文案
+- relevance guard 的边界
+
+### 6.3 检索和 prompt 上下文层
+
+看：
+
+- `retrieval_terms`
+- `retrieval_channels`
+- 命中的 example / knowledge / metric
+- `build_sql_prompt.metadata.context_summary`
+
+典型症状：
+
+- 域对了，但关键知识块没进 prompt
+- few-shot 命中很多，但都不相关
+- 同一问题多次执行时，上下文抖动很大
+
+优先修：
+
+- `tables.json`
+- `business_knowledge.json`
+- example / few-shot
+- PromptBuilder 的上下文选择规则
+
+### 6.4 Query Plan 层
+
+看：
+
+- `tables`
+- `metrics`
+- `dimensions`
+- `filters`
+- `sort`
+- `limit`
+- `time_context`
+- `version_context`
+
+典型症状：
+
+- 表选错
+- 维度缺失
+- limit 不对
+- 排序没落进去
+- 过滤条件丢失
+
+优先修：
+
+- `domain_config.json`
+- Query Planner
+- sanitize / validator 边界
+
+### 6.5 SQL 生成与校验层
+
+看：
+
+- `sql`
+- `sql_validation.errors`
+- `sql_validation.warnings`
+- `sql_validation.risk_flags`
+
+典型症状：
+
+- 用了不存在的表或字段
+- 把逻辑字段名直接写进 SQL
+- time / version filter 没落进去
+- GROUP BY、ORDER BY、LIMIT 不一致
+
+优先修：
+
+- `tables.json`
+- `business_knowledge.json`
+- PromptBuilder
+- SqlValidator
+
+### 6.6 执行与结果层
+
+看：
+
+- `execution.status`
+- `row_count`
+- `columns`
+- `rows`
+- `elapsed_ms`
+
+典型症状：
+
+- SQL 能过校验但执行失败
+- SQL 能执行但结果为空
+- 结果能出，但业务口径不对
+
+优先修：
+
+- 真实库字段/大小写
+- 真实数据情况
+- 权限过滤
+- 业务口径说明
+
+---
+
+## 7. 真实场景联调顺序
+
+### 7.1 接入真实数据前最低准备
+
+至少准备：
+
+- 可访问的只读业务库账号
+- 最新 `tables.json`
+- 最新 `business_knowledge.json`
+- 每个主业务域 5 到 10 条真实高频问题
+- 每条问题的人工预期：指标、维度、过滤、排序、TopN、时间、版本口径
+
+### 7.2 先校准 schema
+
+先核对 `tables.json`：
+
+- 表名是否和真实库一致
+- 字段名、含义是否准确
+- 时间字段、版本字段、主实体字段是否写清楚
+- 横表字段含义是否写清楚
+- 常见 join 方向是否明确
+
+再核对 `business_knowledge.json`：
+
+- 是否按 `domain / tables / keywords / notes` 组织
+- 表间关系是否准确
+- 指标口径是否明确
+- 横表月份映射是否明确
+- 最新版本、目标月份、TopN 是否有说明
+
+### 7.3 再跑完整链路
+
+建议观察顺序：
+
+1. `POST /api/query/plan`
+2. `POST /api/query/sql`
+3. `POST /api/query/execute`
+4. `POST /api/chat/query`
+5. `GET /api/chat/sessions/{session_id}/workspace`
+6. `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+
+重点看：
+
+- Query Plan 是否合理
+- LLM SQL 是否只用了真实表和字段
+- prompt context summary 是否稳定
+- validator 是误拦还是正确拦
+- repair 后 SQL 是否更接近真实口径
+
+---
+
+## 8. demand 横表专项
+
+对 `p_demand` / `v_demand`，必须重点验证：
+
+- `202604` 这种目标需求月份不是简单的 `MONTH = 202604`
+- `MONTH` 是起始月份
+- `REQUIREMENT_QTY` / `NEXT_REQUIREMENT` / `LAST_REQUIREMENT` / `MONTH4~7` 分别映射不同偏移月份
+- “最新 N 版”要先取最新 N 个版本
+- “需求最多的 fgcode”要按 `FGCODE` 聚合再排序
+- 如果用了 CTE，`PM_VERSION` 要在每个 `UNION ALL` 分支里显式投影出来
+
+这类逻辑优先通过：
+
+- `business_knowledge.json`
+- PromptBuilder 的 demand 指令
+- few-shot / example
+- validator 的专项校验
+
+不要把它写成固定 SQL 模板。
+
+---
+
+## 9. 样本沉淀方式
+
+### 9.1 样本来源原则
+
+只保留真实来源：
+
+- `examples/nl2sql_examples.template.json` 只收真实问题、真实 trace、且 SQL 与业务结果都人工确认后的样例
+- `eval/evaluation_cases.json` 也只保留真实问题、真实 trace 或真实 replay 沉淀出的 case
+
+不要再维护假设样本。
+
+### 9.2 推荐沉淀流程
+
+对真实联调里有代表性的失败问题，建议按下面处理：
+
+1. 先复现并保存 `trace_id`
+2. 对该 `trace_id` 执行 replay
+3. 若有价值，调用 `materialize-case`
+4. 若属于高频标准问法，再调用 `materialize-example`
+5. 修复后再次 replay，确认变化稳定
+
+---
+
+## 10. 离线回归怎么用
+
+在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以先跑离线回归。
+
+常用命令：
+
+```bash
+python3 backend/offline_regression.py --failures-only
+```
+
+只跑指定 case：
+
+```bash
+python3 backend/offline_regression.py \
+  --case-id eval_real_plan_actual_mdl_input_panel_top10_001
+```
+
+语义配置 lint：
+
+```bash
+python3 backend/domain_config_lint.py
+```
+
+说明：
+
+- 离线回归不会连接数据库
+- 不会写 runtime 审计表
+- 当前主要覆盖 `classification / query_plan / permission_filter`
+- LLM-first SQL 生成与 SQL 校验仍要在 live 或 replay 链路验证
+
+---
+
+## 11. 首轮验收标准
+
+首轮真实联调建议达到：
+
+- 主线问题能稳定生成可执行 SQL
+- 结果和人工预期一致或差异可解释
+- SQL validation 错误能指导 repair
+- 执行失败可以通过 trace 或 workspace 快速定位
+- 新增修复可以沉淀成 eval case，避免反复回归
+
+---
+
+## 12. 最后只记一句话
+
+面对真实问题时：
+
+- 先定位错在哪一层
+- 再把修复沉淀到对的地方
+- 不要把系统重新拉回规则模板时代
