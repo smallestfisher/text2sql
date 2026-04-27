@@ -52,7 +52,7 @@ Unknown column 'can_download_results' in 'field list'
 
 ## 文档导航
 
-- [TEXT2SQL_ARCHITECTURE.md](TEXT2SQL_ARCHITECTURE.md)：LLM-first 架构、职责边界、配置规则边界和 demand 横表原则
+- [TEXT2SQL_ARCHITECTURE.md](TEXT2SQL_ARCHITECTURE.md)：LLM-first 架构、端到端运行流程、前后端模块职责、runtime 闭环和配置边界
 - [DEBUG_PLAYBOOK.md](DEBUG_PLAYBOOK.md)：单题调试、真实联调、样本沉淀和离线回归入口
 - [backend/README.md](backend/README.md)：后端运行方式、配置、API、runtime 库和回归说明
 - [frontend/README.md](frontend/README.md)：前端工作台、详情侧栏、权限和数据加载方式

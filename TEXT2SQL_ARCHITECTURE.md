@@ -1,282 +1,1103 @@
 # Text2SQL 架构说明：LLM-first
 
-## 1. 当前原则
+本文档描述当前工程的**真实运行架构**，目标是回答四类问题：
 
-当前工程的主路径已经切换为 LLM-first：
+- 系统里有哪些模块，它们各自负责什么
+- 一次真实提问从前端进入后端，经过哪些阶段，在哪些地方会终止或回退
+- 运行时数据、会话状态、Trace、SQL 审计和前端工作台是如何串起来的
+- 后续调试、扩展或重构时，哪些边界可以动，哪些边界不应该破坏
 
-- `tables.json` 提供真实数据库表、字段和关系描述
-- `business_knowledge.json` 提供结构化业务知识，是主业务说明来源
-- LLM 直接基于真实 schema、业务知识、Query Plan 和少量场景 few-shot 生成 MySQL SQL
-- 语义层、检索、Query Plan、权限和 validator 负责辅助约束，不再承担主 SQL 拼接职责
-- SQL 校验或执行失败时，允许一次基于原上下文的 LLM repair
-- Prompt 上下文必须经过选择和预算控制，不能把全量 schema、知识和样例直接塞给模型
+如果你是第一次进入仓库，建议阅读顺序：
 
-这意味着系统不要求真实数据库预建额外分析对象。复杂横表逻辑优先由 LLM 在 SQL 中用 `WITH` CTE 展开，再由校验器治理。
+1. `README.md`
+2. `TEXT2SQL_ARCHITECTURE.md`
+3. `DEBUG_PLAYBOOK.md`
+4. `backend/README.md`
+5. `frontend/README.md`
 
-## 2. 核心配置与职责边界
+---
 
-### 2.1 `tables.json`
+## 1. 总体架构结论
+
+当前工程已经明确切换为 **LLM-first Text2SQL**，即：
+
+- **LLM 负责 SQL 生成主路径**
+- **本地代码负责理解问题、约束范围、控制风险、恢复状态、记录运行时信息**
+- **少量配置规则只用于“理解问题”或“治理风险”，不再承担“主 SQL 生成器”的职责**
+
+换句话说，这个系统不是：
+
+- 规则引擎主导 + LLM 辅助润色
+- 本地模板拼 SQL + LLM 只补字段
+- 预建一堆语义视图/分析对象再强依赖它们
+
+而是：
+
+- 基于真实 `tables.json`、`business_knowledge.json`、Query Plan、检索结果和少量真实 few-shot
+- 让 LLM 直接生成 MySQL 只读 SQL
+- 再由 Query Plan validator、SQL validator、权限服务、执行器和 runtime 体系做闭环治理
+
+这意味着系统的主链路可以概括为：
+
+**问题理解 → Query Plan → Prompt 上下文选择 → LLM 生成 SQL → 校验/修复 → 执行 → 组织回答 → 落库审计 → 前端恢复与排查**
+
+---
+
+## 2. 设计原则
+
+### 2.1 LLM-first，不等于 LLM 无约束
+
+LLM 是主生成器，但不是裸奔：
+
+- Query Planner 先把问题收敛成结构化 Query Plan
+- PromptBuilder 只给当前问题真正相关的 schema、知识和 example
+- PermissionService 先把权限过滤注入 Query Plan
+- SqlValidator 再校验只读、安全、来源范围、时间/版本、权限字段、LIMIT、风险级别
+- 失败时允许一次 repair，而不是无限次自我修复
+
+### 2.2 优先真实表结构，不优先预建分析对象
+
+- `tables.json` 是真实物理表、字段、关系、时间字段、版本字段的主来源
+- 系统不要求数据库预建额外分析对象
+- 某些历史语义视图或预建对象可以存在，但不能成为运行主依赖
+- 对复杂逻辑，优先通过 prompt / knowledge / example / validator 驱动 LLM 正确生成 SQL
+
+### 2.3 Prompt 必须做预算控制
+
+LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
+
+- 不把全量 schema 一次性塞进 prompt
+- 不把全量业务知识塞进 prompt
+- 不把所有 example 全部注入
+- 只选择当前 Query Plan 命中的表、知识、few-shot
+- 在 trace 中记录 prompt 上下文摘要，便于回溯“本次到底给了模型什么”
+
+### 2.4 会话工作台不是聊天 UI，而是可恢复的查询工作流界面
+
+前端虽然是会话形态，但本质上不是自由聊天产品，而是：
+
+- 以会话为容器
+- 以每次查询轮次为 trace 单位
+- 以 `workspace` 聚合数据为恢复入口
+- 以右侧详情面板承接 SQL / Trace / State / Result 调试信息
+
+因此，会话系统的重点不是“聊天体验”，而是：
+
+- 上下文继承是否稳定
+- 历史结果是否可恢复
+- 每轮生成是否可追溯
+- 失败后是否可 replay、可物化 sample、可进入 eval
+
+---
+
+## 3. 仓库核心构成
+
+### 3.1 配置与知识层
+
+#### `tables.json`
 
 职责：
 
-- 描述真实表名、字段名、字段含义
-- 描述时间字段、版本字段、主业务键、常见 join 关系
-- 给 LLM 和调试人员提供真实 schema 依据
+- 维护真实数据库表、字段、字段说明
+- 维护表间关系、时间字段、版本字段、常用 join 依据
+- 为 PromptBuilder、RetrievalService、SemanticRuntime、调试人员提供统一 schema 来源
 
 不负责：
 
-- 本地拼 SQL
-- 存放大段业务规则
+- 本地模板拼 SQL
+- 针对单题写死的业务规则
 
-### 2.2 `business_knowledge.json`
+#### `business_knowledge.json`
 
 职责：
 
-- 以 `domain / tables / keywords / notes` 形式维护稳定业务口径
-- 让 PromptBuilder 能按当前问题命中相关知识块
-- 为 LLM 提供横表映射、版本口径、指标解释、常见过滤约束
+- 维护稳定业务口径
+- 表达业务关键词、领域归属、涉及表、说明 notes
+- 给 PromptBuilder 和 RetrievalService 提供可命中的业务知识块
 
-不负责：
+适合放进去的内容：
 
-- 本地 SQL 模板
-- 针对单题硬编码业务分支
+- 指标业务解释
+- 口径定义
+- 版本含义
+- 横表解释
+- 默认枚举语义
 
-### 2.3 `semantic/domain_config.json`
+不适合放进去的内容：
 
-当前仅作为辅助配置：
+- 一道题对应一条完整固定 SQL
+- 具体 SQL join 模板
+- 只能服务单一问题的临时规则
 
-- 辅助语义解析、主题域判断和 follow-up 分类
-- 辅助检索和 Query Plan 收敛
-- 辅助 validator 判断已知来源、字段和风险
+#### `semantic/domain_config.json`
 
-它不是主 SQL 编译器。不要再往里面堆完整 SQL 模板。
+职责：
 
-## 3. 端到端主链路
+- 辅助语义解析
+- 辅助领域识别、别名、实体、指标映射
+- 给 SemanticRuntime / QueryPlanValidator / PolicyEngine 提供基础结构化语义支撑
 
-一次查询的主链路如下：
+边界：
 
-1. API 接收自然语言问题和用户上下文
-2. `query_intent` 提取指标、实体、时间、版本和 follow-up 信号
-3. 分类器判断问题是首轮新问、同域新问、跨域新问、追问、澄清还是无效问题
-4. 对低信号问题触发 LLM relevance guard，先判断是否属于业务数据查询范围
-5. 如果被判为 `invalid` 或 `clarification_needed`，链路直接在 SQL 生成前终止
-6. Query Planner 生成基础 Query Plan
-7. 检索层补 example / metric / knowledge 命中结果，辅助收敛 Query Plan
-8. 权限服务把用户数据范围过滤条件注入 Query Plan
-9. PromptBuilder 从 `tables.json`、`business_knowledge.json`、Query Plan 和 few-shot 里选择相关上下文
-10. LLM 生成一条只读 `SELECT` 或 `WITH ... SELECT`
-11. SqlValidator / SqlAstValidator 校验来源范围、过滤条件、时间/版本一致性、权限和 LIMIT
-12. 如果校验或执行失败，LLM 使用原 prompt 和错误信息做一次 repair
-13. SqlExecutor 在只读业务库执行 SQL
-14. AnswerBuilder 组织回答摘要
-15. 审计、查询日志、会话消息和会话状态落到 runtime 库
-16. Trace 在落库前附带 `response_snapshot`，供历史会话恢复 `latest_response`
+- 它不是 SQL 模板库
+- 它不是主编译器
+- 它可以用于“用户这句话是什么意思”，不能扩展成“SQL 必须怎么写”
 
-## 4. Prompt 与 token 控制
+### 3.2 Backend 实现层
 
-### 4.1 当前 prompt 方向
+主要目录在 `backend/app/`：
 
-当前 SQL、分类、相关性判断 prompt 统一以中文自然语言指令为主。表名、字段名和数据库对象名仍保持真实英文命名。
+- `api/`：FastAPI 路由、依赖注入、中间件
+- `core/`：容器、全局设置、错误处理
+- `models/`：Pydantic 模型和数据结构
+- `repositories/`：runtime MySQL 持久化访问
+- `services/`：核心业务逻辑
 
-### 4.2 上下文选择原则
+### 3.3 Frontend 工作台层
 
-LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
+主要目录在 `frontend/src/`：
 
-- 只发送 Query Plan 命中的真实表结构；没有命中表时才使用主题域候选表
-- 优先从 `business_knowledge.json` 里按 `domain / tables / keywords` 选择结构化知识块
-- few-shot 按场景命中，不做全局注入
-- 业务说明受 `PromptBuilder.BUSINESS_NOTES_MAX_CHARS` 等预算控制
-- trace 的 `build_sql_prompt.metadata.context_summary` 会记录本次用了哪些来源、知识长度和 few-shot
+- `App.tsx`：主工作台和管理中心界面逻辑
+- `api.ts`：前端 API 访问封装
+- `types.ts`：前端类型定义
+- `styles.css`：工作台样式和响应式布局
 
-### 4.3 维护规则
+---
 
-避免 token 爆炸时，遵守以下原则：
+## 4. Backend 核心对象与依赖注入
 
-- 不把全量 `tables.json` 放进 SQL prompt
-- 不把全量 `business_knowledge.json` 放进 SQL prompt
-- 不把所有 few-shot 一次性塞进 prompt
-- 新增业务知识时，优先写成短小、稳定、可命中的知识块
-- 高频失败样例进入 few-shot 或 eval case 前，先判断是否具有复用价值
+### 4.1 应用入口
 
-## 5. 多轮对话与会话恢复
+后端入口在 `backend/app/main.py`，核心事情只有几件：
 
-当前系统支持多轮对话，但本质上是“会话状态 + 分类继承 + Query Plan 增量修改”的多轮，不是无限制的自由长对话记忆。
+1. 配置日志
+2. 创建 FastAPI app
+3. 注入请求级 trace middleware
+4. 注册错误处理器
+5. 挂载各类 router：
+   - `health`
+   - `admin`
+   - `auth`
+   - `semantic`
+   - `query`
+   - `sessions`
+   - `chat`
 
-关键机制：
+这意味着：
 
-- 分类器会判断当前问题是否需要继承上一轮上下文
-- `context_delta` 用于表达时间替换、版本替换、维度替换、筛选追加等最小修改
-- `session_state` 记录当前域、指标、维度、过滤、时间、版本和最近一次 Query Plan
-- `response_snapshot` 记录安全可恢复的回答快照，供历史会话重开
+- `/api/query/*` 是偏底层的分步接口
+- `/api/chat/*` 是真正给工作台使用的会话/查询接口
+- `/api/admin/*` 是管理与调试体系
 
-当前前端会话恢复的标准入口是：
+### 4.2 AppContainer
+
+`backend/app/core/container.py` 是系统的**装配中心**。它把配置、连接器、repository、service 和 orchestrator 全部串起来。
+
+容器初始化顺序大致是：
+
+1. 读取 settings
+2. 载入 domain config
+3. 初始化 `SemanticRuntime`
+4. 初始化两个数据库连接器：
+   - `business_database_connector`
+   - `runtime_database_connector`
+5. 初始化 runtime schema 自动升级器 `RuntimeStoreInitializer`
+6. 初始化 runtime repositories：
+   - auth
+   - session
+   - audit
+   - feedback
+   - runtime log
+   - evaluation run
+7. 初始化 `ProgressService`
+8. 初始化 Prompt / LLM / Planner / Validator / Permission / Executor / Retrieval 等核心 service
+9. 初始化 SessionWorkspace / ChatResponseRestore / Evaluation 等高层 service
+10. 初始化 `ConversationOrchestrator`
+
+这个容器表达了几个关键架构事实：
+
+- 系统明确区分**业务查询库**和**运行时库**
+- 会话、trace、query log、feedback、eval 都是 runtime 数据
+- 主聊天流程不直接散落在路由里，而是统一走 orchestrator
+
+---
+
+## 5. 端到端运行链路
+
+下面按一次真实查询来说明。
+
+### 5.1 前端发起请求
+
+前端默认不再直接优先打 `POST /api/chat/query`，而是走：
+
+- `POST /api/chat/query/stream`
+
+原因很明确：
+
+- 需要把后端执行阶段主动推给前端
+- 避免前端靠轮询猜“现在进行到哪了”
+- 最终结果也可以通过流末尾的 `completed` 事件直接回传
+
+前端在 `frontend/src/api.ts` 里实现了 SSE 读取：
+
+- 发送 `Accept: text/event-stream`
+- 读取 streaming body
+- 以 `\n\n` 分块解析 SSE 事件
+- 从 `data:` 行提取 JSON payload
+
+前端在 `App.tsx` 中发请求时，会先：
+
+1. 创建本地 pending user message
+2. 创建本地 pending assistant message
+3. 进入 `chatPending=true`
+4. 实时消费后端进度事件
+5. 收到 `completed` 事件时直接拿 `metadata.response`
+6. 只有在 SSE 完全没有启动时，才回退到普通 `POST /api/chat/query`
+
+### 5.2 `POST /api/chat/query/stream`
+
+后端流式入口在 `backend/app/api/routes/chat.py`。
+
+它做的事情不是自己执行业务，而是把 orchestrator 包装成一个 SSE 事件流：
+
+1. 解析请求和用户上下文
+2. 先生成一个 `trace_id`
+3. 向 `ProgressService` 订阅这个 `trace_id` 对应的队列
+4. 在后台线程里跑 `container.orchestrator.chat(request, trace_id)`
+5. 一边消费 progress queue，一边按 SSE 格式 `yield`
+6. 当收到 `None` 结束标记时结束流
+7. 最后取消订阅并等待后台任务结束
+
+这层的关键点是：
+
+- orchestrator 仍然是同步主流程
+- 路由层只负责把同步执行“桥接”成异步流
+- 流结束条件不是 HTTP 轮询，而是 `ProgressService.complete(trace_id)`
+
+### 5.3 Orchestrator 总控链路
+
+真正的核心运行逻辑在 `backend/app/services/orchestrator.py`。
+
+一次 `chat()` 调用的完整阶段是：
+
+1. 建立 trace
+2. 发布 `accepted`
+3. 解析 / 恢复 session state
+4. 规划 Query Plan
+5. 判断是否提前终止
+6. 检索上下文
+7. 构造 query-plan prompt，获取 LLM plan hint
+8. 权限过滤注入 Query Plan
+9. compile Query Plan
+10. validate Query Plan
+11. 再次判断是否提前终止
+12. 构造 SQL prompt
+13. 调 LLM 生成 SQL
+14. validate SQL
+15. 失败时尝试一次 repair
+16. 执行 SQL
+17. 执行失败时再尝试一次基于错误的 repair
+18. 构造回答
+19. 生成下一轮 session state
+20. 写入消息 / 状态 / trace / query log / sql audit
+21. 发布 `completed`
+22. finally 中发布 progress complete
+
+### 5.4 进度事件阶段定义
+
+当前已接入前端的阶段主要有：
+
+- `accepted`
+- `load_session`
+- `planning`
+- `retrieval`
+- `sql_generation`
+- `sql_validation`
+- `execution`
+- `answer_building`
+- `completed`
+- `failed`
+
+事件类型分为：
+
+- `accepted`
+- `stage`
+- `completed`
+- `failed`
+
+其中 `completed` 事件的 `metadata.response` 会直接携带序列化后的 `ChatResponse`，这就是前端无需再发第二个查询请求的原因。
+
+---
+
+## 6. 问题理解层：QueryIntent + Classification + QueryPlan
+
+### 6.1 QueryIntentParser
+
+`QueryIntentParser` 负责把自然语言问题先解析成结构化意图，通常包括：
+
+- 命中的指标 `matched_metrics`
+- 命中的实体 `matched_entities`
+- 请求的维度 `requested_dimensions`
+- filters
+- time_context
+- version_context
+- requested_sort
+- requested_limit
+- analysis_mode
+- follow-up cue / explicit slots 信号
+
+这一步解决的是：
+
+**用户这句话里显式说了什么，暗示了什么。**
+
+### 6.2 QuestionClassifier
+
+`QuestionClassifier` 在 QueryIntent 之上做问题分类。它不是直接产 SQL，而是决定：
+
+- 这是首轮问题还是追问
+- 是否需要继承上一轮上下文
+- 是同域新问还是跨域新问
+- 是否需要澄清
+- 是否是无效问题
+
+分类的结果直接影响：
+
+- 是否继承 `session_state`
+- `context_delta` 怎么生成
+- 是否提前终止 SQL 生成
+
+### 6.3 QueryPlanner
+
+`QueryPlanner` 是把 `QueryIntent + Classification + SessionState` 合成为 `QueryPlan` 的组件。
+
+主要逻辑：
+
+1. 先做 classify
+2. 提取 metrics / entities / filters / time / version / sort / limit / dimensions
+3. 如果是 follow-up，并且需要继承，则从 `session_state` 合并：
+   - entities
+   - metrics
+   - filters
+   - time_context
+   - version_context
+   - dimensions
+   - sort
+   - limit
+4. 推导 dimensions
+5. 选择候选表 `tables`
+6. 生成基础 `QueryPlan`
+7. 交给 `SemanticRuntime.sanitize_query_plan()` 做结构修正
+8. 处理特殊场景，例如：
+   - topN 聚合时去掉不必要时间维度
+   - compare 模式 sort 清理
+   - demand 月度趋势默认排序
+
+可以把 QueryPlan 理解为：
+
+**给 LLM 看的结构化任务描述书**。
+
+它不是 SQL，但已经足够表达：
+
+- 要查哪个业务域
+- 可能需要哪些表
+- 要按什么维度聚合
+- 要哪些 filters
+- 是否需要版本上下文
+- 是否需要澄清
+
+---
+
+## 7. 检索与 Prompt 上下文选择
+
+### 7.1 RetrievalService
+
+`RetrievalService` 的职责不是“最终决定 SQL”，而是给 LLM 和调试流程补上下文。
+
+它会从几个来源取检索 hit：
+
+- example
+- metric
+- business knowledge
+- vector retrieval（如果启用）
+
+然后统一 rerank，取 top hits，形成 `RetrievalContext`。
+
+`RetrievalContext` 会记录：
+
+- domains
+- metrics
+- retrieval_terms
+- retrieval_channels
+- hits
+- hit_count_by_source
+- hit_count_by_channel
+
+这层的目标是：
+
+- 给 PromptBuilder 提供更相关的 few-shot 和知识依据
+- 给 trace / debug 留下检索证据
+- 避免 prompt 完全靠裸 schema
+
+### 7.2 PromptBuilder
+
+`PromptBuilder` 是控制 prompt 质量的关键模块。
+
+它至少负责三类 prompt：
+
+- classification prompt
+- relevance guard prompt
+- query plan prompt
+- SQL prompt
+
+其中 SQL prompt 的重点是：
+
+1. 根据 `query_plan.tables` 选择真实 source schema
+2. 把允许字段、表、业务知识、场景指令整理成结构化 payload
+3. 针对 demand 这类横表场景追加专项指令
+4. 在必要时注入少量真实 few-shot
+5. 记录 context_summary 和 context_budget，便于 trace 审计
+
+当前工程在 demand 场景里的很多“复杂口径”并不是用本地模板硬编码，而是通过：
+
+- 专项业务知识
+- SQL prompt 中的专项约束
+- few-shot 的 SQL 形态提示
+- validator 的结构校验
+
+共同逼近正确 SQL。
+
+---
+
+## 8. 权限与治理层
+
+### 8.1 PermissionService
+
+`PermissionService` 负责三类事情：
+
+1. **执行权限治理**
+   - 当前用户是否允许执行 SQL
+2. **数据范围过滤注入**
+   - 把工厂、BU、客户等 scope 过滤注入 QueryPlan
+3. **结果脱敏**
+   - SQL 是否可见
+   - 下载是否允许
+   - 结果列是否 hidden / masked
+
+具体表现为：
+
+- 没有执行权限时，直接把 QueryPlan 转成 `clarification_needed` / `permission_denied`
+- 有数据范围限制时，把 permission filters 注入 QueryPlan
+- 没有 SQL 查看权限时，把：
+  - `response.sql`
+  - `execution.sql`
+  - `session_state.last_sql`
+  - `sql_audit.sql_text`
+ 统一清空
+- 对结果集按列级策略做 hidden / masked
+
+### 8.2 PolicyEngine
+
+`PolicyEngine` 是 PermissionService 的底层决策器。它负责产出：
+
+- allow_execute
+- allow_view_sql
+- allow_download_results
+- filters
+
+所以权限体系不是“前端按钮隐藏”而已，而是：
+
+- 查询前先治理 QueryPlan
+- 查询后再治理 SQL/Execution/State/Workspace
+
+---
+
+## 9. QueryPlan compile / validate
+
+### 9.1 QueryPlanCompiler
+
+`QueryPlanCompiler` 负责把 planner 的结构进一步收敛成适合 SQL prompt 的 plan，重点不是拼 SQL，而是：
+
+- 结合 retrieval 和 runtime 语义做 plan 修正
+- 应用 LLM plan hint（如果可接受）
+- 保持 plan 输出结构一致
+
+### 9.2 QueryPlanValidator
+
+`QueryPlanValidator` 负责校验 QueryPlan 本身是否合法，典型关注点包括：
+
+- domain 是否存在
+- metric 是否允许
+- dimension 是否允许
+- filter field 是否存在
+- 风险级别和风险 flags
+
+这一步的意义是：
+
+- 先在“SQL 生成前”阻断明显无效 plan
+- 让 LLM 生成 SQL 时拥有更稳定的输入边界
+
+如果 LLM query plan hint 导致 plan 校验失败，系统会尝试 fallback 回本地 planner 的结果，而不是盲信 LLM。
+
+---
+
+## 10. SQL 生成、校验、修复、执行
+
+### 10.1 LLMClient
+
+`LLMClient` 在主链路里承担三类调用：
+
+- `generate_query_plan_hint`
+- `generate_sql_hint`
+- `repair_sql`
+
+其中：
+
+- query plan hint 是对本地基础 plan 的轻微优化建议
+- SQL hint 是主 SQL 生成输出
+- repair 是在 validator 或执行器返回错误后的一次定向修复
+
+### 10.2 SQL 生成
+
+当前系统对 SQL 生成的原则是：
+
+- 只让模型输出只读 SQL
+- 首选 `SELECT` 或 `WITH ... SELECT`
+- SQL 来源必须落在 query_plan.tables 及其合法 CTE 范围内
+- 不允许发明未知表、字段、维度或指标
+
+### 10.3 SqlValidator
+
+`SqlValidator` 是 SQL 治理核心之一，会做这些校验：
+
+1. 只允许 `SELECT` / `WITH`
+2. 禁止 `INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE`
+3. 检查 source 是否在允许集合内
+4. 检查是否超出 QueryPlan 允许来源
+5. 检查 QueryPlan filters 是否被覆盖
+6. 检查 group by 是否覆盖了必需 dimensions
+7. 检查 sort 是否保留
+8. 检查 time_context / version_context 一致性
+9. 检查 permission required filter fields
+10. 检查 LIMIT 是否缺失或超过配置上限
+11. 检查 join 是否存在笛卡尔风险
+12. 检查 demand 横表的专项结构约束
+13. 调 `SqlAstValidator` 做 AST 级只读和结构检查
+
+这层是系统“防止 LLM 生成表面能跑但实际上不可信 SQL”的关键屏障。
+
+### 10.4 repair 机制
+
+repair 只允许一次，而且分两类：
+
+- **校验失败 repair**：SQL 被 validator 拦截后，把 errors/warnings 返给 LLM
+- **执行失败 repair**：SQL 通过校验但执行失败，再把 DB 错误返给 LLM
+
+一旦 repair 成功，还要重新过 validator。
+
+### 10.5 SqlExecutor
+
+`SqlExecutor` 基于业务库执行最终 SQL。
+
+它还配套：
+
+- `ExecutionCacheService`
+- 超时配置
+- 最大返回行数控制
+- 慢查询阈值记录
+
+执行完成后结果还会再过 PermissionService 的字段脱敏。
+
+---
+
+## 11. Answer、Session、Trace、Runtime 闭环
+
+### 11.1 AnswerBuilder
+
+`AnswerBuilder` 根据：
+
+- classification
+- query_plan
+- execution
+- plan_validation
+- sql_validation
+
+来生成最终回答，输出的重点通常包括：
+
+- `status`
+- `summary`
+- `detail`
+- `follow_up_hint`
+
+所以 answer 不是简单地把 rows stringify，而是一个经过状态判断后的业务型回复对象。
+
+### 11.2 SessionStateService
+
+`SessionStateService` 负责把本轮 QueryPlan 和 SQL 更新为下一轮会话状态：
+
+- 当前 subject_domain
+- metrics
+- dimensions
+- filters
+- sort
+- time_context
+- version_context
+- last_query_plan
+- last_sql
+- last_result_shape
+
+它决定了后续 follow-up 是否能稳定继承上下文。
+
+### 11.3 SessionService
+
+`SessionService` 管理：
+
+- 创建会话
+- 获取会话
+- 删除会话
+- 校验访问权限
+- 追加 user / assistant message
+- 更新当前 session state
+
+这里的“会话”不是缓存，而是 runtime 库中的正式对象。
+
+### 11.4 AuditService
+
+`AuditService` 负责：
+
+- 创建 trace
+- 追加 trace step
+- finalize trace
+- 获取历史 trace
+
+Trace 是整个系统的“执行骨架”，它记录每一轮从计划、检索、校验到快照恢复的完整步骤。
+
+### 11.5 RuntimeLogRepository
+
+`RuntimeLogRepository` 负责落 runtime 侧的：
+
+- retrieval log
+- query log
+- sql audit log
+
+其中：
+
+- query log 更偏摘要和检索入口
+- sql audit 更偏 SQL / validation / execution 审计
+- trace 则是更完整的步骤链路
+
+### 11.6 response snapshot
+
+orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快照追加到 trace：
+
+- 排除 `trace`
+- 排除原始 `sql`
+- 清空 `execution.sql`
+- 清空 `next_session_state.last_sql`
+
+这个 `response_snapshot` 的意义很大：
+
+- 历史会话恢复时，不必重新执行 SQL
+- 历史详情面板可以直接恢复为结构化 `ChatResponse`
+- 普通用户重开历史会话时，不会因为运行态丢失而只剩一堆 message 文本
+
+---
+
+## 12. Workspace 恢复架构
+
+### 12.1 为什么要有 workspace 聚合接口
+
+如果前端自己去拼：
+
+- session
+- history
+- state
+- latest trace
+- latest sql audit
+- latest query logs
+- 每条 assistant message 的 trace 详情
+
+会非常容易出现状态漂移：
+
+- 左边有消息
+- 右边详情不是同一轮结果
+- 会话重开后像“没执行过”
+- 历史 trace 对不上当前卡片
+
+所以当前前端工作台主入口统一改成：
 
 - `GET /api/chat/sessions/{session_id}/workspace`
 
-这个接口一次性返回：
+### 12.2 SessionWorkspaceService
 
-- 会话消息
-- 当前 `session_state`
-- `latest_response`
-- `latest_trace`
-- `latest_sql_audit`
-- `latest_query_logs`
-- 当前会话内每个 `trace_id` 对应的 `trace_artifacts`
+`SessionWorkspaceService` 做的事情是：
 
-前端消息流里的结果卡和右侧详情面板都基于这份 `workspace` 数据，而不是再自己拼 `history + state + query_logs + trace + sql_audit`。这样可以避免“左边消息正确，右边详情像没执行过”的状态漂移。
+1. 读取 session
+2. 读取消息 history
+3. 读取当前 state
+4. 解析消息里的 trace_ids
+5. 读取 query logs
+6. 构建 `trace_artifacts`
+7. 找出 latest trace 对应 artifact
+8. 返回一份聚合后的 `SessionWorkspaceResponse`
 
-## 6. 前端工作台与权限脱敏
+`trace_artifacts` 每项包含：
 
-### 6.1 用户工作台
+- `trace_id`
+- `response`
+- `trace`
+- `sql_audit`
+- `query_log`
 
-当前用户工作台是三栏结构：
+### 12.3 ChatResponseRestoreService
 
-- 左侧：会话列表
-- 中间：消息流和助手结果卡
-- 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
+`ChatResponseRestoreService` 用于从 trace / log / sql_audit 恢复 `ChatResponse`：
 
-快捷问题卡片只在空会话时显示；发送第一条消息后，消息流改为展示真实历史记录。
+优先级是：
 
-### 6.2 结果卡与详情面板
+1. 如果 trace 里有 `response_snapshot`，优先从 snapshot 恢复
+2. 否则退化为从：
+   - trace step metadata
+   - query_log
+   - sql_audit
+   - session_state
+   - messages
+   组合重建
 
-每条 assistant 消息如果关联 `trace_id`，会在消息下方展示结果卡：
+这就是当前工作台能稳定重开历史详情的关键。
 
+---
+
+## 13. 前端工作台运行逻辑
+
+### 13.1 页面总体结构
+
+当前前端是三栏工作台：
+
+- 左侧：会话列表和用户信息
+- 中间：消息流、结果卡、输入框
+- 右侧：详情侧栏 `结果 / SQL / Trace / 状态`
+
+管理员还能切换到管理中心。
+
+### 13.2 前端状态核心对象
+
+在 `frontend/src/App.tsx` 里，几个关键状态是：
+
+- `sessions`
+- `selectedSessionId`
+- `messages`
+- `sessionState`
+- `latestResponse`
+- `latestTrace`
+- `latestSqlAudit`
+- `latestQueryLogs`
+- `traceArtifacts`
+- `activeTraceId`
+- `pendingProgress`
+- `inspectorOpen`
+- `activeTab`
+
+这套状态的含义是：
+
+- `workspace` 是会话级完整恢复基础
+- `traceArtifacts` 是轮次级详情切换基础
+- `activeTraceId` 决定右侧面板当前聚焦哪一轮
+- `pendingProgress` 决定执行中进度卡展示
+
+### 13.3 发问流程
+
+当前前端发送一条问题时：
+
+1. 先在本地插入 pending user / assistant message
+2. 若没有 session，则先创建 session
+3. 调 `api.chatQueryStream(...)`
+4. 持续消费 SSE：
+   - 更新 `pendingProgress`
+   - 更新 `pendingTraceId`
+   - 在 `completed` 事件中取 `response`
+5. 成功后刷新 session workspace
+6. 用 workspace 结果替换本地临时状态
+
+### 13.4 结果卡与详情侧栏
+
+每条 assistant message 如果有 `trace_id`，消息下会出现结果卡。
+
+结果卡承接的是“该轮 trace”的摘要：
+
+- 业务域
 - 状态
-- 返回行数
-- 结果预览
-- `查看详情`
-- `下载`
+- 行数
+- 小表格预览
+- 定位详情
+- 下载
 
-点击 `查看详情` 后，右侧详情面板会切换到对应 `trace_id` 的 `trace_artifact`。这意味着“详情”是按轮次切换，不只是看会话的最后一次结果。
+点击 `定位详情` 后：
 
-### 6.3 权限脱敏
+- 设置 `activeTraceId`
+- 切换 `activeTab="result"`
+- 打开或聚焦详情栏
+- 详情栏短暂高亮提示，明确告诉用户“右侧已切换到这轮结果”
 
-普通登录用户也可以打开详情面板，但权限仍然分层：
+### 13.5 进度流展示
 
-- 没有 `can_view_sql` 时，`latest_response.sql`、`sql_audit.sql_text` 和 `session_state.last_sql` 会被清空
-- 没有 `can_download_results` 时，结果下载按钮不会可用
-- 会话与 trace 读取都经过权限服务脱敏处理
+前端对 `ProgressEvent` 做了专门的视图层处理：
 
-因此，用户可以看回答、状态、trace 摘要，但不会因为 UI 保留 SQL/State 面板就自动拿到受限 SQL。
+- 阶段序列固定：`accepted → load_session → planning → retrieval → sql_generation → sql_validation → execution → answer_building`
+- 终态事件有：`completed / failed`
+- 通过 `buildPendingProgressView()` 计算：
+  - 当前阶段
+  - 完成百分比
+  - 已完成步骤数
+  - 每步文案 / icon / 状态 badge
 
-## 7. demand 横表处理原则
+所以当前进度 UI 并不是简单打印后端原始事件，而是：
 
-`p_demand` / `v_demand` 是横向需求表，不能简单理解成 `MONTH = 202604`。
+- 对阶段做了归一化
+- 对当前阶段做了更细文案说明
+- 对失败、跳过、完成、进行中做了可视化区分
 
-正确方向是让 LLM 根据业务说明生成如下逻辑：
+---
 
-- `MONTH` 表示起始需求月份，通常以紧凑 `YYYYMM` 存储
-- `REQUIREMENT_QTY` 对应 base `MONTH`
-- `NEXT_REQUIREMENT` 对应 base `MONTH + 1`
-- `LAST_REQUIREMENT` 对应 base `MONTH + 2`
-- `MONTH4` 到 `MONTH7` 对应 base `MONTH + 3` 到 `+6`
-- “最新 N 版”要先按版本字段取最新 N 个版本
-- 如果外层还要按 `PM_VERSION` 过滤，展开后的 CTE 必须显式投影 `PM_VERSION`
-- 针对 `YYYYMM` 紧凑月份，不能直接对原始字符串做错误的日期函数运算
+## 14. 管理台与调试闭环
 
-当前这类逻辑主要通过：
+### 14.1 管理台职责
 
-- `business_knowledge.json`
-- PromptBuilder 的 demand 专项指令
-- demand few-shot
-- SqlValidator 的 demand 月份映射和 `PM_VERSION` 投影校验
+管理员界面除了用户管理外，还承接运行时调试：
 
-来共同保证，而不是依赖数据库预建展开对象。
+- runtime status
+- metadata overview
+- query logs
+- feedback summary
+- evaluation summary
+- replay 结果查看
 
-## 8. 历史语义设计的当前位置
+### 14.2 replay / materialize
 
-历史语义设计现在只是辅助参考，不是运行时主依赖：
+管理台的重要作用不是“看个表”，而是把失败样本沉淀成资产：
 
-- 可以作为业务口径参考
-- 可以继续留在语义配置和管理元数据里
-- 可以作为未来性能优化或稳定口径落库的候选
-- 不应作为 chat、`/api/query/sql` 或前端工作台的必需执行对象
+- 历史问题可以 replay
+- 真实 trace 可以 materialize 为 example
+- 真实 trace 可以 materialize 为 eval case
 
-只有在真实联调证明某类逻辑高频、稳定、复杂且确实需要数据库侧固化时，才考虑单独评审是否创建视图或物化表。
+这保证系统不是靠拍脑袋补样例，而是：
 
-## 9. 维护优先级
+**从真实线上/联调问题中沉淀样例与回归资产**。
 
-遇到准确率问题时，优先按这个顺序处理：
+### 14.3 eval / offline regression
 
-1. 修 `tables.json` 的字段描述和真实表关系
-2. 修 `business_knowledge.json` 的业务口径
-3. 补高质量 few-shot 和 eval case
-4. 修 PromptBuilder 的通用指令和上下文选择
-5. 修 SQL validator 的边界和误拦截
-6. 最后才考虑新增局部规则
+当前还支持：
 
-局部规则只能用于分类、约束、校验或安全治理，不能重新变成业务 SQL 生成主路径。
+- `EvaluationService`
+- runtime replay
+- offline regression
+- domain config lint
 
+这几层的意义分别是：
 
-## 10. 配置规则治理边界
+- replay：重放单题
+- eval：批量评估一组真实 case
+- offline regression：在缺少真实 DB/LLM 时回归上层逻辑
+- lint：校验领域配置本身的结构质量
 
-当前工程允许存在少量配置规则，但这些规则只能服务于**理解问题**，不能替代 LLM **生成 SQL**。
+---
 
-### 10.1 什么可以进配置
+## 15. SSE 主动推送架构
 
-适合进入配置的内容：
+### 15.1 为什么不是轮询
 
-- 时间解析，例如 `26年 -> 2026-01-01 ~ 2026-12-31`
-- 稳定枚举过滤，例如 `投入 / 产出 / 报废 -> act_type`
-- 权限字段和稳定别名
-- 已被多个真实问题验证过的稳定 metric 消歧
+轮询的问题很明显：
 
-### 10.2 什么不该进配置
+- 无法表达细粒度阶段
+- 延迟高
+- 前端不知道后端卡在哪一层
+- 用户会觉得“点了没反应”
 
-不适合进入配置的内容：
+所以当前实现改成 SSE：
 
-- 某一道题对应哪条固定 SQL
+- 后端边执行边发 progress event
+- 前端直接展示当前阶段
+- 最终结果通过 `completed.metadata.response` 一次带回
+
+### 15.2 为什么不是 WebSocket
+
+当前选择 SSE 而不是 WebSocket，原因是：
+
+- 这里只有后端单向推送需求
+- 不需要维护复杂长连接协议状态
+- FastAPI + fetch stream 即可完成
+- 对当前查询型单次任务模型更简单、更稳定
+
+### 15.3 现有局限
+
+当前 SSE 模式仍有边界：
+
+- ProgressService 是进程内 subscriber queue，不是跨进程事件总线
+- 多 worker / 多实例场景下，需要额外的共享事件机制才可横向扩展
+- 现在更适合单实例或同进程内的工作台执行流
+
+这点在后续如果要走多副本部署，需要单独升级。
+
+---
+
+## 16. demand 横表专项原则
+
+demand 是当前架构里最容易被误解的区域，所以单列说明。
+
+### 16.1 问题本质
+
+`p_demand / v_demand` 不是标准纵表，而是横向月度需求表。
+
+这意味着：
+
+- `MONTH` 不是“唯一月份字段”那么简单
+- `REQUIREMENT_QTY` / `NEXT_REQUIREMENT` / `LAST_REQUIREMENT` / `MONTH4...` 对应的是相对 base month 的多个月份值
+- `ttl` / total 月度问题通常需要“展开后再按 demand_month 聚合”
+
+### 16.2 当前系统的正确处理方式
+
+不是靠数据库预建横转纵对象强绑定，而是靠四层共同保证：
+
+1. `business_knowledge.json` 提供稳定业务口径
+2. PromptBuilder 给 demand 专项 SQL shape 指令
+3. few-shot 提供真实问题 SQL 形态参考
+4. SqlValidator 校验：
+   - 月份映射
+   - `PM_VERSION` 投影
+   - monthly shape
+
+### 16.3 什么不能做
+
+不能用以下方式“偷懒”：
+
+- 把 demand 所有 SQL 写成本地模板
+- 在 domain config 里硬编码一题一 SQL
+- 让配置直接决定 UNION ALL / CTE 结构
+
+这些会把系统重新拖回 template-first，而不是 LLM-first。
+
+---
+
+## 17. 配置规则治理边界
+
+系统允许有少量配置规则，但边界必须严格。
+
+### 17.1 可以进配置的内容
+
+适合放配置：
+
+- 时间解析：`26年 -> 2026`
+- 枚举映射：`投入 / 产出 / 报废 -> act_type`
+- 稳定字段别名
+- 权限字段
+- 被多个真实问题验证过的稳定 metric 消歧
+
+### 17.2 不可以进配置的内容
+
+不适合放配置：
+
+- 某个问题对应哪条固定 SQL
 - 某个场景必须怎么 join
-- 横表必须怎么展开成 CTE
-- `UNION ALL`、投影、聚合和 SQL 模板细节
+- 横表必须怎么展开
+- UNION / CTE / SELECT shape 模板
 
-这些应该优先放到：
+这些应该优先落在：
 
 - `business_knowledge.json`
-- `PromptBuilder`
-- `example`
-- `replay / eval case`
+- PromptBuilder
+- example
+- replay / eval case
+- validator
 
-### 10.3 一个最简单的判断法
+### 17.3 最简单判断法
 
-- 如果规则回答的是“用户这句话是什么意思”，可以考虑进配置
-- 如果规则回答的是“SQL 具体应该怎么写”，就不该进配置
+- 如果规则回答的是“这句话是什么意思”，可以考虑进配置
+- 如果规则回答的是“SQL 应该怎么写”，就不应该进配置
 
-### 10.4 一个通俗例子
+---
 
-以 `26年MDL工厂top10投入型号及其物量` 为例：
+## 18. 运行时数据分层
 
-- `26年` 是时间解析问题，可以进配置
-- `MDL工厂` 是过滤提取问题，可以进配置
-- `投入` 是枚举过滤问题，可以进配置
-- `物量` 在工厂语境下默认指 panel，是业务口径问题，优先放业务知识；如果多条真实问题都验证稳定，再谨慎放配置消歧
-- 最终 SQL 如何写，仍然交给 LLM
+### 18.1 业务库
 
-再看一个 demand 横表场景：`最新p版，最近6个月的ttl需求物量`
+业务库只负责：
 
-- `最新p版` 是问题理解能力，可以进配置，落成 `PM_VERSION = latest_n(1)`
-- `最近6个月` 是相对时间解析，可以进配置，落成月度时间窗口
-- `ttl` 如果只是表达“按月份看 total”，本质上仍然是结果形态约束，不应该在配置里直接决定 SQL
-- 横表展开成 `demand_unpivot`、外层按 `demand_month` 聚合、以及 `GROUP BY demand_month` 这类 SQL 结构，仍然属于 prompt / example / validator 的职责
+- 承载真实业务数据
+- 提供只读 SQL 执行对象
 
-这个例子说明：
+它不负责：
 
-- 配置负责把问题翻译成稳定的 `QueryPlan`
-- PromptBuilder 负责把 `QueryPlan` 翻译成正确 SQL 形状
-- validator 负责拦截被 few-shot 或模型惯性带偏的 SQL
+- 会话
+- trace
+- 日志
+- feedback
+- eval
 
-### 10.5 治理要求
+### 18.2 runtime 库
 
-为了避免系统滑回规则驱动，建议遵守：
+runtime 库负责：
 
-- 同类规则至少命中多个真实问题后再进入配置
-- 定期清理只服务单题的规则
-- 新增规则必须配真实 `eval case` 或 replay 验证
-- 如果规则已经在决定 SQL 结构，就必须退回 prompt / knowledge / example 路径
+- users / roles / permissions
+- sessions / messages / session state snapshots
+- query_logs
+- sql_audit_logs
+- traces
+- feedback
+- evaluation_runs
 
-再补一个工程化判断标准：
+这种拆分的好处是：
 
-- 如果新增内容是在回答“这句话是什么意思”，优先考虑 `domain_config`
-- 如果新增内容是在回答“这条 SQL 应该按什么维度聚合”，优先考虑 `PromptBuilder` 或 validator
-- 如果新增内容是在表达稳定业务事实，例如横表字段含义、物量口径、版本含义，优先考虑 `business_knowledge.json`
-- 如果某条 few-shot 只能覆盖单题、不能覆盖一类真实问题，就不应长期保留
+- 业务库污染最小
+- 会话系统可独立演进
+- 调试资产可长期保留
+- 权限与审计能放在同一运行时域里统一治理
+
+---
+
+## 19. 调试与扩展建议
+
+### 19.1 调试优先级
+
+遇到准确率问题，优先顺序应始终是：
+
+1. 修 `tables.json`
+2. 修 `business_knowledge.json`
+3. 补真实 few-shot / example
+4. 修 PromptBuilder 上下文选择
+5. 修 QueryPlan / SQL validator 边界
+6. 最后才考虑加局部规则
+
+### 19.2 不要轻易破坏的边界
+
+后续重构时，这些边界不建议破坏：
+
+- `workspace` 仍应保持前端主恢复入口
+- orchestrator 仍应是主链路唯一总控
+- QueryPlan 和 SQL validator 必须保留前后双重治理
+- 权限服务必须同时治理“查询前”和“结果后”
+- response snapshot 必须保留，否则历史恢复会退化
+
+### 19.3 可以继续增强的方向
+
+后续合理增强方向包括：
+
+- 把 progress event 升级成跨进程事件总线
+- 给 trace step 增加更细粒度的 prompt/context 摘要
+- 引入更强的离线回归和 golden trace 比对
+- 对高频稳定复杂口径做“评审后”的数据库侧固化，但必须是补充层，不是主路径替代
+
+---
+
+## 20. 一句话总结
+
+当前工程的本质不是“聊天机器人”，也不是“规则模板 SQL 系统”，而是一个：
+
+**以 LLM 为 SQL 生成核心、以 Query Plan/Validator/Permission/Runtime 为治理闭环、以 Workspace/Trace 为恢复与调试入口的企业级 Text2SQL 工作台。**
+
+如果后续要继续演进，正确方向是：
+
+- 提升知识质量
+- 提升上下文选择质量
+- 提升 validator 和 replay 能力
+- 提升前后端对 trace / progress / workspace 的联动稳定性
+
+而不是把系统重新拉回“大量硬编码规则 + 本地 SQL 模板”的旧路径。
