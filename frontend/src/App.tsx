@@ -90,6 +90,16 @@ const PROGRESS_STAGE_META: Record<string, { label: string; note: string; icon: s
     icon: "!",
   },
 };
+type ProgressStepTone = "active" | "completed" | "skipped" | "failed" | "pending";
+
+type PendingProgressStep = {
+  stage: string;
+  label: string;
+  note: string;
+  icon: string;
+  tone: ProgressStepTone;
+  badge: string;
+};
 
 type AuthMode = "login" | "bootstrap";
 type InspectorTab = "result" | "sql" | "trace" | "state";
@@ -1972,7 +1982,7 @@ function buildPendingProgressView(events: ProgressEvent[]) {
   const visibleBaseStages = terminal
     ? PROGRESS_BASE_STAGES.slice(0, Math.max(highestObservedIndex + 1, 1))
     : PROGRESS_BASE_STAGES;
-  const steps = visibleBaseStages.map((stage, index) => {
+  const steps: PendingProgressStep[] = visibleBaseStages.map((stage, index) => {
     const event = latestByStage.get(stage);
     const meta = getProgressStageMeta(stage);
     if (event) {
@@ -2084,21 +2094,21 @@ function describeProgressCurrentNote(event: ProgressEvent) {
 function classifyProgressTone(event: ProgressEvent) {
   const normalized = event.status.toLowerCase();
   if (event.type === "failed" || ["failed", "error", "invalid", "denied"].includes(normalized)) {
-    return "failed";
+    return "failed" as const;
   }
   if (event.type === "completed") {
-    return "completed";
+    return "completed" as const;
   }
   if (["completed", "success", "ok"].includes(normalized)) {
-    return "completed";
+    return "completed" as const;
   }
   if (["skipped"].includes(normalized)) {
-    return "skipped";
+    return "skipped" as const;
   }
   if (["running", "queued"].includes(normalized)) {
-    return "active";
+    return "active" as const;
   }
-  return "active";
+  return "active" as const;
 }
 
 function describeProgressBadge(event: ProgressEvent) {
