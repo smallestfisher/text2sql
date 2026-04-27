@@ -16,7 +16,6 @@
 
 - SQL prompt 只带 Query Plan 命中的真实表结构
 - `business_knowledge.json` 是主业务知识来源，不做全量注入
-- `readme.txt` 仅作为 fallback 文本说明
 - few-shot 按场景命中，不做全局注入
 - `build_sql_prompt` trace 已带 `context_budget` 和 `context_summary`
 - query log 和 replay diff 已能看到 prompt context summary
@@ -90,7 +89,7 @@
 当前阶段不做：
 
 - 重新引入本地 SQL 模板生成器
-- 创建真实数据库 semantic view 作为运行时前置条件
+- 创建真实数据库额外分析对象作为运行时前置条件
 - 为单个假问题写业务 SQL 分支
 - 在没有真实样本时接入重型向量库
 - 承诺覆盖全部长尾业务问题

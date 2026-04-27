@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from .query_plan import ContextDelta, FilterItem, QuestionType, SortItem, SubjectDomain, TimeContext, VersionContext
 
 
-class SemanticParse(BaseModel):
+class QueryIntent(BaseModel):
     normalized_question: str
     matched_metrics: list[str] = Field(default_factory=list)
     matched_entities: list[str] = Field(default_factory=list)

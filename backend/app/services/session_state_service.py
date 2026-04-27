@@ -25,7 +25,6 @@ class SessionStateService:
             or state.entities
         )
         state.tables = query_plan.tables or state.tables
-        state.semantic_views = query_plan.semantic_views or state.semantic_views
         state.metrics = (
             query_plan.context_delta.replace_metrics or query_plan.metrics or state.metrics
         )
@@ -75,7 +74,6 @@ class SessionStateService:
             subject_domain=query_plan.subject_domain,
             entities=query_plan.entities,
             tables=query_plan.tables,
-            semantic_views=query_plan.semantic_views,
             metrics=query_plan.metrics,
             dimensions=query_plan.dimensions,
             filters=deepcopy(query_plan.filters),

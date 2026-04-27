@@ -2,28 +2,28 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.app.models.classification import QuestionClassification, SemanticParse
+from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.session_state import SessionState
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_classifier import QuestionClassifier
-from backend.app.services.semantic_parser import SemanticParser
+from backend.app.services.query_intent_parser import QueryIntentParser
 from backend.app.services.semantic_runtime import SemanticRuntime
 
 
 class QueryPlanner:
     def __init__(
         self,
-        semantic_layer: dict[str, Any],
+        domain_config: dict[str, Any],
         semantic_runtime: SemanticRuntime | None = None,
         llm_client: LLMClient | None = None,
         prompt_builder: PromptBuilder | None = None,
         classification_llm_enabled: bool = False,
     ) -> None:
-        self.semantic_layer = semantic_layer
-        self.semantic_runtime = semantic_runtime or SemanticRuntime(semantic_layer)
-        self.parser = SemanticParser(semantic_layer, semantic_runtime=self.semantic_runtime)
+        self.domain_config = domain_config
+        self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
+        self.parser = QueryIntentParser(domain_config, semantic_runtime=self.semantic_runtime)
         self.classifier = QuestionClassifier(
             semantic_runtime=self.semantic_runtime,
             llm_client=llm_client,
@@ -33,35 +33,35 @@ class QueryPlanner:
 
     def classify(
         self, question: str, session_state: SessionState | None = None
-    ) -> tuple[SemanticParse, QuestionClassification, list[str]]:
-        semantic_parse = self.parser.parse(question=question, session_state=session_state)
+    ) -> tuple[QueryIntent, QuestionClassification, list[str]]:
+        query_intent = self.parser.parse(question=question, session_state=session_state)
         classification, classifier_warnings = self.classifier.classify(
             question=question,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
         )
         warnings: list[str] = list(classifier_warnings)
         if classification.need_clarification:
             warnings.append("clarification required before stable SQL generation")
-        return semantic_parse, classification, warnings
+        return query_intent, classification, warnings
 
     def create_plan(
         self, question: str, session_state: SessionState | None = None
-    ) -> tuple[SemanticParse, QuestionClassification, QueryPlan, list[str]]:
-        semantic_parse, classification, warnings = self.classify(
+    ) -> tuple[QueryIntent, QuestionClassification, QueryPlan, list[str]]:
+        query_intent, classification, warnings = self.classify(
             question=question,
             session_state=session_state,
         )
 
-        matched_entities = semantic_parse.matched_entities
-        matched_metrics = semantic_parse.matched_metrics
-        filters = semantic_parse.filters
-        time_context = semantic_parse.time_context
-        version_context = semantic_parse.version_context
-        analysis_mode = semantic_parse.analysis_mode
-        sort = list(semantic_parse.requested_sort)
-        limit = semantic_parse.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
-        requested_dimensions = list(semantic_parse.requested_dimensions)
+        matched_entities = query_intent.matched_entities
+        matched_metrics = query_intent.matched_metrics
+        filters = query_intent.filters
+        time_context = query_intent.time_context
+        version_context = query_intent.version_context
+        analysis_mode = query_intent.analysis_mode
+        sort = list(query_intent.requested_sort)
+        limit = query_intent.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
+        requested_dimensions = list(query_intent.requested_dimensions)
 
         if classification.inherit_context and session_state is not None:
             matched_entities = matched_entities or session_state.entities
@@ -95,13 +95,6 @@ class QueryPlanner:
             question_type=classification.question_type,
             subject_domain=classification.subject_domain,
             tables=self._pick_tables(classification.subject_domain, matched_metrics),
-            semantic_views=self._pick_semantic_views(
-                classification.subject_domain,
-                matched_metrics=matched_metrics,
-                dimensions=dimensions,
-                filters=filters,
-                version_field=version_context.field if version_context else None,
-            ),
             entities=matched_entities,
             metrics=matched_metrics,
             dimensions=dimensions,
@@ -120,7 +113,7 @@ class QueryPlanner:
             reason=classification.reason,
         )
         plan = self.semantic_runtime.sanitize_query_plan(plan)
-        if analysis_mode == "compare" and not plan.dimensions and not semantic_parse.requested_sort:
+        if analysis_mode == "compare" and not plan.dimensions and not query_intent.requested_sort:
             plan.sort = []
 
         if plan.need_clarification:
@@ -133,27 +126,10 @@ class QueryPlanner:
                 warnings.append("clarification required before stable SQL generation")
         if classification.question_type == "invalid":
             plan.tables = []
-            plan.semantic_views = []
             plan.metrics = []
             plan.dimensions = []
             plan.filters = []
-        return semantic_parse, classification, plan, warnings
-
-    def _pick_semantic_views(
-        self,
-        subject_domain: str,
-        matched_metrics: list[str],
-        dimensions: list[str],
-        filters,
-        version_field: str | None,
-    ) -> list[str]:
-        return self.semantic_runtime.rank_semantic_views(
-            domain_name=subject_domain,
-            metrics=matched_metrics,
-            dimensions=dimensions,
-            filters=filters,
-            version_field=version_field,
-        )
+        return query_intent, classification, plan, warnings
 
     def _pick_tables(self, subject_domain: str, matched_metrics: list[str]) -> list[str]:
         return self.semantic_runtime.resolve_tables_for_plan(subject_domain, matched_metrics)

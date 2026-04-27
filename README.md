@@ -6,11 +6,10 @@
 
 - `tables.json` 是真实数据库表和字段描述的主来源
 - `business_knowledge.json` 是主业务知识来源
-- 根目录 `readme.txt` 仅作为 legacy fallback 文本说明保留，不是仓库主页文档
 - SQL、分类、相关性判断 prompt 目前统一以中文自然语言指令为主
 - PromptBuilder 只选择当前问题相关的 schema、业务知识和 few-shot，避免 token 膨胀
 - 前端会话恢复的主入口是 `GET /api/chat/sessions/{session_id}/workspace`
-- 不要求真实数据库预建 `semantic_demand_unpivot_view` 或其他 semantic view
+- 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
 
 ## 快速启动
 

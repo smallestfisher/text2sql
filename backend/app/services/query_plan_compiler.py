@@ -14,10 +14,8 @@ class QueryPlanCompiler:
         self.default_limit = default_limit
 
     def compile(self, query_plan: QueryPlan, retrieval: RetrievalContext | None = None) -> QueryPlan:
-        fallback_semantic_views = retrieval.semantic_views if retrieval else None
         return self.semantic_runtime.sanitize_query_plan(
             query_plan=query_plan,
-            fallback_semantic_views=fallback_semantic_views,
             default_limit=self.default_limit,
         )
 
@@ -41,18 +39,6 @@ class QueryPlanCompiler:
                 if isinstance(table, str)
                 and self.semantic_runtime.is_known_table(table)
                 and (not allowed_domain_tables or table in allowed_domain_tables)
-            ]
-
-        semantic_views = llm_hint.get("semantic_views")
-        if isinstance(semantic_views, list):
-            ranked_views = self.semantic_runtime.semantic_views_for_domain(compiled.subject_domain)
-            allowed_views = set(ranked_views)
-            compiled.semantic_views = [
-                view_name
-                for view_name in semantic_views
-                if isinstance(view_name, str)
-                and self.semantic_runtime.is_known_view(view_name)
-                and (not allowed_views or view_name in allowed_views)
             ]
 
         metrics = llm_hint.get("metrics")

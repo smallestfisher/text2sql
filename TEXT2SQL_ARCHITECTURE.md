@@ -6,13 +6,12 @@
 
 - `tables.json` 提供真实数据库表、字段和关系描述
 - `business_knowledge.json` 提供结构化业务知识，是主业务说明来源
-- 根目录 `readme.txt` 只保留为 legacy fallback 文本说明
 - LLM 直接基于真实 schema、业务知识、Query Plan 和少量场景 few-shot 生成 MySQL SQL
 - 语义层、检索、Query Plan、权限和 validator 负责辅助约束，不再承担主 SQL 拼接职责
 - SQL 校验或执行失败时，允许一次基于原上下文的 LLM repair
 - Prompt 上下文必须经过选择和预算控制，不能把全量 schema、知识和样例直接塞给模型
 
-这意味着系统不要求真实数据库预建 `semantic_demand_unpivot_view` 或其他 semantic view。复杂横表逻辑优先由 LLM 在 SQL 中用 `WITH` CTE 展开，再由校验器治理。
+这意味着系统不要求真实数据库预建额外分析对象。复杂横表逻辑优先由 LLM 在 SQL 中用 `WITH` CTE 展开，再由校验器治理。
 
 ## 2. 核心配置与职责边界
 
@@ -42,7 +41,7 @@
 - 本地 SQL 模板
 - 针对单题硬编码业务分支
 
-### 2.3 `semantic/semantic_layer.json`
+### 2.3 `semantic/domain_config.json`
 
 当前仅作为辅助配置：
 
@@ -52,31 +51,19 @@
 
 它不是主 SQL 编译器。不要再往里面堆完整 SQL 模板。
 
-### 2.4 `readme.txt`
-
-职责很小：
-
-- 当结构化知识未命中时，提供中文 fallback 说明
-
-不应继续承担：
-
-- 仓库总文档
-- 规则库
-- 全量业务知识文本
-
 ## 3. 端到端主链路
 
 一次查询的主链路如下：
 
 1. API 接收自然语言问题和用户上下文
-2. `semantic_parse` 提取指标、实体、时间、版本和 follow-up 信号
+2. `query_intent` 提取指标、实体、时间、版本和 follow-up 信号
 3. 分类器判断问题是首轮新问、同域新问、跨域新问、追问、澄清还是无效问题
 4. 对低信号问题触发 LLM relevance guard，先判断是否属于业务数据查询范围
 5. 如果被判为 `invalid` 或 `clarification_needed`，链路直接在 SQL 生成前终止
 6. Query Planner 生成基础 Query Plan
 7. 检索层补 example / metric / knowledge 命中结果，辅助收敛 Query Plan
 8. 权限服务把用户数据范围过滤条件注入 Query Plan
-9. PromptBuilder 从 `tables.json`、`business_knowledge.json`、Query Plan 和 few-shot 里选择相关上下文，必要时才回退到 `readme.txt`
+9. PromptBuilder 从 `tables.json`、`business_knowledge.json`、Query Plan 和 few-shot 里选择相关上下文
 10. LLM 生成一条只读 `SELECT` 或 `WITH ... SELECT`
 11. SqlValidator / SqlAstValidator 校验来源范围、过滤条件、时间/版本一致性、权限和 LIMIT
 12. 如果校验或执行失败，LLM 使用原 prompt 和错误信息做一次 repair
@@ -97,7 +84,6 @@ LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
 
 - 只发送 Query Plan 命中的真实表结构；没有命中表时才使用主题域候选表
 - 优先从 `business_knowledge.json` 里按 `domain / tables / keywords` 选择结构化知识块
-- `readme.txt` 只在结构化知识未命中时才参与
 - few-shot 按场景命中，不做全局注入
 - 业务说明受 `PromptBuilder.BUSINESS_NOTES_MAX_CHARS` 等预算控制
 - trace 的 `build_sql_prompt.metadata.context_summary` 会记录本次用了哪些来源、知识长度和 few-shot
@@ -107,7 +93,7 @@ LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
 避免 token 爆炸时，遵守以下原则：
 
 - 不把全量 `tables.json` 放进 SQL prompt
-- 不把全量 `business_knowledge.json` 或 `readme.txt` 放进 SQL prompt
+- 不把全量 `business_knowledge.json` 放进 SQL prompt
 - 不把所有 few-shot 一次性塞进 prompt
 - 新增业务知识时，优先写成短小、稳定、可命中的知识块
 - 高频失败样例进入 few-shot 或 eval case 前，先判断是否具有复用价值
@@ -195,11 +181,11 @@ LLM-first 不等于无限扩 prompt。当前 SQL prompt 的选择规则是：
 - demand few-shot
 - SqlValidator 的 demand 月份映射和 `PM_VERSION` 投影校验
 
-来共同保证，而不是依赖数据库预建 `semantic_demand_unpivot_view`。
+来共同保证，而不是依赖数据库预建展开对象。
 
-## 8. Semantic view 的当前位置
+## 8. 历史语义设计的当前位置
 
-semantic view 现在是 legacy 辅助对象，不是运行时主依赖：
+历史语义设计现在只是辅助参考，不是运行时主依赖：
 
 - 可以作为业务口径参考
 - 可以继续留在语义配置和管理元数据里

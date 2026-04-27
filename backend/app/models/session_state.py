@@ -11,7 +11,6 @@ class SessionState(BaseModel):
     subject_domain: SubjectDomain = "unknown"
     entities: list[str] = Field(default_factory=list)
     tables: list[str] = Field(default_factory=list)
-    semantic_views: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     filters: list[FilterItem] = Field(default_factory=list)

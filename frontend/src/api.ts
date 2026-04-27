@@ -11,7 +11,7 @@ import type {
   RuntimeSessionCollectionResponse,
   RuntimeSqlAuditRecord,
   RuntimeStatus,
-  SemanticSummary,
+  DomainSummary,
   SessionCollectionResponse,
   SessionCreateResponse,
   SessionHistoryResponse,
@@ -87,7 +87,7 @@ async function requestText(path: string, options: RequestOptions = {}): Promise<
 }
 
 export const api = {
-  semanticSummary(): Promise<SemanticSummary> {
+  domainSummary(): Promise<DomainSummary> {
     return request("/api/semantic/summary");
   },
   bootstrapStatus(): Promise<BootstrapStatus> {

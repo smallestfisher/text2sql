@@ -11,8 +11,8 @@ router = APIRouter(prefix="/api/semantic", tags=["semantic"])
 
 
 @router.get("/summary")
-def semantic_summary(container: AppContainer = Depends(get_container)) -> dict:
-    return container.semantic_loader.summary()
+def domain_summary(container: AppContainer = Depends(get_container)) -> dict:
+    return container.domain_config_loader.summary()
 
 
 @router.post("/retrieve-preview")
@@ -21,16 +21,16 @@ def retrieve_preview(
     http_request: Request,
     container: AppContainer = Depends(get_container),
 ) -> dict:
-    semantic_parse = container.query_planner.parser.parse(
+    query_intent = container.query_planner.parser.parse(
         question=request.question,
         session_state=request.session_state,
     )
-    retrieval = container.retrieval_service.retrieve(semantic_parse)
+    retrieval = container.retrieval_service.retrieve(query_intent)
     return {
-        "semantic_parse": semantic_parse.model_dump(),
+        "query_intent": query_intent.model_dump(),
         "retrieval": retrieval.model_dump(),
         "session_semantic_diff": container.semantic_runtime.session_semantic_diff(
-            semantic_parse,
+            query_intent,
             request.session_state,
         ),
     }

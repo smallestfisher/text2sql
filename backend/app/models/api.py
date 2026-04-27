@@ -5,7 +5,7 @@ from typing import Literal
 
 from .answer import AnswerPayload
 from .auth import UserContext
-from .classification import QuestionClassification, SemanticParse
+from .classification import QuestionClassification, QueryIntent
 from .query_plan import QueryPlan
 from .retrieval import RetrievalContext
 from .session_state import SessionState
@@ -35,20 +35,20 @@ class SqlExecutionRequest(BaseModel):
 
 class PlanResponse(BaseModel):
     classification: QuestionClassification
-    semantic_parse: SemanticParse
+    query_intent: QueryIntent
     query_plan: QueryPlan
-    semantic_summary: dict
+    domain_summary: dict
     warnings: list[str]
 
 
 class ClassificationResponse(BaseModel):
     classification: QuestionClassification
-    semantic_parse: SemanticParse
+    query_intent: QueryIntent
     warnings: list[str]
 
 
 class RetrievalPreviewResponse(BaseModel):
-    semantic_parse: SemanticParse
+    query_intent: QueryIntent
     retrieval: RetrievalContext
 
 
@@ -98,7 +98,7 @@ class ExecutionResponse(BaseModel):
 
 class ChatResponse(BaseModel):
     classification: QuestionClassification
-    semantic_parse: SemanticParse
+    query_intent: QueryIntent
     retrieval: RetrievalContext | None = None
     trace: TraceRecord | None = None
     answer: AnswerPayload | None = None

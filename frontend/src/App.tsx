@@ -1105,7 +1105,7 @@ function AdminView(props: {
             <div className="meta-stack">
               <MetaRow label="语义版本" value={props.metadataOverview?.semantic_version || "-"} />
               <MetaRow label="业务域数" value={String(props.metadataOverview?.semantic_domains.length || 0)} />
-              <MetaRow label="辅助语义对象数" value={String(props.metadataOverview?.semantic_views.length || 0)} />
+              <MetaRow label="物理表数" value={String(props.metadataOverview?.table_count || 0)} />
               <MetaRow label="示例数" value={String(props.metadataOverview?.example_count || 0)} />
               <MetaRow label="Trace 数" value={String(props.metadataOverview?.trace_count || 0)} />
             </div>
@@ -1572,10 +1572,10 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       <div className="detail-card">
         <div className="detail-title">语义解析</div>
         <div className="meta-stack">
-          <MetaRow label="命中指标" value={props.latestResponse.semantic_parse.matched_metrics.join(", ") || "-"} />
-          <MetaRow label="命中实体" value={props.latestResponse.semantic_parse.matched_entities.join(", ") || "-"} />
-          <MetaRow label="显式槽位" value={String(props.latestResponse.semantic_parse.has_explicit_slots)} />
-          <MetaRow label="续问提示词" value={String(props.latestResponse.semantic_parse.has_follow_up_cue)} />
+          <MetaRow label="命中指标" value={props.latestResponse.query_intent.matched_metrics.join(", ") || "-"} />
+          <MetaRow label="命中实体" value={props.latestResponse.query_intent.matched_entities.join(", ") || "-"} />
+          <MetaRow label="显式槽位" value={String(props.latestResponse.query_intent.has_explicit_slots)} />
+          <MetaRow label="续问提示词" value={String(props.latestResponse.query_intent.has_follow_up_cue)} />
         </div>
       </div>
 
@@ -1584,7 +1584,6 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
         <div className="meta-stack">
           <MetaRow label="规划校验" value={props.latestResponse.plan_validation.valid ? "通过" : "未通过"} />
           <MetaRow label="业务域" value={(retrieval?.domains || []).join(", ") || "-"} />
-          <MetaRow label="辅助语义对象" value={(retrieval?.semantic_views || []).join(", ") || "-"} />
           <MetaRow label="指标" value={(retrieval?.metrics || []).join(", ") || "-"} />
         </div>
       </div>

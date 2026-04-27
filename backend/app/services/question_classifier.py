@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.models.classification import QuestionClassification, SemanticParse
+from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.query_plan import ContextDelta
 from backend.app.models.session_state import SessionState
 from backend.app.services.llm_client import LLMClient
@@ -24,11 +24,11 @@ class QuestionClassifier:
     def classify(
         self,
         question: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None = None,
     ) -> tuple[QuestionClassification, list[str]]:
         warnings: list[str] = []
-        normalized_question = semantic_parse.normalized_question
+        normalized_question = query_intent.normalized_question
         if self._is_invalid_smalltalk(normalized_question):
             return QuestionClassification(
                 question_type="invalid",
@@ -42,7 +42,7 @@ class QuestionClassifier:
 
         relevance_hint = self._check_relevance_with_llm(
             original_question=question,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
         )
         if relevance_hint is not None and self._relevance_hint_is_out_of_scope(relevance_hint):
@@ -59,7 +59,7 @@ class QuestionClassifier:
                 need_clarification=False,
             ), warnings
 
-        if not semantic_parse.matched_metrics and semantic_parse.subject_domain == "unknown":
+        if not query_intent.matched_metrics and query_intent.subject_domain == "unknown":
             return QuestionClassification(
                 question_type="clarification_needed",
                 subject_domain="unknown",
@@ -74,10 +74,10 @@ class QuestionClassifier:
                 ),
             ), warnings
 
-        if not semantic_parse.matched_metrics and session_state is None:
+        if not query_intent.matched_metrics and session_state is None:
             return QuestionClassification(
                 question_type="clarification_needed",
-                subject_domain=semantic_parse.subject_domain,
+                subject_domain=query_intent.subject_domain,
                 inherit_context=False,
                 confidence=0.9,
                 reason="识别到业务域，但缺少稳定执行所需的核心指标。",
@@ -92,7 +92,7 @@ class QuestionClassifier:
         if session_state is None:
             return QuestionClassification(
                 question_type="new",
-                subject_domain=semantic_parse.subject_domain,
+                subject_domain=query_intent.subject_domain,
                 inherit_context=False,
                 confidence=0.9,
                 reason="当前没有可继承会话，按新问题处理。",
@@ -100,9 +100,9 @@ class QuestionClassifier:
                 context_delta=ContextDelta(),
             ), warnings
 
-        semantic_diff = self._semantic_diff(semantic_parse, session_state)
+        semantic_diff = self._semantic_diff(query_intent, session_state)
         classification, score_gap, score_details = self._classify_from_scores(
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
             semantic_diff=semantic_diff,
         )
@@ -114,7 +114,7 @@ class QuestionClassifier:
 
         llm_hint = self._classify_with_llm(
             original_question=question,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
             semantic_diff=semantic_diff,
             base_classification=classification,
@@ -124,13 +124,13 @@ class QuestionClassifier:
         if llm_hint is not None and llm_hint.get("mode") == "live":
             candidate = self._apply_llm_hint(
                 hint=llm_hint,
-                semantic_parse=semantic_parse,
+                query_intent=query_intent,
                 session_state=session_state,
                 base_classification=classification,
             )
             acceptable, rejection_reasons = self._llm_classification_is_acceptable(
                 candidate=candidate,
-                semantic_parse=semantic_parse,
+                query_intent=query_intent,
                 session_state=session_state,
             )
             if acceptable:
@@ -144,20 +144,20 @@ class QuestionClassifier:
 
     def _classify_from_scores(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         semantic_diff: dict,
     ) -> tuple[QuestionClassification, float, dict[str, float]]:
         scores = {
             question_type: 0.0
-            for question_type in self._allowed_question_types(semantic_parse, session_state)
+            for question_type in self._allowed_question_types(query_intent, session_state)
         }
 
-        self._score_follow_up(scores, semantic_parse, session_state, semantic_diff)
-        self._score_new_related(scores, semantic_parse, session_state, semantic_diff)
-        self._score_new_unrelated(scores, semantic_parse, session_state, semantic_diff)
-        self._score_clarification(scores, semantic_parse, semantic_diff)
-        self._apply_rule_bonuses(scores, semantic_parse, session_state, semantic_diff)
+        self._score_follow_up(scores, query_intent, session_state, semantic_diff)
+        self._score_new_related(scores, query_intent, session_state, semantic_diff)
+        self._score_new_unrelated(scores, query_intent, session_state, semantic_diff)
+        self._score_clarification(scores, query_intent, semantic_diff)
+        self._apply_rule_bonuses(scores, query_intent, session_state, semantic_diff)
 
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         top_type, top_score = ranked[0]
@@ -167,31 +167,31 @@ class QuestionClassifier:
         if top_type == "clarification_needed":
             classification = QuestionClassification(
                 question_type="clarification_needed",
-                subject_domain=semantic_parse.subject_domain,
+                subject_domain=query_intent.subject_domain,
                 inherit_context=False,
                 confidence=self._confidence_from_score(top_score, score_gap),
-                reason=self._clarification_reason(semantic_parse, semantic_diff),
-                reason_code=self._clarification_reason_code(semantic_parse, semantic_diff),
+                reason=self._clarification_reason(query_intent, semantic_diff),
+                reason_code=self._clarification_reason_code(query_intent, semantic_diff),
                 need_clarification=True,
-                clarification_question=self._clarification_question(semantic_parse, semantic_diff),
+                clarification_question=self._clarification_question(query_intent, semantic_diff),
             )
             return classification, score_gap, dict(ranked)
 
         classification = QuestionClassification(
             question_type=top_type,
-            subject_domain=self._resolve_subject_domain_for_type(top_type, semantic_parse, session_state),
+            subject_domain=self._resolve_subject_domain_for_type(top_type, query_intent, session_state),
             inherit_context=top_type == "follow_up",
             confidence=self._confidence_from_score(top_score, score_gap),
-            reason=self._reason_for_type(top_type, semantic_parse, semantic_diff),
+            reason=self._reason_for_type(top_type, query_intent, semantic_diff),
             reason_code=f"score_{top_type}",
-            context_delta=self._build_context_delta(semantic_parse) if top_type == "follow_up" else ContextDelta(),
+            context_delta=self._build_context_delta(query_intent) if top_type == "follow_up" else ContextDelta(),
         )
         return classification, score_gap, dict(ranked)
 
     def _score_follow_up(
         self,
         scores: dict[str, float],
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         semantic_diff: dict,
     ) -> None:
@@ -199,14 +199,14 @@ class QuestionClassifier:
             return
 
         score = 0.0
-        has_strong_follow_up_cue = self._has_strong_follow_up_cue(semantic_parse.normalized_question)
-        if semantic_parse.has_follow_up_cue:
+        has_strong_follow_up_cue = self._has_strong_follow_up_cue(query_intent.normalized_question)
+        if query_intent.has_follow_up_cue:
             score += 0.28
         if has_strong_follow_up_cue:
             score += 0.18
         if semantic_diff.get("is_short_followup_fragment"):
             score += 0.22
-        if semantic_parse.has_follow_up_cue and semantic_diff.get("has_explicit_slots"):
+        if query_intent.has_follow_up_cue and semantic_diff.get("has_explicit_slots"):
             score += 0.1
         if has_strong_follow_up_cue and semantic_diff.get("can_execute_without_context"):
             score += 0.08
@@ -230,9 +230,9 @@ class QuestionClassifier:
             score += 0.08
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
             score += 0.24
-        if semantic_parse.subject_domain == "unknown":
+        if query_intent.subject_domain == "unknown":
             score += 0.18
-        if semantic_parse.subject_domain == session_state.subject_domain:
+        if query_intent.subject_domain == session_state.subject_domain:
             score += 0.12
         if semantic_diff.get("new_filter_fields"):
             score += 0.08
@@ -240,20 +240,20 @@ class QuestionClassifier:
             score += 0.06
         if semantic_diff.get("time_grain_changed") or semantic_diff.get("version_changed"):
             score += 0.1
-        if semantic_parse.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
+        if query_intent.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
             score += 0.08
         if semantic_diff.get("can_execute_without_context"):
             score -= 0.12
         if semantic_diff.get("domain_changed"):
             score -= 0.3
-        if semantic_diff.get("introduces_new_topic_signal") and not semantic_parse.has_follow_up_cue:
+        if semantic_diff.get("introduces_new_topic_signal") and not query_intent.has_follow_up_cue:
             score -= 0.15
         scores["follow_up"] += score
 
     def _score_new_related(
         self,
         scores: dict[str, float],
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         semantic_diff: dict,
     ) -> None:
@@ -261,18 +261,18 @@ class QuestionClassifier:
             return
 
         score = 0.0
-        has_strong_follow_up_cue = self._has_strong_follow_up_cue(semantic_parse.normalized_question)
-        if semantic_parse.subject_domain == session_state.subject_domain and semantic_parse.subject_domain != "unknown":
+        has_strong_follow_up_cue = self._has_strong_follow_up_cue(query_intent.normalized_question)
+        if query_intent.subject_domain == session_state.subject_domain and query_intent.subject_domain != "unknown":
             score += 0.3
         if semantic_diff.get("can_execute_without_context"):
             score += 0.26
         if semantic_diff.get("has_independent_target"):
             score += 0.14
-        if semantic_parse.matched_metrics:
+        if query_intent.matched_metrics:
             score += 0.08
         if semantic_diff.get("introduces_new_topic_signal") and not semantic_diff.get("domain_changed"):
             score += 0.12
-        if semantic_parse.has_follow_up_cue:
+        if query_intent.has_follow_up_cue:
             score -= 0.08
         if has_strong_follow_up_cue:
             score -= 0.22
@@ -294,7 +294,7 @@ class QuestionClassifier:
     def _score_new_unrelated(
         self,
         scores: dict[str, float],
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         semantic_diff: dict,
     ) -> None:
@@ -308,46 +308,46 @@ class QuestionClassifier:
             score += 0.16
         if semantic_diff.get("can_execute_without_context"):
             score += 0.12
-        if semantic_parse.subject_domain not in {"unknown", session_state.subject_domain}:
+        if query_intent.subject_domain not in {"unknown", session_state.subject_domain}:
             score += 0.08
-        if semantic_parse.has_follow_up_cue:
+        if query_intent.has_follow_up_cue:
             score -= 0.1
         if semantic_diff.get("is_short_followup_fragment"):
             score -= 0.16
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
             score -= 0.24
-        if semantic_parse.has_follow_up_cue and not semantic_diff.get("can_execute_without_context"):
+        if query_intent.has_follow_up_cue and not semantic_diff.get("can_execute_without_context"):
             score -= 0.18
         scores["new_unrelated"] += score
 
     def _score_clarification(
         self,
         scores: dict[str, float],
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         semantic_diff: dict,
     ) -> None:
         if "clarification_needed" not in scores:
             return
 
         score = 0.0
-        if not semantic_parse.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
+        if not query_intent.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
             score += 0.42
-        if not semantic_diff.get("parsed_domain_known") and not semantic_parse.matched_metrics:
+        if not semantic_diff.get("parsed_domain_known") and not query_intent.matched_metrics:
             score += 0.18
-        if not semantic_diff.get("can_execute_without_context") and not semantic_parse.has_follow_up_cue:
+        if not semantic_diff.get("can_execute_without_context") and not query_intent.has_follow_up_cue:
             score += 0.16
-        if semantic_parse.subject_domain == "unknown" and not semantic_diff.get("new_filter_fields") and semantic_parse.time_context.grain == "unknown":
+        if query_intent.subject_domain == "unknown" and not semantic_diff.get("new_filter_fields") and query_intent.time_context.grain == "unknown":
             score += 0.12
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
             score -= 0.18
-        if semantic_parse.has_follow_up_cue:
+        if query_intent.has_follow_up_cue:
             score -= 0.08
         scores["clarification_needed"] += score
 
     def _apply_rule_bonuses(
         self,
         scores: dict[str, float],
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         semantic_diff: dict,
     ) -> None:
@@ -357,7 +357,7 @@ class QuestionClassifier:
             question_type = rule.get("question_type")
             if question_type not in scores:
                 continue
-            if not self._rule_matches(rule, semantic_parse, session_state, semantic_diff):
+            if not self._rule_matches(rule, query_intent, session_state, semantic_diff):
                 continue
             confidence = float(rule.get("confidence", 0.7))
             scores[question_type] += max(0.04, min(confidence - 0.45, 0.24))
@@ -365,42 +365,42 @@ class QuestionClassifier:
     def _rule_matches(
         self,
         rule: dict,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         semantic_diff: dict,
     ) -> bool:
         when = rule.get("when", {})
         if when.get("session_required") and session_state is None:
             return False
-        if when.get("subject_domain_equals_session") and semantic_parse.subject_domain != session_state.subject_domain:
+        if when.get("subject_domain_equals_session") and query_intent.subject_domain != session_state.subject_domain:
             return False
         subject_domain_in = set(when.get("subject_domain_in", []))
-        if subject_domain_in and semantic_parse.subject_domain not in subject_domain_in:
+        if subject_domain_in and query_intent.subject_domain not in subject_domain_in:
             return False
         if "subject_domain_known" in when:
-            is_known = semantic_parse.subject_domain != "unknown"
+            is_known = query_intent.subject_domain != "unknown"
             if bool(when.get("subject_domain_known")) != is_known:
                 return False
         if "domain_changed" in when and bool(semantic_diff.get("domain_changed")) != bool(when.get("domain_changed")):
             return False
         all_signals = when.get("all_signals", [])
-        if all_signals and not all(self._signal_active(name, semantic_parse, semantic_diff) for name in all_signals):
+        if all_signals and not all(self._signal_active(name, query_intent, semantic_diff) for name in all_signals):
             return False
         any_signals = when.get("any_signals", [])
-        if any_signals and not any(self._signal_active(name, semantic_parse, semantic_diff) for name in any_signals):
+        if any_signals and not any(self._signal_active(name, query_intent, semantic_diff) for name in any_signals):
             return False
         none_signals = when.get("none_signals", [])
-        if none_signals and any(self._signal_active(name, semantic_parse, semantic_diff) for name in none_signals):
+        if none_signals and any(self._signal_active(name, query_intent, semantic_diff) for name in none_signals):
             return False
         return True
 
-    def _signal_active(self, signal: str, semantic_parse: SemanticParse, semantic_diff: dict) -> bool:
+    def _signal_active(self, signal: str, query_intent: QueryIntent, semantic_diff: dict) -> bool:
         if signal == "has_follow_up_cue":
-            return semantic_parse.has_follow_up_cue
+            return query_intent.has_follow_up_cue
         if signal == "has_explicit_slots":
-            return semantic_parse.has_explicit_slots
+            return query_intent.has_explicit_slots
         if signal == "missing_metrics":
-            return not semantic_parse.matched_metrics
+            return not query_intent.matched_metrics
         value = semantic_diff.get(signal)
         if isinstance(value, list):
             return bool(value)
@@ -408,12 +408,12 @@ class QuestionClassifier:
 
     def _semantic_diff(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict:
         if self.semantic_runtime is None:
             return {}
-        return self.semantic_runtime.session_semantic_diff(semantic_parse, session_state)
+        return self.semantic_runtime.session_semantic_diff(query_intent, session_state)
 
     def _is_invalid_smalltalk(self, question: str) -> bool:
         stripped = question.strip()
@@ -435,49 +435,49 @@ class QuestionClassifier:
             cue in normalized_question for cue in strong_cues
         )
 
-    def _build_context_delta(self, semantic_parse: SemanticParse) -> ContextDelta:
+    def _build_context_delta(self, query_intent: QueryIntent) -> ContextDelta:
         if self.semantic_runtime is not None:
-            return self.semantic_runtime.build_context_delta(semantic_parse)
+            return self.semantic_runtime.build_context_delta(query_intent)
         return ContextDelta(
-            add_filters=semantic_parse.filters,
+            add_filters=query_intent.filters,
             remove_filters=[],
-            replace_entities=semantic_parse.matched_entities,
-            replace_metrics=semantic_parse.matched_metrics,
+            replace_entities=query_intent.matched_entities,
+            replace_metrics=query_intent.matched_metrics,
             replace_dimensions=[],
-            replace_time_context=semantic_parse.time_context,
-            replace_version_context=semantic_parse.version_context,
+            replace_time_context=query_intent.time_context,
+            replace_version_context=query_intent.version_context,
         )
 
     def _check_relevance_with_llm(
         self,
         original_question: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict | None:
         if (
             not self.classification_llm_enabled
             or self.llm_client is None
             or self.prompt_builder is None
-            or not self._should_run_relevance_guard(semantic_parse, session_state)
+            or not self._should_run_relevance_guard(query_intent, session_state)
         ):
             return None
         prompt_payload = self.prompt_builder.build_relevance_prompt(
             question=original_question,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
         )
         return self.llm_client.check_question_relevance(prompt_payload)
 
     def _should_run_relevance_guard(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> bool:
-        if semantic_parse.subject_domain == "unknown":
+        if query_intent.subject_domain == "unknown":
             return True
-        if semantic_parse.matched_metrics:
+        if query_intent.matched_metrics:
             return False
-        if semantic_parse.has_follow_up_cue and session_state is not None:
+        if query_intent.has_follow_up_cue and session_state is not None:
             return False
         return True
 
@@ -492,7 +492,7 @@ class QuestionClassifier:
     def _classify_with_llm(
         self,
         original_question: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
         semantic_diff: dict,
         base_classification: QuestionClassification,
@@ -507,18 +507,18 @@ class QuestionClassifier:
             or session_state is None
         ):
             return None
-        allowed_question_types = self._allowed_question_types(semantic_parse, session_state)
+        allowed_question_types = self._allowed_question_types(query_intent, session_state)
         if len(allowed_question_types) <= 1:
             return None
         arbitration_context = self._classification_arbitration_context(
             candidate_scores=candidate_scores,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             semantic_diff=semantic_diff,
             ambiguous=ambiguous,
         )
         prompt_payload = self.prompt_builder.build_classification_prompt(
             question=original_question,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
             semantic_diff=semantic_diff,
             base_classification=base_classification.model_dump(),
@@ -531,7 +531,7 @@ class QuestionClassifier:
     def _classification_arbitration_context(
         self,
         candidate_scores: dict[str, float],
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         semantic_diff: dict,
         ambiguous: bool,
     ) -> dict:
@@ -541,13 +541,13 @@ class QuestionClassifier:
             for question_type, score in ranked[:2]
         ]
         conflict_signals: list[str] = []
-        if semantic_parse.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
+        if query_intent.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
             conflict_signals.append("follow_up_cue_but_independent_execution_possible")
         if semantic_diff.get("introduces_new_topic_signal") and not semantic_diff.get("domain_changed"):
             conflict_signals.append("new_topic_signal_inside_same_domain")
         if semantic_diff.get("metrics_missing_but_context_resolvable"):
             conflict_signals.append("metric_missing_but_session_can_supply_it")
-        if semantic_diff.get("domain_changed") and semantic_parse.has_follow_up_cue:
+        if semantic_diff.get("domain_changed") and query_intent.has_follow_up_cue:
             conflict_signals.append("domain_changed_but_user_used_follow_up_language")
         return {
             "needs_arbitration": ambiguous,
@@ -558,19 +558,19 @@ class QuestionClassifier:
 
     def _allowed_question_types(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
     ) -> list[str]:
-        if semantic_parse.subject_domain == "unknown":
+        if query_intent.subject_domain == "unknown":
             return ["follow_up", "clarification_needed"]
-        if semantic_parse.subject_domain != session_state.subject_domain:
+        if query_intent.subject_domain != session_state.subject_domain:
             return ["new_unrelated", "clarification_needed"]
         return ["follow_up", "new_related", "clarification_needed"]
 
     def _apply_llm_hint(
         self,
         hint: dict,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         base_classification: QuestionClassification,
     ) -> QuestionClassification:
@@ -580,7 +580,7 @@ class QuestionClassifier:
 
         subject_domain = self._resolve_llm_subject_domain(
             question_type=question_type,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
             hinted_domain=hint.get("subject_domain"),
         )
@@ -594,7 +594,7 @@ class QuestionClassifier:
         inherit_context = bool(hint.get("inherit_context", question_type == "follow_up"))
         if question_type != "follow_up":
             inherit_context = False
-        context_delta = self._context_delta_from_hint(hint, semantic_parse, inherit_context)
+        context_delta = self._context_delta_from_hint(hint, query_intent, inherit_context)
 
         return QuestionClassification(
             question_type=question_type,
@@ -615,7 +615,7 @@ class QuestionClassifier:
     def _context_delta_from_hint(
         self,
         hint: dict,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         inherit_context: bool,
     ) -> ContextDelta:
         if not inherit_context:
@@ -626,45 +626,45 @@ class QuestionClassifier:
                 return ContextDelta(**payload)
             except Exception:
                 pass
-        return self._build_context_delta(semantic_parse)
+        return self._build_context_delta(query_intent)
 
     def _resolve_llm_subject_domain(
         self,
         question_type: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
         hinted_domain,
     ) -> str:
         if question_type == "follow_up":
             return session_state.subject_domain
         if question_type == "new_unrelated":
-            return semantic_parse.subject_domain
+            return query_intent.subject_domain
         if question_type == "new_related":
-            return semantic_parse.subject_domain
+            return query_intent.subject_domain
         if isinstance(hinted_domain, str) and hinted_domain in {
-            semantic_parse.subject_domain,
+            query_intent.subject_domain,
             session_state.subject_domain,
             "unknown",
         }:
             return hinted_domain
-        if semantic_parse.subject_domain != "unknown":
-            return semantic_parse.subject_domain
+        if query_intent.subject_domain != "unknown":
+            return query_intent.subject_domain
         return session_state.subject_domain
 
     def _resolve_subject_domain_for_type(
         self,
         question_type: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
     ) -> str:
         if question_type == "follow_up":
             return session_state.subject_domain
-        return semantic_parse.subject_domain
+        return query_intent.subject_domain
 
     def _confidence_from_score(self, score: float, score_gap: float) -> float:
         return max(0.55, min(0.96, round(0.58 + score * 0.28 + score_gap * 0.45, 3)))
 
-    def _reason_for_type(self, question_type: str, semantic_parse: SemanticParse, semantic_diff: dict) -> str:
+    def _reason_for_type(self, question_type: str, query_intent: QueryIntent, semantic_diff: dict) -> str:
         if question_type == "follow_up":
             if semantic_diff.get("only_updates_time"):
                 return "当前问题主要是在延续上一轮主题并调整时间范围。"
@@ -679,18 +679,18 @@ class QuestionClassifier:
             return "当前问题切换到了新的业务主题，不应继承上一轮上下文。"
         return "当前问题需要补充信息后再生成稳定查询。"
 
-    def _clarification_reason(self, semantic_parse: SemanticParse, semantic_diff: dict) -> str:
-        if not semantic_parse.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
+    def _clarification_reason(self, query_intent: QueryIntent, semantic_diff: dict) -> str:
+        if not query_intent.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
             return "识别到部分语义，但缺少稳定执行所需的核心指标。"
         return "当前问题仍缺少足够信息，无法稳定判断是否应继承上下文。"
 
-    def _clarification_reason_code(self, semantic_parse: SemanticParse, semantic_diff: dict) -> str:
-        if not semantic_parse.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
+    def _clarification_reason_code(self, query_intent: QueryIntent, semantic_diff: dict) -> str:
+        if not query_intent.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
             return "missing_metric"
         return "classification_fallback"
 
-    def _clarification_question(self, semantic_parse: SemanticParse, semantic_diff: dict) -> str:
-        if not semantic_parse.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
+    def _clarification_question(self, query_intent: QueryIntent, semantic_diff: dict) -> str:
+        if not query_intent.matched_metrics and not semantic_diff.get("metrics_missing_but_context_resolvable"):
             return self._clarification_message(
                 "missing_metric",
                 "请补充要查询的指标，例如库存量、计划投入量、实际产出或销售业绩。",
@@ -708,11 +708,11 @@ class QuestionClassifier:
     def _llm_classification_is_acceptable(
         self,
         candidate: QuestionClassification,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState,
     ) -> tuple[bool, list[str]]:
         reasons: list[str] = []
-        allowed_question_types = self._allowed_question_types(semantic_parse, session_state)
+        allowed_question_types = self._allowed_question_types(query_intent, session_state)
         if candidate.question_type not in allowed_question_types:
             reasons.append("question type is outside structured allowed set")
 
@@ -729,7 +729,7 @@ class QuestionClassifier:
                 reasons.append("new unrelated classification must switch to a new known domain")
 
         if candidate.question_type == "new_related":
-            if candidate.subject_domain != semantic_parse.subject_domain:
+            if candidate.subject_domain != query_intent.subject_domain:
                 reasons.append("new related classification must keep parsed domain")
 
         if candidate.question_type == "clarification_needed" and not candidate.clarification_question:

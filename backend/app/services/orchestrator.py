@@ -41,7 +41,7 @@ class ConversationOrchestrator:
         session_service: SessionService,
         audit_service: AuditService,
         runtime_log_repository: DbRuntimeLogRepository,
-        semantic_layer: dict,
+        domain_config: dict,
     ) -> None:
         self.query_planner = query_planner
         self.query_plan_validator = query_plan_validator
@@ -57,7 +57,7 @@ class ConversationOrchestrator:
         self.session_service = session_service
         self.audit_service = audit_service
         self.runtime_log_repository = runtime_log_repository
-        self.semantic_layer = semantic_layer
+        self.domain_config = domain_config
 
     def chat(self, request: PlanRequest) -> ChatResponse:
         trace = self.audit_service.new_trace()
@@ -76,7 +76,7 @@ class ConversationOrchestrator:
                 session_state = self.session_service.resolve_state(request.session_id)
             self.audit_service.append_step(trace, "load_session", "completed", "session state resolved")
 
-            semantic_parse, classification, query_plan, planning_warnings = self.query_planner.create_plan(
+            query_intent, classification, query_plan, planning_warnings = self.query_planner.create_plan(
                 question=request.question,
                 session_state=session_state,
             )
@@ -96,14 +96,14 @@ class ConversationOrchestrator:
                 classification.question_type,
                 metadata={
                     "classification": classification.model_dump(),
-                    "semantic_parse": semantic_parse.model_dump(),
+                    "query_intent": query_intent.model_dump(),
                     "session_semantic_diff": self.query_planner.semantic_runtime.session_semantic_diff(
-                        semantic_parse,
+                        query_intent,
                         session_state,
                     ),
                     "query_plan_summary": {
                         "subject_domain": query_plan.subject_domain,
-                        "semantic_views": query_plan.semantic_views,
+                        "tables": query_plan.tables,
                         "metrics": query_plan.metrics,
                         "dimensions": query_plan.dimensions,
                         "filter_fields": [item.field for item in query_plan.filters],
@@ -118,7 +118,7 @@ class ConversationOrchestrator:
                     trace=trace,
                     request=request,
                     session_state=session_state,
-                    semantic_parse=semantic_parse,
+                    query_intent=query_intent,
                     classification=classification,
                     query_plan=query_plan,
                     warnings=warnings,
@@ -126,13 +126,12 @@ class ConversationOrchestrator:
                     terminal_reason=terminal_reason,
                 )
 
-            retrieval = self.retrieval_service.retrieve(semantic_parse)
+            retrieval = self.retrieval_service.retrieve(query_intent)
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
             logger.info(
-                "retrieval trace_id=%s hits=%s views=%s metrics=%s",
+                "retrieval trace_id=%s hits=%s metrics=%s",
                 trace.trace_id,
                 len(retrieval.hits),
-                retrieval.semantic_views,
                 retrieval.metrics,
             )
             self.audit_service.append_step(
@@ -145,7 +144,7 @@ class ConversationOrchestrator:
 
             query_plan_prompt = self.prompt_builder.build_query_plan_prompt(
                 question=request.question,
-                semantic_parse=semantic_parse,
+                query_intent=query_intent,
                 retrieval=retrieval,
                 base_plan=query_plan,
                 session_state=session_state,
@@ -190,9 +189,8 @@ class ConversationOrchestrator:
 
             query_plan = self.query_plan_compiler.compile(query_plan=query_plan, retrieval=retrieval)
             logger.info(
-                "plan trace_id=%s views=%s tables=%s metrics=%s dimensions=%s",
+                "plan trace_id=%s tables=%s metrics=%s dimensions=%s",
                 trace.trace_id,
-                query_plan.semantic_views,
                 query_plan.tables,
                 query_plan.metrics,
                 query_plan.dimensions,
@@ -209,7 +207,7 @@ class ConversationOrchestrator:
 
             plan_result = self.query_plan_validator.validate_detailed(
                 query_plan=query_plan,
-                semantic_layer=self.semantic_layer,
+                domain_config=self.domain_config,
             )
             plan_errors = plan_result.errors
             plan_warnings = plan_result.warnings
@@ -221,7 +219,7 @@ class ConversationOrchestrator:
                 fallback_plan = self.query_plan_compiler.compile(query_plan=fallback_plan, retrieval=retrieval)
                 fallback_result = self.query_plan_validator.validate_detailed(
                     query_plan=fallback_plan,
-                    semantic_layer=self.semantic_layer,
+                    domain_config=self.domain_config,
                 )
                 fallback_errors = fallback_result.errors
                 fallback_warnings = fallback_result.warnings
@@ -259,7 +257,7 @@ class ConversationOrchestrator:
                     trace=trace,
                     request=request,
                     session_state=session_state,
-                    semantic_parse=semantic_parse,
+                    query_intent=query_intent,
                     classification=classification,
                     query_plan=query_plan,
                     warnings=warnings,
@@ -317,7 +315,7 @@ class ConversationOrchestrator:
                 "generate_sql",
                 "completed" if sql else "skipped",
                 metadata={
-                    "used_sources": query_plan.semantic_views or query_plan.tables,
+                    "used_sources": query_plan.tables,
                     "sql_visible": bool(visible_sql),
                 },
             )
@@ -329,7 +327,7 @@ class ConversationOrchestrator:
             sql_result = (
                 self.sql_validator.validate_detailed(
                     sql,
-                    self.semantic_layer,
+                    self.domain_config,
                     query_plan=query_plan,
                     required_filter_fields=required_filter_fields,
                 )
@@ -350,7 +348,7 @@ class ConversationOrchestrator:
                 if repaired_sql:
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
-                        self.semantic_layer,
+                        self.domain_config,
                         query_plan=query_plan,
                         required_filter_fields=required_filter_fields,
                     )
@@ -409,7 +407,7 @@ class ConversationOrchestrator:
                 if repaired_sql:
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
-                        self.semantic_layer,
+                        self.domain_config,
                         query_plan=query_plan,
                         required_filter_fields=required_filter_fields,
                     )
@@ -493,7 +491,7 @@ class ConversationOrchestrator:
                 self.session_service.update_state(request.session_id, next_session_state, trace_id=trace.trace_id)
             response = ChatResponse(
                 classification=classification,
-                semantic_parse=semantic_parse,
+                query_intent=query_intent,
                 retrieval=retrieval,
                 trace=trace,
                 answer=answer,
@@ -559,7 +557,7 @@ class ConversationOrchestrator:
         trace,
         request: PlanRequest,
         session_state: SessionState | None,
-        semantic_parse,
+        query_intent,
         classification,
         query_plan,
         warnings: list[str],
@@ -599,7 +597,7 @@ class ConversationOrchestrator:
 
         response = ChatResponse(
             classification=classification,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             retrieval=retrieval,
             trace=trace,
             answer=answer,

@@ -27,7 +27,6 @@
           ],
           "hit_count_by_source": {
             "example": 2,
-            "semantic_view": 1,
             "metric": 1
           },
           "top_hits": [
@@ -54,19 +53,6 @@
                 "domain:inventory",
                 "lexical:2026",
                 "keyword:3.355"
-              ]
-            },
-            {
-              "source_type": "semantic_view",
-              "source_id": "semantic_inventory_view",
-              "score": 2.023112,
-              "matched_features": [
-                "view_rank:1",
-                "metric_fields:inventory_qty",
-                "filter_fields:biz_month",
-                "domain_tables:daily_inventory,oms_inventory",
-                "keyword:1.915",
-                "vector:0.238"
               ]
             }
           ]

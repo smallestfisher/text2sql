@@ -4,7 +4,7 @@ from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecor
 from backend.app.models.answer import AnswerPayload
 from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
 from backend.app.models.auth import UserContext
-from backend.app.models.classification import QuestionClassification, SemanticParse
+from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.conversation import ChatMessage
 from backend.app.models.query_plan import QueryPlan, TimeContext
 from backend.app.models.retrieval import RetrievalContext
@@ -69,6 +69,8 @@ class ChatResponseRestoreService:
         sql_audit: RuntimeSqlAuditRecord | None,
     ) -> ChatResponse:
         payload = dict(snapshot_payload)
+        if "query_intent" not in payload and "semantic_parse" in payload:
+            payload["query_intent"] = payload.pop("semantic_parse")
         payload["trace"] = trace
         payload["sql"] = sql_audit.sql_text if sql_audit is not None else None
         return ChatResponse(**payload)
@@ -89,7 +91,7 @@ class ChatResponseRestoreService:
         execute_metadata = self._step_metadata(trace, "execute")
 
         classification_payload = plan_metadata.get("classification") or {}
-        semantic_parse_payload = plan_metadata.get("semantic_parse") or {}
+        query_intent_payload = plan_metadata.get("query_intent") or plan_metadata.get("semantic_parse") or {}
         compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
 
         fallback_state = session_state or SessionState(session_id=query_log.session_id or "session_pending")
@@ -105,20 +107,20 @@ class ChatResponseRestoreService:
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
         })
-        semantic_parse = SemanticParse(**{
-            "normalized_question": semantic_parse_payload.get("normalized_question", query_log.question or ""),
-            "matched_metrics": semantic_parse_payload.get("matched_metrics", []),
-            "matched_entities": semantic_parse_payload.get("matched_entities", []),
-            "requested_dimensions": semantic_parse_payload.get("requested_dimensions", []),
-            "filters": semantic_parse_payload.get("filters", []),
-            "time_context": semantic_parse_payload.get("time_context", {}),
-            "version_context": semantic_parse_payload.get("version_context"),
-            "requested_sort": semantic_parse_payload.get("requested_sort", []),
-            "requested_limit": semantic_parse_payload.get("requested_limit"),
-            "analysis_mode": semantic_parse_payload.get("analysis_mode"),
-            "subject_domain": semantic_parse_payload.get("subject_domain", classification.subject_domain),
-            "has_follow_up_cue": semantic_parse_payload.get("has_follow_up_cue", False),
-            "has_explicit_slots": semantic_parse_payload.get("has_explicit_slots", False),
+        query_intent = QueryIntent(**{
+            "normalized_question": query_intent_payload.get("normalized_question", query_log.question or ""),
+            "matched_metrics": query_intent_payload.get("matched_metrics", []),
+            "matched_entities": query_intent_payload.get("matched_entities", []),
+            "requested_dimensions": query_intent_payload.get("requested_dimensions", []),
+            "filters": query_intent_payload.get("filters", []),
+            "time_context": query_intent_payload.get("time_context", {}),
+            "version_context": query_intent_payload.get("version_context"),
+            "requested_sort": query_intent_payload.get("requested_sort", []),
+            "requested_limit": query_intent_payload.get("requested_limit"),
+            "analysis_mode": query_intent_payload.get("analysis_mode"),
+            "subject_domain": query_intent_payload.get("subject_domain", classification.subject_domain),
+            "has_follow_up_cue": query_intent_payload.get("has_follow_up_cue", False),
+            "has_explicit_slots": query_intent_payload.get("has_explicit_slots", False),
         })
 
         query_plan_source = (
@@ -130,7 +132,6 @@ class ChatResponseRestoreService:
             "question_type": query_plan_source.get("question_type", classification.question_type),
             "subject_domain": query_plan_source.get("subject_domain", classification.subject_domain),
             "tables": query_plan_source.get("tables", []),
-            "semantic_views": query_plan_source.get("semantic_views", []),
             "entities": query_plan_source.get("entities", []),
             "metrics": query_plan_source.get("metrics", []),
             "dimensions": query_plan_source.get("dimensions", []),
@@ -151,7 +152,6 @@ class ChatResponseRestoreService:
 
         retrieval = RetrievalContext(
             domains=[classification.subject_domain] if classification.subject_domain != "unknown" else [],
-            semantic_views=query_plan.semantic_views,
             metrics=query_plan.metrics,
             retrieval_terms=[],
             retrieval_channels=retrieve_metadata.get("channels", []),
@@ -188,7 +188,7 @@ class ChatResponseRestoreService:
 
         return ChatResponse(
             classification=classification,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             retrieval=retrieval,
             trace=trace,
             answer=answer,

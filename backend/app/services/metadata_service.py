@@ -9,28 +9,27 @@ from backend.app.models.admin import (
 from backend.app.models.example_library import ExampleRecord
 from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.retrieval_service import RetrievalService
-from backend.app.services.semantic_loader import SemanticLayerLoader
+from backend.app.services.domain_config_loader import DomainConfigLoader
 
 
 class MetadataService:
     def __init__(
         self,
         metadata_repository: FileMetadataRepository,
-        semantic_loader: SemanticLayerLoader,
+        domain_config_loader: DomainConfigLoader,
         audit_repository,
     ) -> None:
         self.metadata_repository = metadata_repository
-        self.semantic_loader = semantic_loader
+        self.domain_config_loader = domain_config_loader
         self.audit_repository = audit_repository
 
     def overview(self) -> MetadataOverview:
-        summary = self.semantic_loader.summary()
+        summary = self.domain_config_loader.summary()
         examples = self.metadata_repository.read("examples_template")
         return MetadataOverview(
             semantic_version=summary.get("version"),
             semantic_domains=summary.get("domains", []),
-            semantic_views=summary.get("semantic_views", []),
-            semantic_view_status=summary.get("semantic_view_status", {}),
+            table_count=len(summary.get("tables", [])),
             example_count=len(examples),
             trace_count=len(self.audit_repository.list_records()),
         )
@@ -141,8 +140,8 @@ class MetadataService:
         return MetadataDocument(name=name, path=str(path), content=content)
 
     def reload_runtime(self, retrieval_service=None) -> dict:
-        self.semantic_loader.load.cache_clear()
-        summary = self.semantic_loader.summary()
+        self.domain_config_loader.load.cache_clear()
+        summary = self.domain_config_loader.summary()
         if retrieval_service is not None:
             retrieval_service.reload()
         return {

@@ -606,7 +606,32 @@
   ],
   "query_profiles": {
     "inventory": {
-      "default_semantic_views": ["semantic_inventory_view"],
+      "allowed_fields": [
+        "source_table",
+        "biz_date",
+        "biz_month",
+        "factory_code",
+        "ERP_FACTORY",
+        "ERP_LOCATION",
+        "product_ID",
+        "application",
+        "common_categories",
+        "GRADE",
+        "inventory_qty",
+        "hold_qty",
+        "customer",
+        "sbu_desc",
+        "bu_desc"
+      ],
+      "field_aliases": {
+        "biz_date": ["report_date"],
+        "biz_month": ["report_month"],
+        "customer": ["CUSTOMER"],
+        "sbu_desc": ["SBU_DESC"],
+        "bu_desc": ["BU_DESC"],
+        "inventory_qty": ["TTL_Qty", "panel_qty"],
+        "hold_qty": ["HOLD_Qty"]
+      },
       "default_limit": 200,
       "max_limit": 200,
       "time_filter_fields": ["biz_date", "biz_month"],
@@ -668,7 +693,33 @@
       "drop_filters": ["factory"]
     },
     "plan_actual": {
-      "default_semantic_views": ["semantic_plan_actual_view"],
+      "allowed_fields": [
+        "source_table",
+        "biz_date",
+        "biz_month",
+        "version_code",
+        "factory",
+        "stage_product_id",
+        "fg_product_id",
+        "plan_input_qty",
+        "approved_input_qty",
+        "actual_input_qty",
+        "actual_output_qty",
+        "defect_qty"
+      ],
+      "field_aliases": {
+        "biz_date": ["PLAN_date", "work_date", "plan_date"],
+        "biz_month": ["plan_month"],
+        "version_code": ["PM_VERSION"],
+        "factory": ["factory_code", "FACTORY", "factory"],
+        "stage_product_id": ["product_ID"],
+        "fg_product_id": ["FGCODE"],
+        "plan_input_qty": ["target_qty", "target_IN_glass_qty"],
+        "approved_input_qty": ["target_IN_glass_qty", "target_in_panel_qty"],
+        "actual_input_qty": ["GLS_qty"],
+        "actual_output_qty": ["Panel_qty"],
+        "defect_qty": ["defect_qty"]
+      },
       "default_limit": 200,
       "max_limit": 200,
       "time_filter_fields": ["biz_date", "biz_month"],
@@ -709,7 +760,37 @@
       ]
     },
     "demand": {
-      "default_semantic_views": ["semantic_demand_unpivot_view", "semantic_demand_perf_view"],
+      "allowed_fields": [
+        "source_table",
+        "demand_source",
+        "PM_VERSION",
+        "FGCODE",
+        "sbu_desc",
+        "bu_desc",
+        "customer",
+        "demand_month",
+        "biz_month",
+        "demand_qty",
+        "sales_qty",
+        "financial_qty",
+        "month_offset"
+      ],
+      "field_aliases": {
+        "sbu_desc": ["SBU_DESC"],
+        "bu_desc": ["BU_DESC"],
+        "customer": ["CUSTOMER"],
+        "biz_month": ["MONTH", "report_month"],
+        "demand_qty": [
+          "REQUIREMENT_QTY",
+          "NEXT_REQUIREMENT",
+          "LAST_REQUIREMENT",
+          "MONTH4",
+          "MONTH5",
+          "MONTH6",
+          "MONTH7"
+        ],
+        "financial_qty": ["FINANCIAL_qty"]
+      },
       "default_limit": 200,
       "max_limit": 200,
       "version_field": "PM_VERSION",
@@ -762,7 +843,26 @@
       ]
     },
     "sales_financial": {
-      "default_semantic_views": ["semantic_demand_perf_view"],
+      "allowed_fields": [
+        "demand_source",
+        "PM_VERSION",
+        "FGCODE",
+        "sbu_desc",
+        "bu_desc",
+        "customer",
+        "demand_month",
+        "biz_month",
+        "demand_qty",
+        "sales_qty",
+        "financial_qty"
+      ],
+      "field_aliases": {
+        "sbu_desc": ["SBU_DESC"],
+        "bu_desc": ["BU_DESC"],
+        "customer": ["CUSTOMER"],
+        "biz_month": ["report_month"],
+        "financial_qty": ["FINANCIAL_qty"]
+      },
       "default_limit": 200,
       "max_limit": 200,
       "version_field": "PM_VERSION",
@@ -889,120 +989,5 @@
         "on": "production_actuals.product_ID = product_mapping.`Cell No` | `Array No` | `CF No`"
       }
     ]
-  },
-  "semantic_views": [
-    {
-      "name": "semantic_inventory_view",
-      "purpose": "统一库存查询口径，屏蔽日库存与 OMS 库存底层差异。",
-      "status": "draft",
-      "implementation_stage": "logical_scaffold",
-      "serves_domains": ["inventory"],
-      "design_notes": [
-        "当前阶段主要作为 planner 和 retrieval 的统一分析对象，不要求已在真实数据库中落库。",
-        "真实数据接入后，需要重新核对 daily_inventory 与 oms_inventory 的字段口径、时间粒度和客户维度差异。"
-      ],
-      "source_tables": ["daily_inventory", "oms_inventory", "product_attributes"],
-      "output_fields": [
-        "source_table",
-        "biz_date",
-        "biz_month",
-        "factory_code",
-        "ERP_FACTORY",
-        "ERP_LOCATION",
-        "product_ID",
-        "application",
-        "common_categories",
-        "GRADE",
-        "inventory_qty",
-        "hold_qty",
-        "customer",
-        "sbu_desc",
-        "bu_desc"
-      ]
-    },
-    {
-      "name": "semantic_plan_actual_view",
-      "purpose": "统一计划投入、实际投入、实际产出分析口径。",
-      "status": "draft",
-      "implementation_stage": "logical_scaffold",
-      "serves_domains": ["plan_actual"],
-      "design_notes": [
-        "当前阶段主要承载统一指标命名和字段契约，复杂口径以后续真实数据联调为准。",
-        "真实落库前需要确认 daily_PLAN、monthly_plan_approved、production_actuals 的时间字段和工厂字段是否可直接对齐。"
-      ],
-      "source_tables": ["daily_PLAN", "monthly_plan_approved", "production_actuals", "product_mapping", "product_attributes"],
-      "output_fields": [
-        "source_table",
-        "biz_date",
-        "biz_month",
-        "version_code",
-        "factory",
-        "stage_product_id",
-        "fg_product_id",
-        "plan_input_qty",
-        "approved_input_qty",
-        "actual_input_qty",
-        "actual_output_qty",
-        "defect_qty"
-      ]
-    },
-    {
-      "name": "semantic_demand_perf_view",
-      "purpose": "统一需求与销售财务表现的比较分析。",
-      "status": "draft",
-      "implementation_stage": "logical_scaffold",
-      "serves_domains": ["demand", "sales_financial"],
-      "design_notes": [
-        "当前阶段优先统一 demand 与 sales/financial 的输出字段，而不是提前做重型性能优化。",
-        "真实落库前需要确认 demand_month 与 report_month 的对齐规则，以及 CUSTOMER / BU / SBU 的实际字段可用性。"
-      ],
-      "source_tables": ["v_demand", "p_demand", "sales_financial_perf", "product_mapping"],
-      "output_fields": [
-        "demand_source",
-        "PM_VERSION",
-        "FGCODE",
-        "sbu_desc",
-        "bu_desc",
-        "customer",
-        "demand_month",
-        "biz_month",
-        "demand_qty",
-        "sales_qty",
-        "financial_qty"
-      ],
-      "field_aliases": {
-        "sbu_desc": "SBU_DESC",
-        "bu_desc": "BU_DESC",
-        "customer": "CUSTOMER"
-      }
-    },
-    {
-      "name": "semantic_demand_unpivot_view",
-      "purpose": "将横表需求字段转换为标准月份明细。",
-      "status": "draft",
-      "implementation_stage": "logical_scaffold",
-      "serves_domains": ["demand"],
-      "design_notes": [
-        "当前阶段优先作为需求域统一明细接口的草案定义。",
-        "真实数据接入后，需要确认 REQUIREMENT_QTY / NEXT_REQUIREMENT / LAST_REQUIREMENT 以及更多月份字段的完整展开策略。"
-      ],
-      "source_tables": ["v_demand", "p_demand"],
-      "output_fields": [
-        "source_table",
-        "PM_VERSION",
-        "FGCODE",
-        "sbu_desc",
-        "bu_desc",
-        "customer",
-        "demand_month",
-        "demand_qty",
-        "month_offset"
-      ],
-      "field_aliases": {
-        "sbu_desc": "SBU_DESC",
-        "bu_desc": "BU_DESC",
-        "customer": "CUSTOMER"
-      }
-    }
-  ]
+  }
 }

@@ -51,13 +51,13 @@ class SqlValidator:
     def validate(
         self,
         sql: str | None,
-        semantic_layer: dict,
+        domain_config: dict,
         query_plan: QueryPlan | None = None,
         required_filter_fields: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         result = self.validate_detailed(
             sql,
-            semantic_layer,
+            domain_config,
             query_plan=query_plan,
             required_filter_fields=required_filter_fields,
         )
@@ -66,7 +66,7 @@ class SqlValidator:
     def validate_detailed(
         self,
         sql: str | None,
-        semantic_layer: dict,
+        domain_config: dict,
         query_plan: QueryPlan | None = None,
         required_filter_fields: list[str] | None = None,
     ) -> SqlValidationResult:
@@ -86,15 +86,9 @@ class SqlValidator:
             if keyword in normalized_sql:
                 errors.append(f"forbidden keyword detected:{keyword.strip()}")
 
-        physical_sources = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
+        physical_sources = set(domain_config.get("semantic_graph", {}).get("nodes", []))
         allowed_sources = set(physical_sources)
         allowed_sources.update(inspection.cte_names)
-        allowed_sources.update(
-            item["name"] for item in semantic_layer.get("semantic_views", [])
-        )
-        semantic_view_names = {
-            item["name"] for item in semantic_layer.get("semantic_views", [])
-        }
 
         used_sources = inspection.sources
         unknown_sources = [source for source in used_sources if source not in allowed_sources]
@@ -103,14 +97,10 @@ class SqlValidator:
 
         if query_plan is not None:
             expected_sources = set(query_plan.tables)
-            if not expected_sources:
-                expected_sources = set(query_plan.semantic_views)
             expected_sources.update(inspection.cte_names)
             unexpected_sources = [source for source in used_sources if source not in expected_sources]
             if unexpected_sources:
                 errors.append(f"sql references sources outside query plan: {', '.join(unexpected_sources)}")
-
-            primary_source = self._primary_source(query_plan)
 
             missing_plan_filters = [
                 filter_item.field
@@ -118,7 +108,7 @@ class SqlValidator:
                 if filter_item.field
                 and not self._contains_any_field_reference(
                     inspection.where_clause,
-                    self._field_candidates(primary_source, filter_item.field),
+                    self._field_candidates(query_plan, filter_item.field),
                 )
             ]
             if missing_plan_filters:
@@ -132,7 +122,7 @@ class SqlValidator:
                 missing_group_by_fields = [
                     field
                     for field in expected_dimension_fields
-                    if not self._field_candidates(primary_source, field).intersection(actual_group_by_fields)
+                    if not self._field_candidates(query_plan, field).intersection(actual_group_by_fields)
                 ]
                 if missing_group_by_fields and inspection.functions:
                     errors.append(
@@ -146,17 +136,17 @@ class SqlValidator:
                 missing_sort_fields = [
                     field
                     for field in expected_sort_fields
-                    if not self._field_candidates(primary_source, field).intersection(actual_order_by_fields)
+                    if not self._field_candidates(query_plan, field).intersection(actual_order_by_fields)
                 ]
                 if missing_sort_fields:
                     warnings.append(
                         "sql does not preserve query plan sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
                     )
 
-            time_filter_errors = self._validate_time_context(query_plan, inspection.where_clause, primary_source)
+            time_filter_errors = self._validate_time_context(query_plan, inspection.where_clause)
             errors.extend(time_filter_errors)
 
-            version_errors = self._validate_version_context(query_plan, inspection.where_clause, primary_source)
+            version_errors = self._validate_version_context(query_plan, inspection.where_clause)
             errors.extend(version_errors)
 
             demand_version_projection_errors = self._validate_demand_version_projection(
@@ -178,31 +168,21 @@ class SqlValidator:
             if query_plan.metrics and not query_plan.dimensions and inspection.functions and inspection.group_by_fields:
                 warnings.append("sql groups aggregated metrics by extra fields not present in query plan")
 
-            select_dimension_errors = self._validate_selected_dimensions(query_plan, inspection, primary_source)
+            select_dimension_errors = self._validate_selected_dimensions(query_plan, inspection)
             errors.extend(select_dimension_errors)
 
-        if self.semantic_runtime is not None and used_sources:
-            known_view_sources = [source for source in used_sources if source in semantic_view_names]
-            if known_view_sources:
-                allowed_fields = self._allowed_fields_for_sources(known_view_sources)
-                unknown_field_refs = [
-                    field for field in inspection.referenced_fields if field not in allowed_fields
-                ]
-                if unknown_field_refs:
-                    errors.append(
-                        "sql references unsupported fields for selected semantic views: "
-                        + ", ".join(sorted(set(unknown_field_refs)))
-                    )
-
         if required_filter_fields:
-            missing_filter_fields = [
-                field
-                for field in required_filter_fields
-                if not self._contains_any_field_reference(
-                    inspection.where_clause,
-                    self._field_candidates(query_plan.semantic_views[0] if query_plan and query_plan.semantic_views else None, field),
-                )
-            ]
+            if query_plan is None:
+                missing_filter_fields = list(required_filter_fields)
+            else:
+                missing_filter_fields = [
+                    field
+                    for field in required_filter_fields
+                    if not self._contains_any_field_reference(
+                        inspection.where_clause,
+                        self._field_candidates(query_plan, field),
+                    )
+                ]
             if missing_filter_fields:
                 errors.append(
                     f"sql is missing required permission filters: {', '.join(missing_filter_fields)}"
@@ -223,7 +203,7 @@ class SqlValidator:
                 if time_fields and not any(
                     self._contains_any_field_reference(
                         inspection.where_clause,
-                        self._field_candidates(self._primary_source(query_plan), field),
+                        self._field_candidates(query_plan, field),
                     )
                     for field in time_fields
                 ):
@@ -261,27 +241,22 @@ class SqlValidator:
     def _contains_any_field_reference(self, sql_fragment: str, fields: set[str]) -> bool:
         return any(self._contains_field_reference(sql_fragment, field) for field in fields)
 
-    def _field_candidates(self, source_name: str | None, logical_field: str) -> set[str]:
+    def _field_candidates(self, query_plan: QueryPlan, logical_field: str) -> set[str]:
         candidates = {logical_field.lower()}
         if self.semantic_runtime is None:
             return candidates
-        resolved = self.semantic_runtime.resolve_field(source_name, logical_field)
-        if resolved:
-            candidates.add(resolved.lower())
+        resolved = self.semantic_runtime.resolve_field_candidates(
+            query_plan.subject_domain,
+            query_plan.tables,
+            logical_field,
+        )
+        candidates.update(item.lower() for item in resolved if item)
         return candidates
-
-    def _primary_source(self, query_plan: QueryPlan) -> str | None:
-        if query_plan.semantic_views:
-            return query_plan.semantic_views[0]
-        if query_plan.tables:
-            return query_plan.tables[0]
-        return None
 
     def _validate_time_context(
         self,
         query_plan: QueryPlan,
         where_clause: str,
-        source_name: str | None,
     ) -> list[str]:
         if self.semantic_runtime is None:
             return []
@@ -292,18 +267,9 @@ class SqlValidator:
         if not time_fields:
             return []
 
-        supported_fields = [
-            field
-            for field in time_fields
-            if not query_plan.semantic_views
-            or self.semantic_runtime.semantic_views_support_field(query_plan.semantic_views, field)
-        ]
-        if not supported_fields:
-            supported_fields = time_fields
-
         if not any(
-            self._contains_any_field_reference(where_clause, self._field_candidates(source_name, field))
-            for field in supported_fields
+            self._contains_any_field_reference(where_clause, self._field_candidates(query_plan, field))
+            for field in time_fields
         ):
             return ["sql is missing required time filter from query plan"]
         return []
@@ -312,13 +278,12 @@ class SqlValidator:
         self,
         query_plan: QueryPlan,
         where_clause: str,
-        source_name: str | None,
     ) -> list[str]:
         if query_plan.version_context is None or not query_plan.version_context.field:
             return []
         if self._contains_any_field_reference(
             where_clause,
-            self._field_candidates(source_name, query_plan.version_context.field),
+            self._field_candidates(query_plan, query_plan.version_context.field),
         ):
             return []
         return ["sql is missing required version filter from query plan"]
@@ -446,7 +411,6 @@ class SqlValidator:
         self,
         query_plan: QueryPlan,
         inspection,
-        source_name: str | None,
     ) -> list[str]:
         if not query_plan.dimensions:
             return []
@@ -454,7 +418,7 @@ class SqlValidator:
         missing_dimensions = [
             field
             for field in query_plan.dimensions
-            if not self._field_candidates(source_name, field).intersection(select_fields)
+            if not self._field_candidates(query_plan, field).intersection(select_fields)
         ]
         if missing_dimensions:
             return [
@@ -482,18 +446,6 @@ class SqlValidator:
         if not inspection.has_limit and not inspection.has_where:
             warnings.append("sql has neither WHERE nor LIMIT; high full-scan risk")
         return warnings
-
-    def _allowed_fields_for_sources(self, source_names: list[str]) -> set[str]:
-        allowed_fields: set[str] = set()
-        if self.semantic_runtime is None:
-            return allowed_fields
-        for source in source_names:
-            for logical_field in self.semantic_runtime.semantic_view_fields(source):
-                allowed_fields.add(logical_field)
-                resolved = self.semantic_runtime.resolve_field(source, logical_field)
-                if resolved:
-                    allowed_fields.add(resolved)
-        return allowed_fields
 
     def _collect_risk_flags(self, errors: list[str], warnings: list[str]) -> list[str]:
         flags: list[str] = []

@@ -7,7 +7,7 @@ from backend.app.config import (
     BUSINESS_KNOWLEDGE_PATH,
     EXAMPLES_TEMPLATE_PATH,
     QUERY_PLAN_SCHEMA_PATH,
-    SEMANTIC_LAYER_PATH,
+    DOMAIN_CONFIG_PATH,
     SESSION_STATE_SCHEMA_PATH,
 )
 
@@ -15,7 +15,7 @@ from backend.app.config import (
 class FileMetadataRepository:
     def __init__(self) -> None:
         self.paths = {
-            "semantic_layer": SEMANTIC_LAYER_PATH,
+            "domain_config": DOMAIN_CONFIG_PATH,
             "business_knowledge": BUSINESS_KNOWLEDGE_PATH,
             "examples_template": EXAMPLES_TEMPLATE_PATH,
             "query_plan_schema": QUERY_PLAN_SCHEMA_PATH,

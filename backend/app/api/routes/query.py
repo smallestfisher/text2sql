@@ -58,13 +58,13 @@ def classify_query(
         container,
         fallback=request.user_context,
     )
-    semantic_parse, classification, warnings = container.query_planner.classify(
+    query_intent, classification, warnings = container.query_planner.classify(
         question=request.question,
         session_state=request.session_state,
     )
     return ClassificationResponse(
         classification=classification,
-        semantic_parse=semantic_parse,
+        query_intent=query_intent,
         warnings=warnings,
     )
 
@@ -80,7 +80,7 @@ def create_query_plan(
         container,
         fallback=request.user_context,
     )
-    semantic_parse, classification, query_plan, warnings = container.query_planner.create_plan(
+    query_intent, classification, query_plan, warnings = container.query_planner.create_plan(
         question=request.question,
         session_state=request.session_state,
     )
@@ -91,9 +91,9 @@ def create_query_plan(
     _sync_classification_with_query_plan(classification, query_plan)
     return PlanResponse(
         classification=classification,
-        semantic_parse=semantic_parse,
+        query_intent=query_intent,
         query_plan=query_plan,
-        semantic_summary=container.semantic_loader.summary(),
+        domain_summary=container.domain_config_loader.summary(),
         warnings=warnings + permission_warnings,
     )
 
@@ -105,7 +105,7 @@ def validate_query_plan(
 ) -> ValidationResponse:
     result = container.query_plan_validator.validate_detailed(
         query_plan=request.query_plan,
-        semantic_layer=container.semantic_layer,
+        domain_config=container.domain_config,
     )
     return ValidationResponse(
         valid=not result.errors,
@@ -133,7 +133,7 @@ def generate_sql(
     )
     plan_result = container.query_plan_validator.validate_detailed(
         query_plan=query_plan,
-        semantic_layer=container.semantic_layer,
+        domain_config=container.domain_config,
     )
     plan_errors = plan_result.errors
     plan_warnings = plan_result.warnings
@@ -158,7 +158,7 @@ def generate_sql(
     elif generated_sql is not None:
         sql_result = container.sql_validator.validate_detailed(
             generated_sql,
-            container.semantic_layer,
+            container.domain_config,
             query_plan=query_plan,
             required_filter_fields=required_filter_fields,
         )
@@ -176,7 +176,7 @@ def generate_sql(
             if repaired_sql:
                 repaired_result = container.sql_validator.validate_detailed(
                     repaired_sql,
-                    container.semantic_layer,
+                    container.domain_config,
                     query_plan=query_plan,
                     required_filter_fields=required_filter_fields,
                 )
@@ -213,7 +213,7 @@ def execute_sql(
     )
     sql_result = container.sql_validator.validate_detailed(
         request.sql,
-        container.semantic_layer,
+        container.domain_config,
     )
     if sql_result.errors:
         return ExecutionResponse(

@@ -190,7 +190,6 @@ class EvaluationService:
             expected_dimensions=list(snapshot.query_plan.dimensions),
             expected_sort_fields=[item.field for item in snapshot.query_plan.sort],
             expected_filter_fields=self._extract_filter_fields(snapshot),
-            expected_semantic_views=list(snapshot.query_plan.semantic_views),
             expected_status=snapshot.answer.status if snapshot.answer is not None else None,
             expected_reason_code=snapshot.classification.reason_code,
             expected_warnings_contains=self._collect_response_warnings(snapshot),
@@ -222,7 +221,7 @@ class EvaluationService:
         if not snapshot.sql:
             raise ValueError("query log does not contain SQL, cannot materialize example")
 
-        normalized_question = (snapshot.semantic_parse.normalized_question or record.question).strip()
+        normalized_question = (snapshot.query_intent.normalized_question or record.question).strip()
         effective_scenario = scenario or self._default_example_scenario(snapshot.classification.question_type)
         merged_tags = list(dict.fromkeys([
             snapshot.classification.subject_domain,
@@ -247,7 +246,6 @@ class EvaluationService:
             subject_domain=snapshot.classification.subject_domain,
             question_type=snapshot.classification.question_type,
             tables=list(snapshot.query_plan.tables),
-            semantic_views=list(snapshot.query_plan.semantic_views),
             entities=list(snapshot.query_plan.entities),
             metrics=list(snapshot.query_plan.metrics),
             dimensions=list(snapshot.query_plan.dimensions),
@@ -286,7 +284,6 @@ class EvaluationService:
                     actual_metrics=list(response.query_plan.metrics),
                     actual_dimensions=list(response.query_plan.dimensions),
                     actual_filter_fields=self._extract_filter_fields(response),
-                    actual_semantic_views=list(response.query_plan.semantic_views),
                     actual_warnings=actual_warnings,
                     plan_valid=response.plan_validation.valid,
                     sql_valid=response.sql_validation.valid,
@@ -352,7 +349,6 @@ class EvaluationService:
         actual_metrics = list(response.query_plan.metrics)
         actual_dimensions = list(response.query_plan.dimensions)
         actual_filter_fields = self._extract_filter_fields(response)
-        actual_semantic_views = list(response.query_plan.semantic_views)
         actual_reason_code = response.classification.reason_code
         actual_warnings = self._collect_response_warnings(response)
         if case.expected_domain and response.classification.subject_domain != case.expected_domain:
@@ -385,12 +381,6 @@ class EvaluationService:
             ]
             if missing_filter_fields:
                 failures.append("missing_filter_fields=" + ",".join(missing_filter_fields))
-        if case.expected_semantic_views:
-            missing_semantic_views = [
-                item for item in case.expected_semantic_views if item not in actual_semantic_views
-            ]
-            if missing_semantic_views:
-                failures.append("missing_semantic_views=" + ",".join(missing_semantic_views))
         if case.expected_reason_code and actual_reason_code != case.expected_reason_code:
             failures.append(
                 f"expected_reason_code={case.expected_reason_code}, actual={actual_reason_code}"
@@ -516,13 +506,13 @@ class EvaluationService:
 
         from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
         from backend.app.models.answer import AnswerPayload
-        from backend.app.models.classification import QuestionClassification, SemanticParse
+        from backend.app.models.classification import QuestionClassification, QueryIntent
         from backend.app.models.query_plan import QueryPlan
         from backend.app.models.retrieval import RetrievalContext
         from backend.app.models.session_state import SessionState
 
         classification_payload = classification_metadata.get("classification") or {}
-        semantic_parse_payload = classification_metadata.get("semantic_parse") or {}
+        query_intent_payload = classification_metadata.get("query_intent") or classification_metadata.get("semantic_parse") or {}
         compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
 
         classification = QuestionClassification(**{
@@ -536,23 +526,22 @@ class EvaluationService:
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
         })
-        semantic_parse = SemanticParse(**{
-            "normalized_question": semantic_parse_payload.get("normalized_question", query_log.question or ""),
-            "matched_metrics": semantic_parse_payload.get("matched_metrics", []),
-            "matched_entities": semantic_parse_payload.get("matched_entities", []),
-            "requested_dimensions": semantic_parse_payload.get("requested_dimensions", []),
-            "filters": semantic_parse_payload.get("filters", []),
-            "time_context": semantic_parse_payload.get("time_context", {}),
-            "version_context": semantic_parse_payload.get("version_context"),
-            "subject_domain": semantic_parse_payload.get("subject_domain", query_log.subject_domain or "unknown"),
-            "has_follow_up_cue": semantic_parse_payload.get("has_follow_up_cue", False),
-            "has_explicit_slots": semantic_parse_payload.get("has_explicit_slots", False),
+        query_intent = QueryIntent(**{
+            "normalized_question": query_intent_payload.get("normalized_question", query_log.question or ""),
+            "matched_metrics": query_intent_payload.get("matched_metrics", []),
+            "matched_entities": query_intent_payload.get("matched_entities", []),
+            "requested_dimensions": query_intent_payload.get("requested_dimensions", []),
+            "filters": query_intent_payload.get("filters", []),
+            "time_context": query_intent_payload.get("time_context", {}),
+            "version_context": query_intent_payload.get("version_context"),
+            "subject_domain": query_intent_payload.get("subject_domain", query_log.subject_domain or "unknown"),
+            "has_follow_up_cue": query_intent_payload.get("has_follow_up_cue", False),
+            "has_explicit_slots": query_intent_payload.get("has_explicit_slots", False),
         })
         query_plan = QueryPlan(**{
             "question_type": compiled_plan_payload.get("question_type", classification.question_type),
             "subject_domain": compiled_plan_payload.get("subject_domain", classification.subject_domain),
             "tables": compiled_plan_payload.get("tables", []),
-            "semantic_views": compiled_plan_payload.get("semantic_views", []),
             "entities": compiled_plan_payload.get("entities", []),
             "metrics": compiled_plan_payload.get("metrics", []),
             "dimensions": compiled_plan_payload.get("dimensions", []),
@@ -587,7 +576,7 @@ class EvaluationService:
         answer = AnswerPayload(status=query_log.answer_status or "stub", summary=query_log.answer_status or "")
         return ChatResponse(
             classification=classification,
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             retrieval=RetrievalContext(hits=[]),
             trace=trace,
             answer=answer,
@@ -608,8 +597,6 @@ class EvaluationService:
         replay_dimensions = set(replay_response.query_plan.dimensions)
         original_filters = set(self._extract_filter_fields(original_response))
         replay_filters = set(self._extract_filter_fields(replay_response))
-        original_views = set(original_response.query_plan.semantic_views)
-        replay_views = set(replay_response.query_plan.semantic_views)
         original_plan_flags = set(original_response.plan_validation.risk_flags)
         replay_plan_flags = set(replay_response.plan_validation.risk_flags)
         original_sql_flags = set(original_response.sql_validation.risk_flags)
@@ -640,8 +627,6 @@ class EvaluationService:
             dimensions_removed=sorted(original_dimensions - replay_dimensions),
             filter_fields_added=sorted(replay_filters - original_filters),
             filter_fields_removed=sorted(original_filters - replay_filters),
-            semantic_views_added=sorted(replay_views - original_views),
-            semantic_views_removed=sorted(original_views - replay_views),
             plan_risk_flags_added=sorted(replay_plan_flags - original_plan_flags),
             plan_risk_flags_removed=sorted(original_plan_flags - replay_plan_flags),
             sql_risk_flags_added=sorted(replay_sql_flags - original_sql_flags),

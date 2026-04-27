@@ -40,9 +40,6 @@
     ],
     "expected_status": "clarification_needed",
     "expected_reason_code": "inventory_factory_ambiguous",
-    "expected_semantic_views": [
-      "semantic_inventory_view"
-    ],
     "notes": "库存域工厂语义歧义，应澄清 factory_code 还是 ERP_FACTORY。"
   },
   {
@@ -231,9 +228,6 @@
       "source_table",
       "demand_month",
       "PM_VERSION"
-    ],
-    "expected_semantic_views": [
-      "semantic_demand_unpivot_view"
     ],
     "notes": "需求横表问题应识别目标需求月份、P版来源、最新N版版本范围，并按 FGCODE 取 Top1。"
   },
@@ -718,9 +712,6 @@
       "biz_month",
       "factory_code"
     ],
-    "expected_semantic_views": [
-      "semantic_inventory_view"
-    ],
     "expected_warnings_contains": [
       "data scope filters injected into query plan"
     ],
@@ -756,9 +747,6 @@
       "biz_month",
       "PM_VERSION",
       "customer"
-    ],
-    "expected_semantic_views": [
-      "semantic_demand_perf_view"
     ],
     "expected_warnings_contains": [
       "data scope filters injected into query plan"
@@ -796,9 +784,6 @@
       "factory",
       "stage_product_id"
     ],
-    "expected_semantic_views": [
-      "semantic_plan_actual_view"
-    ],
     "expected_warnings_contains": [
       "data scope filters injected into query plan"
     ],
@@ -834,9 +819,6 @@
       "biz_month",
       "FGCODE"
     ],
-    "expected_semantic_views": [
-      "semantic_demand_perf_view"
-    ],
     "expected_warnings_contains": [
       "data scope filters injected into query plan"
     ],
@@ -870,9 +852,6 @@
     ],
     "expected_status": "clarification_needed",
     "expected_reason_code": "inventory_factory_ambiguous",
-    "expected_semantic_views": [
-      "semantic_inventory_view"
-    ],
     "notes": "库存域工厂语义歧义时，应给出明确的 reason_code。"
   },
   {

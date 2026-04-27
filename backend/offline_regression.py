@@ -21,7 +21,7 @@ from backend.app.services.policy_engine import PolicyEngine
 from backend.app.services.query_plan_compiler import QueryPlanCompiler
 from backend.app.services.query_plan_validator import QueryPlanValidator
 from backend.app.services.query_planner import QueryPlanner
-from backend.app.services.semantic_loader import SemanticLayerLoader
+from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_state_service import SessionStateService
 
@@ -37,13 +37,13 @@ def load_cases(path: Path) -> list[EvaluationCase]:
 
 
 def build_components() -> dict[str, Any]:
-    semantic_layer = SemanticLayerLoader().load()
-    semantic_runtime = SemanticRuntime(semantic_layer)
+    domain_config = DomainConfigLoader().load()
+    semantic_runtime = SemanticRuntime(domain_config)
     return {
-        "semantic_layer": semantic_layer,
+        "domain_config": domain_config,
         "semantic_runtime": semantic_runtime,
         "query_planner": QueryPlanner(
-            semantic_layer=semantic_layer,
+            domain_config=domain_config,
             semantic_runtime=semantic_runtime,
             classification_llm_enabled=False,
         ),
@@ -61,7 +61,7 @@ def run_question(
     user_context,
     components: dict[str, Any],
 ) -> dict[str, Any]:
-    semantic_layer = components["semantic_layer"]
+    domain_config = components["domain_config"]
     query_planner = components["query_planner"]
     query_plan_compiler = components["query_plan_compiler"]
     query_plan_validator = components["query_plan_validator"]
@@ -69,7 +69,7 @@ def run_question(
     session_state_service = components["session_state_service"]
     answer_builder = components["answer_builder"]
 
-    semantic_parse, classification, query_plan, planner_warnings = query_planner.create_plan(
+    query_intent, classification, query_plan, planner_warnings = query_planner.create_plan(
         question=question,
         session_state=session_state,
     )
@@ -81,7 +81,7 @@ def run_question(
 
     plan_result = query_plan_validator.validate_detailed(
         query_plan=query_plan,
-        semantic_layer=semantic_layer,
+        domain_config=domain_config,
     )
     plan_errors = plan_result.errors
     plan_warnings = plan_result.warnings
@@ -114,7 +114,7 @@ def run_question(
         sql=sql,
     )
     return {
-        "semantic_parse": semantic_parse,
+        "query_intent": query_intent,
         "classification": classification,
         "query_plan": query_plan,
         "sql": sql,
@@ -138,7 +138,6 @@ def evaluate_case(case: EvaluationCase, result: dict[str, Any]) -> list[str]:
     actual_dimensions = list(query_plan.dimensions)
     actual_sort_fields = unique([item.field for item in query_plan.sort])
     actual_filter_fields = unique([item.field for item in query_plan.filters])
-    actual_semantic_views = list(query_plan.semantic_views)
     actual_warnings = unique(plan_validation.warnings + sql_validation.warnings)
 
     if case.expected_domain and classification.subject_domain != case.expected_domain:
@@ -181,10 +180,6 @@ def evaluate_case(case: EvaluationCase, result: dict[str, Any]) -> list[str]:
         missing_filter_fields = [item for item in case.expected_filter_fields if item not in actual_filter_fields]
         if missing_filter_fields:
             failures.append("missing_filter_fields=" + ",".join(missing_filter_fields))
-    if case.expected_semantic_views:
-        missing_semantic_views = [item for item in case.expected_semantic_views if item not in actual_semantic_views]
-        if missing_semantic_views:
-            failures.append("missing_semantic_views=" + ",".join(missing_semantic_views))
     if case.expected_warnings_contains:
         for expected_warning in case.expected_warnings_contains:
             if not any(expected_warning in warning for warning in actual_warnings):
@@ -332,7 +327,6 @@ def main() -> None:
                 "actual_metrics": list(result["query_plan"].metrics),
                 "actual_dimensions": list(result["query_plan"].dimensions),
                 "actual_filter_fields": unique([item.field for item in result["query_plan"].filters]),
-                "actual_semantic_views": list(result["query_plan"].semantic_views),
                 "plan_valid": result["plan_validation"].valid,
                 "sql_valid": result["sql_validation"].valid,
                 "sql_generation_mode": result["sql_generation_mode"],

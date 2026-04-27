@@ -31,12 +31,6 @@
       },
       "minItems": 0
     },
-    "semantic_views": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "entities": {
       "type": "array",
       "items": {

@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from collections import deque
 import calendar
+import json
 import re
 
-from backend.app.models.classification import SemanticParse
+from backend.app.config import TABLES_METADATA_PATH
+from backend.app.models.classification import QueryIntent
 from backend.app.models.query_plan import ContextDelta
 from backend.app.models.query_plan import FilterItem
 from backend.app.models.query_plan import QueryPlan
@@ -17,21 +19,18 @@ from backend.app.models.session_state import SessionState
 
 
 class SemanticRuntime:
-    def __init__(self, semantic_layer: dict) -> None:
-        self.semantic_layer = semantic_layer
+    def __init__(self, domain_config: dict) -> None:
+        self.domain_config = domain_config
         self.metric_catalog = {
-            item["name"]: item for item in semantic_layer.get("metrics", [])
+            item["name"]: item for item in domain_config.get("metrics", [])
         }
         self.entity_catalog = {
-            item["name"]: item for item in semantic_layer.get("entities", [])
+            item["name"]: item for item in domain_config.get("entities", [])
         }
-        self.view_catalog = {
-            item["name"]: item for item in semantic_layer.get("semantic_views", [])
-        }
-        self.query_profiles = semantic_layer.get("query_profiles", {})
-        self.question_understanding = semantic_layer.get("question_understanding", {})
-        self.domain_inference = semantic_layer.get("domain_inference", {})
-        extractors = semantic_layer.get("extractors", {})
+        self.query_profiles = domain_config.get("query_profiles", {})
+        self.question_understanding = domain_config.get("question_understanding", {})
+        self.domain_inference = domain_config.get("domain_inference", {})
+        extractors = domain_config.get("extractors", {})
         self.time_extractors = extractors.get("time", [])
         self.filter_extractors = extractors.get("filters", [])
         self.dimension_extractors = extractors.get("dimensions", [])
@@ -39,8 +38,14 @@ class SemanticRuntime:
         self.analysis_extractors = extractors.get("analysis", [])
         self.sort_extractors = extractors.get("sort", [])
         self.limit_extractors = extractors.get("limit", [])
-        self.graph_nodes = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
-        self.graph_edges = semantic_layer.get("semantic_graph", {}).get("edges", [])
+        self.graph_nodes = set(domain_config.get("semantic_graph", {}).get("nodes", []))
+        self.graph_edges = domain_config.get("semantic_graph", {}).get("edges", [])
+        self.tables_metadata = self._load_tables_metadata()
+        self.table_field_catalog = {
+            table_name: self._extract_table_fields(payload)
+            for table_name, payload in self.tables_metadata.items()
+            if isinstance(payload, dict)
+        }
 
     def invalid_patterns(self) -> set[str]:
         return set(self.question_understanding.get("invalid_exact_patterns", []))
@@ -75,7 +80,7 @@ class SemanticRuntime:
         return domain_name in self.query_profiles or domain_name == "unknown"
 
     def domain_tables(self, domain_name: str) -> list[str]:
-        for item in self.semantic_layer.get("domains", []):
+        for item in self.domain_config.get("domains", []):
             if item.get("name") == domain_name:
                 return list(item.get("tables", []))
         return []
@@ -117,7 +122,6 @@ class SemanticRuntime:
     def sanitize_query_plan(
         self,
         query_plan: QueryPlan,
-        fallback_semantic_views: list[str] | None = None,
         default_limit: int = 200,
     ) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
@@ -131,16 +135,6 @@ class SemanticRuntime:
             for metric in self._unique_strings(compiled.metrics)
             if self.is_known_metric(metric)
         ]
-        compiled.semantic_views = self._sanitize_semantic_views(
-            domain_name=compiled.subject_domain,
-            metrics=compiled.metrics,
-            dimensions=compiled.dimensions,
-            filters=compiled.filters,
-            sort_fields=[item.field for item in compiled.sort],
-            version_field=compiled.version_context.field if compiled.version_context else None,
-            candidate_views=compiled.semantic_views,
-            fallback_semantic_views=fallback_semantic_views,
-        )
         compiled.tables = self._sanitize_tables(
             domain_name=compiled.subject_domain,
             metrics=compiled.metrics,
@@ -148,7 +142,6 @@ class SemanticRuntime:
         )
         compiled.version_context = self._sanitize_version_context(
             domain_name=compiled.subject_domain,
-            semantic_views=compiled.semantic_views,
             version_context=compiled.version_context,
         )
         compiled.limit = self.clamp_limit(
@@ -170,12 +163,52 @@ class SemanticRuntime:
             return []
         return [item["table"] for item in metric.get("definitions", [])]
 
-    def resolve_field(self, source_name: str | None, logical_field: str) -> str:
-        if not source_name:
-            return logical_field
-        source = self.view_catalog.get(source_name, {})
-        field_aliases = source.get("field_aliases", {})
-        return field_aliases.get(logical_field, logical_field)
+    def profile_allowed_fields(self, domain_name: str) -> list[str]:
+        profile = self.query_profile(domain_name)
+        return [str(item) for item in profile.get("allowed_fields", []) if item]
+
+    def profile_field_aliases(self, domain_name: str) -> dict[str, list[str]]:
+        aliases: dict[str, list[str]] = {}
+        raw_aliases = self.query_profile(domain_name).get("field_aliases", {})
+        if not isinstance(raw_aliases, dict):
+            return aliases
+        for field_name, targets in raw_aliases.items():
+            if not field_name:
+                continue
+            if isinstance(targets, list):
+                values = [str(item) for item in targets if item]
+            elif targets:
+                values = [str(targets)]
+            else:
+                values = []
+            aliases[str(field_name)] = values
+        return aliases
+
+    def table_fields(self, table_name: str) -> list[str]:
+        return list(self.table_field_catalog.get(table_name, []))
+
+    def resolve_field_candidates(
+        self,
+        domain_name: str,
+        table_names: list[str],
+        logical_field: str,
+    ) -> set[str]:
+        candidates = {logical_field}
+        aliases = self.profile_field_aliases(domain_name).get(logical_field, [])
+        candidates.update(alias for alias in aliases if alias)
+
+        lowered_field = logical_field.lower()
+        for table_name in table_names:
+            for column_name in self.table_fields(table_name):
+                if column_name.lower() == lowered_field:
+                    candidates.add(column_name)
+
+        for metric_name, metric in self.metric_catalog.items():
+            if str(metric.get("semantic_column", "")) != logical_field:
+                continue
+            candidates.update(self.metric_expression_columns(metric_name, table_names=table_names))
+            break
+        return {item for item in candidates if item}
 
     def is_dynamic_version_context(self, version_context: VersionContext | None) -> bool:
         return bool(
@@ -184,28 +217,34 @@ class SemanticRuntime:
             and version_context.value.startswith("LATEST_N:")
         )
 
-    def semantic_view_fields(self, view_name: str) -> list[str]:
-        view = self.view_catalog.get(view_name, {})
-        return list(view.get("output_fields", []))
-
-    def semantic_views_support_field(self, view_names: list[str], field_name: str) -> bool:
-        return any(field_name in self.semantic_view_fields(view_name) for view_name in view_names)
-
     def allowed_fields_for_plan(self, query_plan: QueryPlan) -> set[str]:
-        allowed_fields: set[str] = set()
-        for view_name in query_plan.semantic_views:
-            allowed_fields.update(self.semantic_view_fields(view_name))
+        allowed_fields = set(self.profile_allowed_fields(query_plan.subject_domain))
+        for table_name in query_plan.tables:
+            allowed_fields.update(self.table_fields(table_name))
+        for metric_name in query_plan.metrics:
+            allowed_fields.add(self.metric_column(metric_name))
+            allowed_fields.update(self.metric_expression_columns(metric_name, table_names=query_plan.tables))
         profile_version_field = self.query_profile(query_plan.subject_domain).get("version_field")
-        if (
-            query_plan.version_context
-            and query_plan.version_context.field
-            and (
-                query_plan.version_context.field == profile_version_field
-                or self.semantic_views_support_field(query_plan.semantic_views, query_plan.version_context.field)
-            )
-        ):
-            allowed_fields.add(query_plan.version_context.field)
+        if query_plan.version_context and query_plan.version_context.field:
+            if not profile_version_field or query_plan.version_context.field == profile_version_field:
+                allowed_fields.add(query_plan.version_context.field)
         return allowed_fields
+
+    def metric_expression_columns(self, metric_name: str, table_names: list[str] | None = None) -> set[str]:
+        metric = self.metric_catalog.get(metric_name, {})
+        allowed_tables = set(table_names or [])
+        columns: set[str] = set()
+        for definition in metric.get("definitions", []):
+            table_name = definition.get("table")
+            if allowed_tables and table_name not in allowed_tables:
+                continue
+            expression = str(definition.get("expression", ""))
+            for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expression):
+                upper_token = token.upper()
+                if upper_token in {"SUM", "COUNT", "AVG", "MIN", "MAX", "NORMALIZED_FROM_HORIZONTAL_MONTH_COLUMNS"}:
+                    continue
+                columns.add(token)
+        return columns
 
     def llm_plan_is_acceptable(self, candidate: QueryPlan, base_plan: QueryPlan) -> tuple[bool, list[str]]:
         reasons: list[str] = []
@@ -223,12 +262,6 @@ class SemanticRuntime:
         ):
             reasons.append("llm plan dropped version context from base plan")
 
-        allowed_views = set(self.semantic_views_for_domain(candidate.subject_domain))
-        if candidate.semantic_views and allowed_views:
-            unsupported_views = [item for item in candidate.semantic_views if item not in allowed_views]
-            if unsupported_views:
-                reasons.append("llm plan selected semantic views outside domain defaults")
-
         allowed_fields = self.allowed_fields_for_plan(candidate)
         if allowed_fields:
             bad_dimensions = [item for item in candidate.dimensions if item not in allowed_fields]
@@ -238,8 +271,8 @@ class SemanticRuntime:
             if bad_filters:
                 reasons.append("llm plan filters are outside allowed fields")
 
-        if candidate.subject_domain != "unknown" and not candidate.semantic_views and not candidate.tables:
-            reasons.append("llm plan does not provide semantic views or tables")
+        if candidate.subject_domain != "unknown" and not candidate.tables:
+            reasons.append("llm plan does not provide tables")
 
         if candidate.limit > self.max_limit(candidate.subject_domain, fallback=base_plan.limit):
             reasons.append("llm plan limit exceeds configured maximum")
@@ -248,62 +281,15 @@ class SemanticRuntime:
         if (
             candidate.version_context
             and candidate.version_context.field
-            and not (
-                candidate.version_context.field == profile_version_field
-                or self.semantic_views_support_field(candidate.semantic_views, candidate.version_context.field)
-            )
+            and profile_version_field
+            and candidate.version_context.field != profile_version_field
         ):
-            reasons.append("llm plan version field is not supported by domain or semantic views")
+            reasons.append("llm plan version field is not supported by domain configuration")
 
         return not reasons, reasons
 
-    def semantic_views_for_domain(self, domain_name: str) -> list[str]:
-        profile = self.query_profiles.get(domain_name, {})
-        return profile.get("default_semantic_views", [])
-
     def query_profile(self, domain_name: str) -> dict:
         return self.query_profiles.get(domain_name, {})
-
-    def rank_semantic_views(
-        self,
-        domain_name: str,
-        metrics: list[str] | None = None,
-        dimensions: list[str] | None = None,
-        filters: list[FilterItem] | None = None,
-        sort_fields: list[str] | None = None,
-        version_field: str | None = None,
-        candidate_views: list[str] | None = None,
-    ) -> list[str]:
-        domain_views = self.semantic_views_for_domain(domain_name)
-        candidates = [
-            view_name
-            for view_name in self._unique_strings(candidate_views or [])
-            if self.is_known_view(view_name)
-            and (not domain_views or view_name in domain_views)
-        ]
-        if not candidates:
-            candidates = domain_views
-        if len(candidates) <= 1:
-            return candidates
-
-        requested_fields = set(dimensions or [])
-        requested_fields.update(item.field for item in (filters or []))
-        requested_fields.update(sort_fields or [])
-        if version_field:
-            requested_fields.add(version_field)
-
-        requested_metric_fields = {self.metric_column(metric) for metric in (metrics or [])}
-
-        scored = []
-        for index, view_name in enumerate(candidates):
-            output_fields = set(self.semantic_view_fields(view_name))
-            score = 0
-            score += 5 * len(output_fields.intersection(requested_metric_fields))
-            score += 2 * len(output_fields.intersection(requested_fields))
-            scored.append((score, -index, view_name))
-
-        scored.sort(reverse=True)
-        return [item[2] for item in scored]
 
     def time_filter_fields(self, domain_name: str) -> list[str]:
         return list(self.query_profile(domain_name).get("time_filter_fields", []))
@@ -311,53 +297,53 @@ class SemanticRuntime:
     def warn_if_missing_time_filter(self, domain_name: str) -> bool:
         return bool(self.query_profile(domain_name).get("warn_if_missing_time_filter", False))
 
-    def build_context_delta(self, semantic_parse: SemanticParse) -> ContextDelta:
+    def build_context_delta(self, query_intent: QueryIntent) -> ContextDelta:
         remove_filters: list[str] = []
-        incoming_fields = {item.field for item in semantic_parse.filters}
+        incoming_fields = {item.field for item in query_intent.filters}
         for fields in self.context_filter_groups().values():
             group = set(fields)
             if group.intersection(incoming_fields):
                 remove_filters.extend(sorted(group))
 
-        if semantic_parse.version_context and semantic_parse.version_context.field:
+        if query_intent.version_context and query_intent.version_context.field:
             version_group = self.context_filter_groups().get("version", [])
-            remove_filters.extend(version_group or [semantic_parse.version_context.field])
+            remove_filters.extend(version_group or [query_intent.version_context.field])
 
         return ContextDelta(
-            add_filters=semantic_parse.filters,
+            add_filters=query_intent.filters,
             remove_filters=self._unique_strings(remove_filters),
-            replace_entities=semantic_parse.matched_entities,
-            replace_metrics=semantic_parse.matched_metrics,
-            replace_dimensions=semantic_parse.requested_dimensions,
-            replace_sort=semantic_parse.requested_sort,
-            replace_time_context=semantic_parse.time_context,
-            replace_version_context=semantic_parse.version_context,
-            replace_limit=semantic_parse.requested_limit,
-            replace_analysis_mode=semantic_parse.analysis_mode,
+            replace_entities=query_intent.matched_entities,
+            replace_metrics=query_intent.matched_metrics,
+            replace_dimensions=query_intent.requested_dimensions,
+            replace_sort=query_intent.requested_sort,
+            replace_time_context=query_intent.time_context,
+            replace_version_context=query_intent.version_context,
+            replace_limit=query_intent.requested_limit,
+            replace_analysis_mode=query_intent.analysis_mode,
         )
 
     def session_semantic_diff(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict:
-        current_filter_fields = {item.field for item in semantic_parse.filters}
-        parsed_domain_known = semantic_parse.subject_domain != "unknown"
-        current_has_dimensions = bool(semantic_parse.requested_dimensions)
-        current_has_time = semantic_parse.time_context.grain != "unknown"
+        current_filter_fields = {item.field for item in query_intent.filters}
+        parsed_domain_known = query_intent.subject_domain != "unknown"
+        current_has_dimensions = bool(query_intent.requested_dimensions)
+        current_has_time = query_intent.time_context.grain != "unknown"
         current_has_version = bool(
-            semantic_parse.version_context is not None and semantic_parse.version_context.value
+            query_intent.version_context is not None and query_intent.version_context.value
         )
-        current_has_sort = bool(semantic_parse.requested_sort)
-        current_has_limit = semantic_parse.requested_limit is not None
+        current_has_sort = bool(query_intent.requested_sort)
+        current_has_limit = query_intent.requested_limit is not None
         if session_state is None:
             return {
                 "has_session": False,
                 "parsed_domain_known": parsed_domain_known,
                 "domain_changed": parsed_domain_known,
-                "new_metrics": semantic_parse.matched_metrics,
-                "new_entities": semantic_parse.matched_entities,
-                "requested_dimensions": semantic_parse.requested_dimensions,
+                "new_metrics": query_intent.matched_metrics,
+                "new_entities": query_intent.matched_entities,
+                "requested_dimensions": query_intent.requested_dimensions,
                 "new_filter_fields": sorted(current_filter_fields),
                 "reused_filter_fields": [],
                 "only_updates_filters": False,
@@ -366,9 +352,9 @@ class SemanticRuntime:
                 "only_updates_version": False,
                 "only_updates_sort": False,
                 "only_updates_limit": False,
-                "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
+                "has_independent_target": bool(query_intent.matched_metrics or parsed_domain_known),
                 "can_execute_without_context": bool(
-                    semantic_parse.matched_metrics
+                    query_intent.matched_metrics
                     and (parsed_domain_known or current_has_time or current_filter_fields)
                 ),
                 "is_short_followup_fragment": False,
@@ -377,14 +363,14 @@ class SemanticRuntime:
                 "entity_overlap_ratio": 0.0,
                 "filter_overlap_ratio": 0.0,
                 "metrics_missing_but_context_resolvable": False,
-                "introduces_new_topic_signal": parsed_domain_known and bool(semantic_parse.matched_metrics),
+                "introduces_new_topic_signal": parsed_domain_known and bool(query_intent.matched_metrics),
             }
 
         previous_filter_fields = {item.field for item in session_state.filters}
         previous_metrics = set(session_state.metrics)
         previous_entities = set(session_state.entities)
-        current_metrics = set(semantic_parse.matched_metrics)
-        current_entities = set(semantic_parse.matched_entities)
+        current_metrics = set(query_intent.matched_metrics)
+        current_entities = set(query_intent.matched_entities)
         reused_metric_count = len(current_metrics.intersection(previous_metrics))
         reused_entity_count = len(current_entities.intersection(previous_entities))
         reused_filter_count = len(current_filter_fields.intersection(previous_filter_fields))
@@ -400,12 +386,12 @@ class SemanticRuntime:
         only_updates_sort = current_has_sort and not metric_changed and not current_entities and not current_filter_fields and not current_has_time and not current_has_version and not current_has_dimensions
         only_updates_limit = current_has_limit and not metric_changed and not current_entities and not current_filter_fields and not current_has_time and not current_has_version and not current_has_dimensions
         can_execute_without_context = bool(
-            semantic_parse.matched_metrics
+            query_intent.matched_metrics
             and (parsed_domain_known or current_has_time or current_filter_fields or current_entities)
             and not (only_updates_sort or only_updates_limit)
         )
         metrics_missing_but_context_resolvable = bool(
-            not semantic_parse.matched_metrics
+            not query_intent.matched_metrics
             and session_state.metrics
             and (
                 current_filter_fields
@@ -414,18 +400,18 @@ class SemanticRuntime:
                 or current_has_version
                 or current_has_sort
                 or current_has_limit
-                or semantic_parse.has_follow_up_cue
+                or query_intent.has_follow_up_cue
             )
         )
         introduces_new_topic_signal = bool(
-            (parsed_domain_known and semantic_parse.subject_domain != session_state.subject_domain)
+            (parsed_domain_known and query_intent.subject_domain != session_state.subject_domain)
             or (current_metrics and not reused_metric_count)
-            or (current_entities and not reused_entity_count and not semantic_parse.has_follow_up_cue)
+            or (current_entities and not reused_entity_count and not query_intent.has_follow_up_cue)
         )
         is_short_followup_fragment = bool(
-            len(semantic_parse.normalized_question) <= 12
+            len(query_intent.normalized_question) <= 12
             and (
-                semantic_parse.has_follow_up_cue
+                query_intent.has_follow_up_cue
                 or only_updates_filters
                 or only_updates_dimensions
                 or only_updates_time
@@ -437,31 +423,31 @@ class SemanticRuntime:
         return {
             "has_session": True,
             "parsed_domain_known": parsed_domain_known,
-            "domain_changed": parsed_domain_known and semantic_parse.subject_domain != session_state.subject_domain,
+            "domain_changed": parsed_domain_known and query_intent.subject_domain != session_state.subject_domain,
             "new_metrics": [
-                item for item in semantic_parse.matched_metrics if item not in session_state.metrics
+                item for item in query_intent.matched_metrics if item not in session_state.metrics
             ],
             "reused_metrics": [
-                item for item in semantic_parse.matched_metrics if item in session_state.metrics
+                item for item in query_intent.matched_metrics if item in session_state.metrics
             ],
             "new_entities": [
-                item for item in semantic_parse.matched_entities if item not in session_state.entities
+                item for item in query_intent.matched_entities if item not in session_state.entities
             ],
-            "requested_dimensions": semantic_parse.requested_dimensions,
+            "requested_dimensions": query_intent.requested_dimensions,
             "reused_entities": [
-                item for item in semantic_parse.matched_entities if item in session_state.entities
+                item for item in query_intent.matched_entities if item in session_state.entities
             ],
             "new_filter_fields": sorted(current_filter_fields - previous_filter_fields),
             "reused_filter_fields": sorted(current_filter_fields.intersection(previous_filter_fields)),
-            "has_follow_up_cue": semantic_parse.has_follow_up_cue,
-            "has_explicit_slots": semantic_parse.has_explicit_slots,
+            "has_follow_up_cue": query_intent.has_follow_up_cue,
+            "has_explicit_slots": query_intent.has_explicit_slots,
             "only_updates_filters": only_updates_filters,
             "only_updates_dimensions": only_updates_dimensions,
             "only_updates_time": only_updates_time,
             "only_updates_version": only_updates_version,
             "only_updates_sort": only_updates_sort,
             "only_updates_limit": only_updates_limit,
-            "has_independent_target": bool(semantic_parse.matched_metrics or parsed_domain_known),
+            "has_independent_target": bool(query_intent.matched_metrics or parsed_domain_known),
             "can_execute_without_context": can_execute_without_context,
             "is_short_followup_fragment": is_short_followup_fragment,
             "explicit_time_or_version_slot": current_has_time or current_has_version,
@@ -473,11 +459,11 @@ class SemanticRuntime:
             "time_grain_changed": (
                 previous_has_time
                 and current_has_time
-                and semantic_parse.time_context.grain != session_state.time_context.grain
+                and query_intent.time_context.grain != session_state.time_context.grain
             ),
             "version_changed": bool(
                 current_has_version
-                and semantic_parse.version_context.value
+                and query_intent.version_context.value
                 != (session_state.version_context.value if session_state.version_context else None)
             ),
             "time_was_implicit": previous_has_time and not current_has_time,
@@ -636,9 +622,6 @@ class SemanticRuntime:
 
         compiled = self._apply_explicit_source_table(compiled)
 
-        if not compiled.semantic_views:
-            compiled.semantic_views = profile.get("default_semantic_views", [])
-
         compiled = self._inject_time_filters(compiled, profile)
         compiled = self._inject_version_filter(compiled, profile)
         compiled = self._inject_default_sort(compiled, profile)
@@ -726,43 +709,6 @@ class SemanticRuntime:
     def is_known_table(self, table: str) -> bool:
         return table in self.graph_nodes
 
-    def is_known_view(self, view: str) -> bool:
-        return view in self.view_catalog
-
-    def _sanitize_semantic_views(
-        self,
-        domain_name: str,
-        metrics: list[str],
-        dimensions: list[str],
-        filters: list[FilterItem],
-        sort_fields: list[str],
-        version_field: str | None,
-        candidate_views: list[str] | None,
-        fallback_semantic_views: list[str] | None,
-    ) -> list[str]:
-        ranked = self.rank_semantic_views(
-            domain_name=domain_name,
-            metrics=metrics,
-            dimensions=dimensions,
-            filters=filters,
-            sort_fields=sort_fields,
-            version_field=version_field,
-            candidate_views=candidate_views,
-        )
-        if ranked:
-            return ranked
-        if fallback_semantic_views:
-            return self.rank_semantic_views(
-                domain_name=domain_name,
-                metrics=metrics,
-                dimensions=dimensions,
-                filters=filters,
-                sort_fields=sort_fields,
-                version_field=version_field,
-                candidate_views=fallback_semantic_views,
-            )
-        return []
-
     def _sanitize_tables(
         self,
         domain_name: str,
@@ -789,7 +735,6 @@ class SemanticRuntime:
     def _sanitize_version_context(
         self,
         domain_name: str,
-        semantic_views: list[str],
         version_context: VersionContext | None,
     ) -> VersionContext | None:
         if version_context is None or not version_context.value:
@@ -798,10 +743,8 @@ class SemanticRuntime:
         version_field = version_context.field or profile_version_field
         if not version_field:
             return None
-        if (
-            version_field != profile_version_field
-            and not self.semantic_views_support_field(semantic_views, version_field)
-        ):
+        allowed_fields = set(self.profile_allowed_fields(domain_name))
+        if profile_version_field and version_field != profile_version_field and version_field not in allowed_fields:
             return None
         return VersionContext(field=version_field, value=version_context.value)
 
@@ -1051,10 +994,8 @@ class SemanticRuntime:
         version_field = compiled.version_context.field or profile.get("version_field")
         if not version_field:
             return compiled
-        if (
-            version_field != profile.get("version_field")
-            and not self.semantic_views_support_field(compiled.semantic_views, version_field)
-        ):
+        allowed_fields = set(profile.get("allowed_fields", []))
+        if profile.get("version_field") and version_field != profile.get("version_field") and version_field not in allowed_fields:
             return compiled
 
         existing = {
@@ -1106,11 +1047,11 @@ class SemanticRuntime:
         if not time_fields:
             return compiled
 
+        allowed_fields = set(profile.get("allowed_fields", []))
         candidate_fields = [
             field
             for field in time_fields
-            if not compiled.semantic_views
-            or self.semantic_views_support_field(compiled.semantic_views, field)
+            if not allowed_fields or field in allowed_fields
         ]
         if not candidate_fields:
             candidate_fields = time_fields
@@ -1192,6 +1133,22 @@ class SemanticRuntime:
             return compiled
         compiled.sort = [SortItem(**item) for item in default_sort if isinstance(item, dict)]
         return compiled
+
+    def _load_tables_metadata(self) -> dict:
+        try:
+            return json.loads(TABLES_METADATA_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _extract_table_fields(self, payload: dict) -> list[str]:
+        fields: list[str] = []
+        for raw_column in payload.get("columns", []):
+            if not raw_column:
+                continue
+            column_name = str(raw_column).split("(", 1)[0].strip()
+            if column_name and column_name not in fields:
+                fields.append(column_name)
+        return fields
 
     def _unique_strings(self, items: list[str]) -> list[str]:
         result: list[str] = []

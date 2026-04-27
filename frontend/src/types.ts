@@ -34,24 +34,11 @@ export interface BootstrapStatus {
   has_users: boolean;
 }
 
-export interface SemanticSummary {
+export interface DomainSummary {
   version?: string;
   domains: string[];
   entities: string[];
   metrics: string[];
-  semantic_views: string[];
-  semantic_view_status?: Record<string, string>;
-  semantic_view_stage?: Record<string, string>;
-  semantic_view_details?: Array<{
-    name: string;
-    purpose?: string;
-    status?: string;
-    implementation_stage?: string;
-    serves_domains?: string[];
-    source_tables?: string[];
-    output_fields?: string[];
-    design_notes?: string[];
-  }>;
   tables: string[];
 }
 
@@ -85,7 +72,6 @@ export interface QueryPlan {
   question_type: string;
   subject_domain: string;
   tables: string[];
-  semantic_views: string[];
   entities: string[];
   metrics: string[];
   dimensions: string[];
@@ -115,7 +101,7 @@ export interface QuestionClassification {
   context_delta?: Record<string, unknown>;
 }
 
-export interface SemanticParse {
+export interface QueryIntent {
   normalized_question: string;
   matched_metrics: string[];
   matched_entities: string[];
@@ -138,7 +124,6 @@ export interface RetrievalHit {
 
 export interface RetrievalContext {
   domains: string[];
-  semantic_views: string[];
   metrics: string[];
   retrieval_terms: string[];
   retrieval_channels: string[];
@@ -196,7 +181,6 @@ export interface SessionState {
   subject_domain: string;
   entities: string[];
   tables: string[];
-  semantic_views: string[];
   metrics: string[];
   dimensions: string[];
   filters: FilterItem[];
@@ -213,7 +197,7 @@ export interface SessionState {
 
 export interface ChatResponse {
   classification: QuestionClassification;
-  semantic_parse: SemanticParse;
+  query_intent: QueryIntent;
   retrieval?: RetrievalContext | null;
   trace?: TraceRecord | null;
   answer?: AnswerPayload | null;
@@ -338,8 +322,7 @@ export interface FeedbackSummary {
 export interface MetadataOverview {
   semantic_version?: string | null;
   semantic_domains: string[];
-  semantic_views: string[];
-  semantic_view_status: Record<string, string>;
+  table_count: number;
   example_count: number;
   trace_count: number;
 }

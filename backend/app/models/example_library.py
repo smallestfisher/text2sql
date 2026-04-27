@@ -15,7 +15,6 @@ class ExampleRecord(BaseModel):
     subject_domain: SubjectDomain
     question_type: QuestionType
     tables: list[str] = Field(default_factory=list)
-    semantic_views: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)

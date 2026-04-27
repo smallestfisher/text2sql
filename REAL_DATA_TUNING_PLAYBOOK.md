@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-本文用于指导当前 LLM-first Text2SQL 工程接入真实数据和真实问法。调优重点不是继续堆本地规则或 semantic view，而是让 LLM 基于真实 schema、业务知识和高质量样本生成正确 SQL，再由 validator 兜住安全边界。
+本文用于指导当前 LLM-first Text2SQL 工程接入真实数据和真实问法。调优重点不是继续堆本地规则或数据库预建分析对象，而是让 LLM 基于真实 schema、业务知识和高质量样本生成正确 SQL，再由 validator 兜住安全边界。
 
 ## 2. 最低准备
 
@@ -11,7 +11,6 @@
 - 可访问的只读业务库账号
 - 最新 `tables.json`
 - 最新 `business_knowledge.json`
-- 最新 `readme.txt`
 - 每个主业务域 5 到 10 条真实高频问题
 - 每条问题的人工预期，包括指标、维度、过滤、排序、TopN、时间和版本口径
 - 重点关注的 2 到 3 条主线，例如需求、库存、计划/实际
@@ -35,11 +34,6 @@
 - 指标口径是否明确
 - `p_demand` / `v_demand` 这类横表的月份映射是否明确
 - 最新版本、目标月份、TopN 等常见问法是否有说明
-
-再核对 `readme.txt`：
-
-- 是否只保留简短 fallback 说明
-- 是否没有重新膨胀成长篇业务规则文本
 
 ### 3.2 再收集真实问题
 
@@ -65,7 +59,6 @@
 - 知识块里明确写出相关表名、字段名或指标名，方便 PromptBuilder 命中
 - 高频但只适用于单域的问题，写到对应域知识块或 few-shot
 - 不要把低频一次性问题放进全局 prompt
-- `readme.txt` 只保留 fallback 说明，不再作为主业务知识承载体
 
 ## 4. 跑联调链路
 
@@ -111,7 +104,7 @@
 - “需求最多的 fgcode”需要按 `FGCODE` 聚合后排序
 - 如果展开成 CTE，`PM_VERSION` 要在每个 `UNION ALL` 分支里显式投影出来
 
-这类逻辑应通过 `business_knowledge.json`、PromptBuilder 的 demand 指令和 few-shot 让 LLM 生成 CTE，不要求真实数据库创建 `semantic_demand_unpivot_view`。
+这类逻辑应通过 `business_knowledge.json`、PromptBuilder 的 demand 指令和 few-shot 让 LLM 生成 CTE，不要求真实数据库额外创建展开对象。
 
 ## 7. 样本沉淀方式
 
@@ -137,7 +130,7 @@
 
 ## 9. 不建议
 
-- 不建议先落库 semantic view 再验证 LLM 能力
+- 不建议先落库额外分析对象再验证 LLM 能力
 - 不建议继续扩展本地 SQL 模板
 - 不建议没有真实样本就接大规模向量库
 - 不建议只看 SQL 能不能跑，不看业务结果是否正确

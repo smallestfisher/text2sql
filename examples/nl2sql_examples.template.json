@@ -11,9 +11,6 @@
     "tables": [
       "daily_inventory"
     ],
-    "semantic_views": [
-      "semantic_inventory_view"
-    ],
     "entities": [
       "stage_product",
       "factory_code"
@@ -60,9 +57,6 @@
     "tables": [
       "daily_PLAN",
       "production_actuals"
-    ],
-    "semantic_views": [
-      "semantic_plan_actual_view"
     ],
     "entities": [
       "stage_product",
@@ -115,10 +109,6 @@
       "sales_financial_perf",
       "product_mapping"
     ],
-    "semantic_views": [
-      "semantic_demand_perf_view",
-      "semantic_demand_unpivot_view"
-    ],
     "entities": [
       "fg_product",
       "customer",
@@ -167,9 +157,6 @@
       "daily_inventory",
       "oms_inventory"
     ],
-    "semantic_views": [
-      "semantic_inventory_view"
-    ],
     "entities": [
       "factory_code"
     ],
@@ -206,9 +193,6 @@
     "tables": [
       "production_actuals"
     ],
-    "semantic_views": [
-      "semantic_plan_actual_view"
-    ],
     "entities": [
       "factory"
     ],
@@ -236,10 +220,6 @@
     "tables": [
       "v_demand",
       "p_demand"
-    ],
-    "semantic_views": [
-      "semantic_demand_perf_view",
-      "semantic_demand_unpivot_view"
     ],
     "entities": [
       "customer",
@@ -276,9 +256,6 @@
     "tables": [
       "sales_financial_perf"
     ],
-    "semantic_views": [
-      "semantic_demand_perf_view"
-    ],
     "entities": [
       "customer"
     ],
@@ -314,9 +291,6 @@
     "question_type": "new_related",
     "tables": [
       "oms_inventory"
-    ],
-    "semantic_views": [
-      "semantic_inventory_view"
     ],
     "entities": [
       "customer"
@@ -355,9 +329,6 @@
     "tables": [
       "production_actuals"
     ],
-    "semantic_views": [
-      "semantic_plan_actual_view"
-    ],
     "entities": [
       "factory"
     ],
@@ -393,9 +364,6 @@
     "question_type": "new_related",
     "tables": [
       "sales_financial_perf"
-    ],
-    "semantic_views": [
-      "semantic_demand_perf_view"
     ],
     "entities": [
       "customer"
@@ -433,9 +401,6 @@
     "question_type": "new",
     "tables": [
       "oms_inventory"
-    ],
-    "semantic_views": [
-      "semantic_inventory_view"
     ],
     "entities": [],
     "metrics": [
@@ -479,10 +444,6 @@
       "v_demand",
       "p_demand"
     ],
-    "semantic_views": [
-      "semantic_demand_perf_view",
-      "semantic_demand_unpivot_view"
-    ],
     "entities": [
       "plan_time"
     ],
@@ -518,9 +479,6 @@
     "question_type": "new_unrelated",
     "tables": [
       "daily_PLAN"
-    ],
-    "semantic_views": [
-      "semantic_plan_actual_view"
     ],
     "entities": [
       "factory"

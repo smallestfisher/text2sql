@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SEMANTIC_LAYER_PATH = REPO_ROOT / "semantic" / "semantic_layer.json"
+DOMAIN_CONFIG_PATH = REPO_ROOT / "semantic" / "domain_config.json"
+TABLES_METADATA_PATH = REPO_ROOT / "tables.json"
 
 
-class SemanticLintError(ValueError):
+class DomainConfigLintError(ValueError):
     pass
 
 
-def load_semantic_layer(path: Path) -> dict:
+def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -32,8 +32,22 @@ def unique_names(items: list[dict], key: str) -> tuple[list[str], list[str]]:
     return ordered, duplicates
 
 
-def collect_allowed_fields(data: dict) -> set[str]:
+def collect_table_fields(tables_metadata: dict) -> set[str]:
     fields: set[str] = set()
+    for payload in tables_metadata.values():
+        if not isinstance(payload, dict):
+            continue
+        for raw_column in payload.get("columns", []):
+            if not raw_column:
+                continue
+            column_name = str(raw_column).split("(", 1)[0].strip()
+            if column_name:
+                fields.add(column_name)
+    return fields
+
+
+def collect_allowed_fields(data: dict, table_fields: set[str]) -> set[str]:
+    fields = set(table_fields)
     for metric in data.get("metrics", []):
         metric_name = metric.get("name")
         semantic_column = metric.get("semantic_column")
@@ -48,21 +62,21 @@ def collect_allowed_fields(data: dict) -> set[str]:
         for alias in entity.get("aliases", []):
             if alias:
                 fields.add(str(alias))
-    for semantic_view in data.get("semantic_views", []):
-        for field in semantic_view.get("output_fields", []):
+    for profile in data.get("query_profiles", {}).values():
+        for field in profile.get("allowed_fields", []):
             if field:
                 fields.add(str(field))
-        for alias_field in semantic_view.get("field_aliases", {}).keys():
+        for alias_field, targets in profile.get("field_aliases", {}).items():
             if alias_field:
                 fields.add(str(alias_field))
-    for domain in data.get("domains", []):
-        for table in domain.get("tables", []):
-            if table:
-                fields.add(str(table))
+            if isinstance(targets, list):
+                fields.update(str(item) for item in targets if item)
+            elif targets:
+                fields.add(str(targets))
     return fields
 
 
-def lint_semantic_layer(data: dict) -> list[str]:
+def lint_domain_config(data: dict, tables_metadata: dict) -> list[str]:
     issues: list[str] = []
 
     domain_names, duplicate_domains = unique_names(data.get("domains", []), "name")
@@ -77,16 +91,11 @@ def lint_semantic_layer(data: dict) -> list[str]:
     if duplicate_metrics:
         issues.append("duplicate metric names: " + ", ".join(duplicate_metrics))
 
-    view_names, duplicate_views = unique_names(data.get("semantic_views", []), "name")
-    if duplicate_views:
-        issues.append("duplicate semantic view names: " + ", ".join(duplicate_views))
-
     known_domains = set(domain_names)
     known_metrics = set(metric_names)
-    known_entities = set(entity_names)
-    known_views = set(view_names)
     known_graph_nodes = set(data.get("semantic_graph", {}).get("nodes", []))
-    allowed_fields = collect_allowed_fields(data)
+    table_fields = collect_table_fields(tables_metadata)
+    allowed_fields = collect_allowed_fields(data, table_fields)
 
     query_profiles = data.get("query_profiles", {})
     profile_names = set(query_profiles.keys())
@@ -106,31 +115,10 @@ def lint_semantic_layer(data: dict) -> list[str]:
     if unknown_metric_domains:
         issues.append("domain_inference.metric_to_domain points to unknown domains: " + ", ".join(unknown_metric_domains))
 
-    for semantic_view in data.get("semantic_views", []):
-        view_name = semantic_view.get("name", "<unknown>")
-        serves_domains = semantic_view.get("serves_domains", [])
-        unknown_serves_domains = sorted(domain for domain in serves_domains if domain not in known_domains)
-        if unknown_serves_domains:
-            issues.append(f"semantic_view {view_name} serves unknown domains: {', '.join(unknown_serves_domains)}")
-        source_tables = semantic_view.get("source_tables", [])
-        unknown_sources = sorted(
-            table for table in source_tables if table not in known_graph_nodes and table not in known_views
-        )
-        if unknown_sources:
-            issues.append(f"semantic_view {view_name} references unknown source tables/views: {', '.join(unknown_sources)}")
-        output_fields = semantic_view.get("output_fields", [])
-        if not output_fields:
-            issues.append(f"semantic_view {view_name} has empty output_fields")
-        field_aliases = semantic_view.get("field_aliases", {})
-        unknown_alias_fields = sorted(field for field in field_aliases if field not in output_fields)
-        if unknown_alias_fields:
-            issues.append(f"semantic_view {view_name} field_aliases reference fields outside output_fields: {', '.join(unknown_alias_fields)}")
-
     for domain_name, profile in query_profiles.items():
-        default_views = profile.get("default_semantic_views", [])
-        unknown_default_views = sorted(view for view in default_views if view not in known_views)
-        if unknown_default_views:
-            issues.append(f"query_profile {domain_name} references unknown default_semantic_views: {', '.join(unknown_default_views)}")
+        allowed_profile_fields = [str(field) for field in profile.get("allowed_fields", []) if field]
+        if not allowed_profile_fields:
+            issues.append(f"query_profile {domain_name} has empty allowed_fields")
 
         permission_fields = profile.get("permission_scope_fields", {}).values()
         unknown_permission_fields = sorted({field for field in permission_fields if field not in allowed_fields})
@@ -151,6 +139,32 @@ def lint_semantic_layer(data: dict) -> list[str]:
         if version_field and version_field not in allowed_fields:
             issues.append(f"query_profile {domain_name} version_field references unknown field: {version_field}")
 
+        raw_aliases = profile.get("field_aliases", {})
+        if raw_aliases and not isinstance(raw_aliases, dict):
+            issues.append(f"query_profile {domain_name} field_aliases must be an object")
+            continue
+        for alias_field, targets in raw_aliases.items():
+            if alias_field not in allowed_profile_fields:
+                issues.append(f"query_profile {domain_name} field_aliases key is outside allowed_fields: {alias_field}")
+            values = targets if isinstance(targets, list) else [targets]
+            invalid_targets = sorted(
+                str(item)
+                for item in values
+                if item and str(item) not in allowed_fields
+            )
+            if invalid_targets:
+                issues.append(
+                    f"query_profile {domain_name} field_aliases reference unknown targets for {alias_field}: "
+                    + ", ".join(invalid_targets)
+                )
+
+    for domain in data.get("domains", []):
+        unknown_tables = [table for table in domain.get("tables", []) if table not in known_graph_nodes]
+        if unknown_tables:
+            issues.append(
+                f"domain {domain.get('name', '<unknown>')} references unknown tables: {', '.join(sorted(unknown_tables))}"
+            )
+
     extractors = data.get("extractors", {})
     for extractor_name in ["filters", "dimensions", "time", "version", "sort"]:
         for rule in extractors.get(extractor_name, []):
@@ -162,12 +176,13 @@ def lint_semantic_layer(data: dict) -> list[str]:
 
 
 def main() -> int:
-    data = load_semantic_layer(SEMANTIC_LAYER_PATH)
-    issues = lint_semantic_layer(data)
+    domain_config = load_json(DOMAIN_CONFIG_PATH)
+    tables_metadata = load_json(TABLES_METADATA_PATH)
+    issues = lint_domain_config(domain_config, tables_metadata)
     if not issues:
-        print("semantic lint: ok")
+        print("domain config lint: ok")
         return 0
-    print(f"semantic lint: {len(issues)} issue(s)")
+    print(f"domain config lint: {len(issues)} issue(s)")
     for issue in issues:
         print(f"- {issue}")
     return 1

@@ -27,7 +27,7 @@ from backend.app.services.query_plan_validator import QueryPlanValidator
 from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.runtime_admin_service import RuntimeAdminService
-from backend.app.services.semantic_loader import SemanticLayerLoader
+from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
@@ -42,9 +42,9 @@ from backend.app.services.runtime_store_initializer import RuntimeStoreInitializ
 class AppContainer:
     def __init__(self) -> None:
         self.settings = settings
-        self.semantic_loader = SemanticLayerLoader()
-        self.semantic_layer = self.semantic_loader.load()
-        self.semantic_runtime = SemanticRuntime(self.semantic_layer)
+        self.domain_config_loader = DomainConfigLoader()
+        self.domain_config = self.domain_config_loader.load()
+        self.semantic_runtime = SemanticRuntime(self.domain_config)
         self.business_database_connector = DatabaseConnector(
             database_url=self.settings.business_database_url,
             timeout_seconds=self.settings.sql_timeout_seconds,
@@ -77,7 +77,7 @@ class AppContainer:
             max_retries=self.settings.llm_max_retries,
         )
         self.query_planner = QueryPlanner(
-            semantic_layer=self.semantic_layer,
+            domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
             llm_client=self.llm_client,
             prompt_builder=self.prompt_builder,
@@ -120,7 +120,7 @@ class AppContainer:
             timeout_seconds=self.settings.vector_timeout_seconds,
         )
         self.retrieval_service = RetrievalService(
-            semantic_layer=self.semantic_layer,
+            domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
             vector_retriever=self.vector_retriever,
             vector_top_k=self.settings.vector_top_k,
@@ -144,7 +144,7 @@ class AppContainer:
         self.feedback_service = FeedbackService(self.feedback_repository)
         self.metadata_service = MetadataService(
             metadata_repository=self.metadata_repository,
-            semantic_loader=self.semantic_loader,
+            domain_config_loader=self.domain_config_loader,
             audit_repository=self.audit_repository,
         )
         self.runtime_admin_service = RuntimeAdminService(
@@ -167,7 +167,7 @@ class AppContainer:
             session_service=self.session_service,
             audit_service=self.audit_service,
             runtime_log_repository=self.runtime_log_repository,
-            semantic_layer=self.semantic_layer,
+            domain_config=self.domain_config,
         )
         self.evaluation_service = EvaluationService(
             orchestrator=self.orchestrator,

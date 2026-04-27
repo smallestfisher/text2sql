@@ -25,12 +25,12 @@ jobs:
 
       - name: Validate JSON assets
         run: |
-          python -m json.tool semantic/semantic_layer.json > /dev/null
+          python -m json.tool semantic/domain_config.json > /dev/null
           python -m json.tool eval/evaluation_cases.json > /dev/null
           python -m json.tool examples/nl2sql_examples.template.json > /dev/null
 
       - name: Run semantic lint
-        run: python backend/semantic_lint.py
+        run: python backend/domain_config_lint.py
 
       - name: Compile backend sources
         run: python -m compileall backend

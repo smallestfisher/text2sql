@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from backend.app.config import BUSINESS_KNOWLEDGE_PATH, README_TEXT_PATH, TABLES_METADATA_PATH
-from backend.app.models.classification import SemanticParse
+from backend.app.config import BUSINESS_KNOWLEDGE_PATH, TABLES_METADATA_PATH
+from backend.app.models.classification import QueryIntent
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.retrieval import RetrievalContext
 from backend.app.models.session_state import SessionState
@@ -12,46 +12,40 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 
 class PromptBuilder:
     BUSINESS_NOTES_MAX_CHARS = 2400
-    FALLBACK_README_MAX_CHARS = 1200
 
     def __init__(self, semantic_runtime: SemanticRuntime | None = None) -> None:
         self.semantic_runtime = semantic_runtime
         self._tables_metadata = self._load_tables_metadata()
-        self._business_notes = self._load_business_notes()
-        self._business_note_chunks = self._split_business_notes(self._business_notes)
         self._business_knowledge = self._load_business_knowledge()
 
     def build_query_plan_prompt(
         self,
         question: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         retrieval: RetrievalContext,
         base_plan: QueryPlan | None = None,
         session_state: SessionState | None = None,
     ) -> dict:
-        profile = self._query_profile(semantic_parse.subject_domain)
+        profile = self._query_profile(query_intent.subject_domain)
         return {
             "task": "query_plan_generation",
             "question": question,
-            "subject_domain": semantic_parse.subject_domain,
-            "metrics": semantic_parse.matched_metrics,
-            "entities": semantic_parse.matched_entities,
-            "session_semantic_diff": self._session_semantic_diff(semantic_parse, session_state),
+            "subject_domain": query_intent.subject_domain,
+            "metrics": query_intent.matched_metrics,
+            "entities": query_intent.matched_entities,
+            "session_semantic_diff": self._session_semantic_diff(query_intent, session_state),
             "retrieval_terms": retrieval.retrieval_terms,
-            "retrieval_semantic_views": retrieval.semantic_views,
             "retrieval_hits": [hit.model_dump() for hit in retrieval.hits],
             "query_profile": profile,
-            "domain_tables": self._domain_tables(semantic_parse.subject_domain),
-            "allowed_semantic_views": self._allowed_semantic_views(semantic_parse.subject_domain),
-            "semantic_view_schemas": self._semantic_view_schemas(retrieval.semantic_views),
+            "domain_tables": self._domain_tables(query_intent.subject_domain),
             "base_plan": base_plan.model_dump() if base_plan is not None else None,
             "allowed_fields": sorted(self._allowed_fields(base_plan)) if base_plan is not None else [],
             "session_state": session_state.model_dump() if session_state is not None else None,
             "instructions": {
                 "return_format": "json",
                 "constraints": [
-                    "优先使用真实物理表，不要优先依赖语义视图。",
-                    "语义视图只是辅助提示，真实数据库里可能并不存在。",
+                    "优先使用真实物理表，不要优先依赖数据库预建分析对象。",
+                    "数据库预建分析对象只作为辅助提示，真实数据库里可能并不存在。",
                     "只能使用系统已登记的 domain、真实表、指标和字段。",
                     "尊重 base_plan，只在确有必要时微调 filters、dimensions、sort、version_context 和 limit。",
                     "不要发明允许列表之外的新指标、新字段或新表。",
@@ -60,7 +54,6 @@ class PromptBuilder:
                 "fields": [
                     "subject_domain",
                     "tables",
-                    "semantic_views",
                     "metrics",
                     "dimensions",
                     "filters",
@@ -76,7 +69,7 @@ class PromptBuilder:
     def build_classification_prompt(
         self,
         question: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
         semantic_diff: dict | None,
         base_classification: dict,
@@ -85,14 +78,14 @@ class PromptBuilder:
         arbitration_context: dict | None = None,
     ) -> dict:
         evidence = self._classification_evidence(
-            semantic_parse=semantic_parse,
+            query_intent=query_intent,
             session_state=session_state,
             semantic_diff=semantic_diff,
         )
         return {
             "task": "question_classification",
             "question": question,
-            "semantic_parse": semantic_parse.model_dump(),
+            "query_intent": query_intent.model_dump(),
             "session_state": session_state.model_dump() if session_state is not None else None,
             "session_semantic_diff": semantic_diff,
             "classification_evidence": evidence,
@@ -149,7 +142,7 @@ class PromptBuilder:
                 "business_few_shots": self._classification_business_examples(),
                 "constraints": [
                     "question_type 只能从 allowed_question_types 中选择。",
-                    "必须尊重结构化的 semantic_parse 和 session_semantic_diff。",
+                    "必须尊重结构化的 query_intent 和 session_semantic_diff。",
                     "把 candidate_scores 当作本地证据做裁决，不要完全推翻后从零重算。",
                     "结合 classification_evidence 和 arbitration_context，解释为什么最终候选优于最接近的备选。",
                     "如果问题是对上一轮的细化追问，保持 inherit_context=true。",
@@ -164,22 +157,22 @@ class PromptBuilder:
     def build_relevance_prompt(
         self,
         question: str,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict:
         return {
             "task": "question_relevance_guard",
             "question": question,
             "semantic_signals": {
-                "subject_domain": semantic_parse.subject_domain,
-                "matched_metrics": semantic_parse.matched_metrics,
-                "matched_entities": semantic_parse.matched_entities,
-                "requested_dimensions": semantic_parse.requested_dimensions,
-                "filter_fields": [item.field for item in semantic_parse.filters],
-                "time_grain": semantic_parse.time_context.grain,
-                "has_version_context": semantic_parse.version_context is not None,
-                "has_follow_up_cue": semantic_parse.has_follow_up_cue,
-                "has_explicit_slots": semantic_parse.has_explicit_slots,
+                "subject_domain": query_intent.subject_domain,
+                "matched_metrics": query_intent.matched_metrics,
+                "matched_entities": query_intent.matched_entities,
+                "requested_dimensions": query_intent.requested_dimensions,
+                "filter_fields": [item.field for item in query_intent.filters],
+                "time_grain": query_intent.time_context.grain,
+                "has_version_context": query_intent.version_context is not None,
+                "has_follow_up_cue": query_intent.has_follow_up_cue,
+                "has_explicit_slots": query_intent.has_explicit_slots,
             },
             "session_context": {
                 "subject_domain": session_state.subject_domain if session_state is not None else None,
@@ -278,9 +271,9 @@ class PromptBuilder:
                 "return_format": "sql_only",
                 "constraints": [
                     "优先基于真实物理表生成 MySQL 只读 SQL。",
-                    "优先使用 WITH CTE，不要依赖数据库里可能不存在的语义视图。",
+                    "优先使用 WITH CTE，不要依赖数据库里可能不存在的预建分析对象。",
                     "只能使用 tables_metadata 中出现的真实表。",
-                    "除非用户明确要求，否则不要引用 semantic_demand_unpivot_view 或其他语义视图。",
+                    "除非用户明确要求，否则不要引用数据库里预建的展开对象或其他额外分析对象。",
                     "必须包含 LIMIT。",
                     "如果需求表是横表，需要时请先用 CTE 展开。",
                     "不要使用 SELECT *。",
@@ -298,12 +291,6 @@ class PromptBuilder:
         except Exception:
             return {}
 
-    def _load_business_notes(self) -> str:
-        try:
-            return README_TEXT_PATH.read_text(encoding="utf-8")
-        except Exception:
-            return ""
-
     def _load_business_knowledge(self) -> list[dict]:
         try:
             payload = json.loads(BUSINESS_KNOWLEDGE_PATH.read_text(encoding="utf-8"))
@@ -312,56 +299,8 @@ class PromptBuilder:
         entries = payload.get("entries", [])
         return entries if isinstance(entries, list) else []
 
-    def _split_business_notes(self, notes: str) -> list[str]:
-        chunks: list[str] = []
-        current: list[str] = []
-        for raw_line in notes.splitlines():
-            line = raw_line.strip()
-            if not line:
-                if current:
-                    chunks.append("\n".join(current))
-                    current = []
-                continue
-            if current and self._starts_new_note_chunk(line):
-                chunks.append("\n".join(current))
-                current = [line]
-            else:
-                current.append(line)
-        if current:
-            chunks.append("\n".join(current))
-        return chunks
-
-    def _starts_new_note_chunk(self, line: str) -> bool:
-        return bool(line[:2] and line[0].isdigit() and line[1] in {".", "、", ")"})
-
     def _business_notes_for_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> str:
-        structured_notes = self._structured_business_notes_for_plan(query_plan, selected_sources)
-        if structured_notes:
-            return structured_notes
-        if not self._business_note_chunks:
-            return ""
-        terms = self._business_note_terms(query_plan, selected_sources)
-        scored_chunks: list[tuple[int, int, str]] = []
-        for index, chunk in enumerate(self._business_note_chunks):
-            lower_chunk = chunk.lower()
-            score = sum(1 for term in terms if term and term in lower_chunk)
-            if score:
-                scored_chunks.append((score, -index, chunk))
-        if not scored_chunks:
-            scored_chunks = [(0, -index, chunk) for index, chunk in enumerate(self._business_note_chunks[:2])]
-        selected_chunks: list[str] = []
-        total_chars = 0
-        for _score, _negative_index, chunk in sorted(scored_chunks, reverse=True):
-            separator_chars = 2 if selected_chunks else 0
-            projected = total_chars + separator_chars + len(chunk)
-            if projected > self.BUSINESS_NOTES_MAX_CHARS and selected_chunks:
-                continue
-            selected_chunks.append(chunk)
-            total_chars = projected
-            if total_chars >= self.FALLBACK_README_MAX_CHARS:
-                break
-        notes = "\n\n".join(selected_chunks)
-        return notes[: self.FALLBACK_README_MAX_CHARS]
+        return self._structured_business_notes_for_plan(query_plan, selected_sources)
 
     def _business_notes_source_for_plan(
         self,
@@ -370,8 +309,6 @@ class PromptBuilder:
     ) -> str:
         if self._select_business_knowledge_entries(query_plan, selected_sources):
             return "structured_knowledge"
-        if self._business_note_chunks:
-            return "readme_fallback"
         return "none"
 
     def _structured_business_notes_for_plan(
@@ -484,12 +421,12 @@ class PromptBuilder:
 
     def _session_semantic_diff(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict | None:
         if self.semantic_runtime is None:
             return None
-        return self.semantic_runtime.session_semantic_diff(semantic_parse, session_state)
+        return self.semantic_runtime.session_semantic_diff(query_intent, session_state)
 
     def _allowed_fields(self, query_plan: QueryPlan) -> set[str]:
         if self.semantic_runtime is None:
@@ -510,38 +447,25 @@ class PromptBuilder:
             if domain_name != "unknown"
         )
 
-    def _allowed_semantic_views(self, subject_domain: str) -> list[str] | None:
-        if self.semantic_runtime is None or subject_domain == "unknown":
-            return None
-        return self.semantic_runtime.semantic_views_for_domain(subject_domain)
-
-    def _semantic_view_schemas(self, semantic_views: list[str]) -> dict[str, list[str]]:
-        if self.semantic_runtime is None:
-            return {}
-        return {
-            view_name: self.semantic_runtime.semantic_view_fields(view_name)
-            for view_name in semantic_views
-        }
-
     def _classification_evidence(
         self,
-        semantic_parse: SemanticParse,
+        query_intent: QueryIntent,
         session_state: SessionState | None,
         semantic_diff: dict | None,
     ) -> dict:
         semantic_diff = semantic_diff or {}
         return {
             "current_question_signals": {
-                "subject_domain": semantic_parse.subject_domain,
-                "matched_metrics": semantic_parse.matched_metrics,
-                "matched_entities": semantic_parse.matched_entities,
-                "filter_fields": [item.field for item in semantic_parse.filters],
-                "time_grain": semantic_parse.time_context.grain,
-                "has_version_context": semantic_parse.version_context is not None,
-                "requested_sort": [item.model_dump() for item in semantic_parse.requested_sort],
-                "requested_limit": semantic_parse.requested_limit,
-                "has_follow_up_cue": semantic_parse.has_follow_up_cue,
-                "has_explicit_slots": semantic_parse.has_explicit_slots,
+                "subject_domain": query_intent.subject_domain,
+                "matched_metrics": query_intent.matched_metrics,
+                "matched_entities": query_intent.matched_entities,
+                "filter_fields": [item.field for item in query_intent.filters],
+                "time_grain": query_intent.time_context.grain,
+                "has_version_context": query_intent.version_context is not None,
+                "requested_sort": [item.model_dump() for item in query_intent.requested_sort],
+                "requested_limit": query_intent.requested_limit,
+                "has_follow_up_cue": query_intent.has_follow_up_cue,
+                "has_explicit_slots": query_intent.has_explicit_slots,
             },
             "previous_session_focus": {
                 "subject_domain": session_state.subject_domain if session_state is not None else None,

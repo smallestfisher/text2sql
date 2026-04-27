@@ -18,25 +18,22 @@ class QueryPlanValidator:
     def __init__(self, semantic_runtime: SemanticRuntime | None = None) -> None:
         self.semantic_runtime = semantic_runtime
 
-    def validate(self, query_plan: QueryPlan, semantic_layer: dict) -> tuple[list[str], list[str]]:
-        result = self.validate_detailed(query_plan=query_plan, semantic_layer=semantic_layer)
+    def validate(self, query_plan: QueryPlan, domain_config: dict) -> tuple[list[str], list[str]]:
+        result = self.validate_detailed(query_plan=query_plan, domain_config=domain_config)
         return result.errors, result.warnings
 
     def validate_detailed(
         self,
         query_plan: QueryPlan,
-        semantic_layer: dict,
+        domain_config: dict,
     ) -> QueryPlanValidationResult:
         errors: list[str] = []
         warnings: list[str] = []
 
-        domain_names = {item["name"] for item in semantic_layer.get("domains", [])}
-        metric_names = {item["name"] for item in semantic_layer.get("metrics", [])}
-        graph_nodes = set(semantic_layer.get("semantic_graph", {}).get("nodes", []))
-        semantic_views = {
-            item["name"] for item in semantic_layer.get("semantic_views", [])
-        }
-        entity_names = {item["name"] for item in semantic_layer.get("entities", [])}
+        domain_names = {item["name"] for item in domain_config.get("domains", [])}
+        metric_names = {item["name"] for item in domain_config.get("metrics", [])}
+        graph_nodes = set(domain_config.get("semantic_graph", {}).get("nodes", []))
+        entity_names = {item["name"] for item in domain_config.get("entities", [])}
 
         if query_plan.subject_domain not in domain_names and query_plan.subject_domain != "unknown":
             errors.append(f"unknown subject domain: {query_plan.subject_domain}")
@@ -44,12 +41,6 @@ class QueryPlanValidator:
         unknown_tables = [table for table in query_plan.tables if table not in graph_nodes]
         if unknown_tables:
             errors.append(f"unknown tables: {', '.join(unknown_tables)}")
-
-        unknown_views = [
-            view for view in query_plan.semantic_views if view not in semantic_views
-        ]
-        if unknown_views:
-            errors.append(f"unknown semantic views: {', '.join(unknown_views)}")
 
         unknown_metrics = [
             metric for metric in query_plan.metrics if metric not in metric_names
@@ -78,12 +69,12 @@ class QueryPlanValidator:
             elif not self._context_delta_has_updates(query_plan):
                 warnings.append("follow-up query plan does not include explicit context delta updates")
 
-        if self.semantic_runtime is not None and query_plan.tables and not query_plan.semantic_views:
+        if self.semantic_runtime is not None and query_plan.tables:
             expected_join_path = self.semantic_runtime.resolve_join_path(query_plan.tables)
             if expected_join_path and not query_plan.join_path:
                 warnings.append("query plan join path is empty; semantic runtime can provide a path")
 
-        if self.semantic_runtime is not None and query_plan.semantic_views:
+        if self.semantic_runtime is not None:
             allowed_fields = self.semantic_runtime.allowed_fields_for_plan(query_plan)
             if allowed_fields:
                 unsupported_metrics = [
@@ -93,7 +84,7 @@ class QueryPlanValidator:
                 ]
                 if unsupported_metrics:
                     errors.append(
-                        f"query plan metrics are not supported by selected semantic views: {', '.join(unsupported_metrics)}"
+                        f"query plan metrics are not supported by selected tables or field scope: {', '.join(unsupported_metrics)}"
                     )
 
                 unknown_dimensions = [

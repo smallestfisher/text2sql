@@ -148,12 +148,12 @@
 
 看：
 
-- `semantic_parse.matched_metrics`
-- `semantic_parse.matched_entities`
-- `semantic_parse.filters`
-- `semantic_parse.time_context`
-- `semantic_parse.version_context`
-- `semantic_parse.subject_domain`
+- `query_intent.matched_metrics`
+- `query_intent.matched_entities`
+- `query_intent.filters`
+- `query_intent.time_context`
+- `query_intent.version_context`
+- `query_intent.subject_domain`
 
 典型症状：
 
@@ -324,7 +324,7 @@
 - PromptBuilder 的 demand 指令
 - SqlValidator 的 demand 相关校验
 
-不要回退到预建 `semantic_demand_unpivot_view` 作为运行时必需对象。
+不要回退到预建数据库展开对象作为运行时必需对象。
 
 ## 8. 单题调试标准流程
 

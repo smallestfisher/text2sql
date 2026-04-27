@@ -8,7 +8,6 @@
     "topic",
     "subject_domain",
     "tables",
-    "semantic_views",
     "metrics",
     "dimensions",
     "filters",
@@ -29,12 +28,6 @@
       "enum": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"]
     },
     "tables": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "semantic_views": {
       "type": "array",
       "items": {
         "type": "string"

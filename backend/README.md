@@ -45,8 +45,8 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 当前阶段的明确边界：
 
-- 不再要求数据库预建 semantic view
-- `business_knowledge.json` 和 `readme.txt` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
+- 不再要求数据库预建额外分析对象
+- `business_knowledge.json` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
 - 对横表和复杂口径，优先通过 prompt / few-shot / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
 - `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
 
@@ -232,7 +232,7 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 语义层配置 lint：
 
 ```bash
-.venv/bin/python backend/semantic_lint.py
+.venv/bin/python backend/domain_config_lint.py
 ```
 
 输出 JSON：
