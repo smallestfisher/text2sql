@@ -1580,6 +1580,46 @@ input:focus {
   background: rgba(21, 28, 44, 0.88);
 }
 
+.progress-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.progress-current-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.progress-current-note {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.progress-meter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(17, 23, 38, 0.78);
+}
+
+.progress-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(119, 168, 255, 0.92), rgba(77, 224, 193, 0.92));
+  transition: width 160ms ease;
+}
+
 .progress-step-list {
   display: grid;
   gap: 8px;
@@ -1588,9 +1628,78 @@ input:focus {
 
 .progress-step-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(149, 174, 255, 0.08);
+  background: rgba(17, 23, 38, 0.42);
+}
+
+.progress-step-item.is-active {
+  border-color: rgba(119, 168, 255, 0.22);
+  background: rgba(119, 168, 255, 0.1);
+}
+
+.progress-step-item.is-completed,
+.progress-step-item.is-skipped {
+  border-color: rgba(149, 174, 255, 0.12);
+}
+
+.progress-step-item.is-failed {
+  border-color: rgba(214, 111, 111, 0.22);
+  background: rgba(214, 111, 111, 0.08);
+}
+
+.progress-step-item.is-pending {
+  border-style: dashed;
+  opacity: 0.78;
+}
+
+.progress-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(17, 23, 38, 0.78);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.progress-step-icon.is-active {
+  border-color: rgba(119, 168, 255, 0.18);
+  background: rgba(119, 168, 255, 0.12);
+  color: var(--text);
+}
+
+.progress-step-icon.is-completed,
+.progress-step-icon.is-skipped {
+  border-color: rgba(94, 196, 141, 0.2);
+  background: rgba(77, 224, 193, 0.12);
+  color: #d8fff5;
+}
+
+.progress-step-icon.is-failed {
+  border-color: rgba(214, 111, 111, 0.2);
+  background: rgba(214, 111, 111, 0.14);
+  color: #ffd7d7;
+}
+
+.progress-step-icon.is-pending {
+  color: var(--text-soft);
+}
+
+.progress-step-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
 }
 
 .progress-step-badge {
@@ -1602,30 +1711,56 @@ input:focus {
   color: var(--text-muted);
   font-size: 12px;
   text-align: center;
+  margin-left: auto;
 }
 
-.progress-step-badge.is-running,
-.progress-step-badge.is-queued {
+.progress-step-badge.is-active {
   background: rgba(119, 168, 255, 0.12);
   border-color: rgba(119, 168, 255, 0.18);
   color: var(--text);
 }
 
-.progress-step-badge.is-completed,
-.progress-step-badge.is-ok {
+.progress-step-badge.is-completed {
   background: rgba(77, 224, 193, 0.12);
   border-color: rgba(94, 196, 141, 0.2);
   color: #d8fff5;
 }
 
-.progress-step-badge.is-failed,
-.progress-step-badge.is-error {
+.progress-step-badge.is-skipped {
+  color: var(--text);
+}
+
+.progress-step-badge.is-failed {
   background: rgba(214, 111, 111, 0.14);
   border-color: rgba(214, 111, 111, 0.2);
   color: #ffd7d7;
 }
 
+.progress-step-badge.is-pending {
+  color: var(--text-soft);
+}
+
 .progress-step-label {
   color: var(--text);
   font-size: 13px;
+}
+
+.progress-step-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .progress-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-step-item {
+    gap: 8px;
+  }
+
+  .progress-step-badge {
+    min-width: 54px;
+  }
 }

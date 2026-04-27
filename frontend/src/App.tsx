@@ -28,6 +28,68 @@ const PROMPTS = [
   "按产品线查看最近 8 周库存趋势",
   "继续上一个问题，细分到工厂维度",
 ];
+const PROGRESS_BASE_STAGES = [
+  "accepted",
+  "load_session",
+  "planning",
+  "retrieval",
+  "sql_generation",
+  "sql_validation",
+  "execution",
+  "answer_building",
+] as const;
+const PROGRESS_STAGE_META: Record<string, { label: string; note: string; icon: string }> = {
+  accepted: {
+    label: "请求已接收",
+    note: "问题已进入执行队列，系统正在准备本次查询链路。",
+    icon: "○",
+  },
+  load_session: {
+    label: "加载会话",
+    note: "恢复当前会话状态，补足上一轮上下文和筛选条件。",
+    icon: "↺",
+  },
+  planning: {
+    label: "解析与规划",
+    note: "识别指标、维度、时间和业务域，生成本轮 Query Plan。",
+    icon: "◎",
+  },
+  retrieval: {
+    label: "检索上下文",
+    note: "补充相关表结构、业务知识和真实样例上下文。",
+    icon: "⌕",
+  },
+  sql_generation: {
+    label: "生成 SQL",
+    note: "结合 Query Plan 和上下文生成候选 SQL。",
+    icon: "Σ",
+  },
+  sql_validation: {
+    label: "校验 SQL",
+    note: "检查只读、安全、字段范围和必要过滤条件。",
+    icon: "✓",
+  },
+  execution: {
+    label: "执行查询",
+    note: "执行 SQL 并拉取结果集，准备后续回答内容。",
+    icon: "▶",
+  },
+  answer_building: {
+    label: "组织回答",
+    note: "整合执行结果、状态和 Trace，组织最终回答。",
+    icon: "✎",
+  },
+  completed: {
+    label: "已完成",
+    note: "本次请求已结束，结果已回写到当前会话。",
+    icon: "✓",
+  },
+  failed: {
+    label: "失败",
+    note: "执行链路已中断，需要根据错误信息继续排查。",
+    icon: "!",
+  },
+};
 
 type AuthMode = "login" | "bootstrap";
 type InspectorTab = "result" | "sql" | "trace" | "state";
@@ -1433,27 +1495,51 @@ function PendingProgressCard(props: { events: ProgressEvent[] }) {
   if (!props.events.length) {
     return null;
   }
-  const latest = props.events[props.events.length - 1];
-  const steps = collapseProgressEvents(props.events);
+  const view = buildPendingProgressView(props.events);
   return (
     <div className="message-result-card is-pending">
       <div className="message-result-head">
         <div className="message-result-summary">
           <strong>执行进度</strong>
-          <span>{describeProgressStage(latest.stage)}</span>
-          <span>{describeResponseStatus(latest.status)}</span>
+          <span className="progress-current-icon" aria-hidden="true">{view.currentStageIcon}</span>
+          <span>{view.currentStageLabel}</span>
+          <span>{view.responseStatusLabel}</span>
         </div>
       </div>
-      {latest.detail ? <div className="message-result-note">{latest.detail}</div> : null}
+      <div className="progress-current-note">{view.currentStageNote}</div>
+      <div className="progress-summary-grid">
+        <div className="compact-stat">
+          <span>当前阶段</span>
+          <strong>{view.currentStageLabel}</strong>
+        </div>
+        <div className="compact-stat">
+          <span>完成进度</span>
+          <strong>{`${view.progressPercent}%`}</strong>
+        </div>
+        <div className="compact-stat">
+          <span>已完成步骤</span>
+          <strong>{`${view.completedCount}/${view.totalCount}`}</strong>
+        </div>
+      </div>
+      <div className="progress-meter" aria-hidden="true">
+        <div className="progress-meter-fill" style={{ width: `${view.progressPercent}%` }} />
+      </div>
+      {view.latest.type === "failed" && view.latest.detail && view.latest.detail !== view.currentStageNote ? (
+        <div className="message-result-note">{view.latest.detail}</div>
+      ) : null}
       <div className="progress-step-list">
-        {steps.map((event) => (
-          <div className="progress-step-item" key={`${event.trace_id}-${event.stage}`}>
-            <span className={`progress-step-badge is-${event.status.toLowerCase()}`}>{describeResponseStatus(event.status)}</span>
-            <span className="progress-step-label">{describeProgressStage(event.stage)}</span>
+        {view.steps.map((step) => (
+          <div className={`progress-step-item is-${step.tone}`} key={step.stage}>
+            <span className={`progress-step-icon is-${step.tone}`} aria-hidden="true">{step.icon}</span>
+            <div className="progress-step-copy">
+              <span className="progress-step-label">{step.label}</span>
+              <span className="progress-step-note">{step.note}</span>
+            </div>
+            <span className={`progress-step-badge is-${step.tone}`}>{step.badge}</span>
           </div>
         ))}
       </div>
-      <div className="message-result-note">Trace: {latest.trace_id}</div>
+      <div className="message-result-note">Trace: {view.latest.trace_id}</div>
     </div>
   );
 }
@@ -1871,6 +1957,173 @@ function collapseProgressEvents(events: ProgressEvent[]) {
     .filter((event): event is ProgressEvent => Boolean(event));
 }
 
+function buildPendingProgressView(events: ProgressEvent[]) {
+  const latest = events[events.length - 1];
+  const collapsed = collapseProgressEvents(events);
+  const latestByStage = new Map(collapsed.map((event) => [event.stage, event]));
+  const observedBaseStages = collapsed.filter((event) =>
+    PROGRESS_BASE_STAGES.includes(event.stage as (typeof PROGRESS_BASE_STAGES)[number]),
+  );
+  const highestObservedIndex = observedBaseStages.reduce((maxIndex, event) => {
+    const index = PROGRESS_BASE_STAGES.indexOf(event.stage as (typeof PROGRESS_BASE_STAGES)[number]);
+    return index > maxIndex ? index : maxIndex;
+  }, -1);
+  const terminal = latest.type === "completed" || latest.type === "failed";
+  const visibleBaseStages = terminal
+    ? PROGRESS_BASE_STAGES.slice(0, Math.max(highestObservedIndex + 1, 1))
+    : PROGRESS_BASE_STAGES;
+  const steps = visibleBaseStages.map((stage, index) => {
+    const event = latestByStage.get(stage);
+    const meta = getProgressStageMeta(stage);
+    if (event) {
+      const tone = classifyProgressTone(event);
+      return {
+        stage,
+        label: meta.label,
+        note: describeProgressStepNote(stage, event, tone),
+        icon: meta.icon,
+        tone: tone === "active" && index < highestObservedIndex ? "completed" : tone,
+        badge: tone === "active" && index < highestObservedIndex ? "已完成" : describeProgressBadge(event),
+      };
+    }
+    if (highestObservedIndex >= 0 && index < highestObservedIndex) {
+      return {
+        stage,
+        label: meta.label,
+        note: meta.note,
+        icon: meta.icon,
+        tone: "completed",
+        badge: "已完成",
+      };
+    }
+    return {
+      stage,
+      label: meta.label,
+      note: meta.note,
+      icon: meta.icon,
+      tone: "pending",
+      badge: "待执行",
+    };
+  });
+
+  if (latest.type === "completed") {
+    steps.push({
+      stage: "completed",
+      label: describeProgressStage("completed"),
+      note: getProgressStageMeta("completed").note,
+      icon: getProgressStageMeta("completed").icon,
+      tone: "completed",
+      badge: "已完成",
+    });
+  }
+  if (latest.type === "failed") {
+    steps.push({
+      stage: "failed",
+      label: describeProgressStage("failed"),
+      note: latest.detail || getProgressStageMeta("failed").note,
+      icon: getProgressStageMeta("failed").icon,
+      tone: "failed",
+      badge: "失败",
+    });
+  }
+
+  const completedCount = steps.filter((step) => ["completed", "skipped"].includes(step.tone)).length;
+  const activeCount = steps.filter((step) => step.tone === "active").length;
+  const progressPercent = latest.type === "completed"
+    ? 100
+    : Math.max(6, Math.min(99, Math.round(((completedCount + activeCount) / Math.max(steps.length, 1)) * 100)));
+
+  return {
+    latest,
+    steps,
+    progressPercent,
+    completedCount,
+    totalCount: steps.length,
+    currentStageIcon: getProgressStageMeta(latest.stage).icon,
+    currentStageLabel: describeProgressStage(latest.stage),
+    currentStageNote: describeProgressCurrentNote(latest),
+    responseStatusLabel: describeResponseStatus(latest.status),
+  };
+}
+
+function getProgressStageMeta(stage: string) {
+  return PROGRESS_STAGE_META[stage] || {
+    label: stage,
+    note: "系统正在推进当前阶段。",
+    icon: "·",
+  };
+}
+
+function describeProgressStepNote(
+  stage: string,
+  event: ProgressEvent,
+  tone: string,
+) {
+  if (tone === "failed" && event.detail) {
+    return event.detail;
+  }
+  if (tone === "active" && stage === "execution") {
+    return "正在执行 SQL，并等待数据库返回结果。";
+  }
+  if (tone === "active" && stage === "sql_generation") {
+    return "正在根据 Query Plan 生成 SQL 语句。";
+  }
+  if (tone === "active" && stage === "planning") {
+    return "正在解析用户问题，识别指标和筛选条件。";
+  }
+  return getProgressStageMeta(stage).note;
+}
+
+function describeProgressCurrentNote(event: ProgressEvent) {
+  if (event.type === "failed" && event.detail) {
+    return event.detail;
+  }
+  return getProgressStageMeta(event.stage).note;
+}
+
+function classifyProgressTone(event: ProgressEvent) {
+  const normalized = event.status.toLowerCase();
+  if (event.type === "failed" || ["failed", "error", "invalid", "denied"].includes(normalized)) {
+    return "failed";
+  }
+  if (event.type === "completed") {
+    return "completed";
+  }
+  if (["completed", "success", "ok"].includes(normalized)) {
+    return "completed";
+  }
+  if (["skipped"].includes(normalized)) {
+    return "skipped";
+  }
+  if (["running", "queued"].includes(normalized)) {
+    return "active";
+  }
+  return "active";
+}
+
+function describeProgressBadge(event: ProgressEvent) {
+  const normalized = event.status.toLowerCase();
+  if (event.type === "failed" || ["failed", "error", "invalid", "denied"].includes(normalized)) {
+    return "失败";
+  }
+  if (event.type === "completed") {
+    return "已完成";
+  }
+  if (["completed", "success", "ok"].includes(normalized)) {
+    return "已完成";
+  }
+  if (["skipped"].includes(normalized)) {
+    return "已跳过";
+  }
+  if (["queued"].includes(normalized)) {
+    return "排队中";
+  }
+  if (["running"].includes(normalized)) {
+    return "进行中";
+  }
+  return describeResponseStatus(event.status);
+}
+
 function StatPill(props: { label: string; value: string }) {
   return (
     <div className="stat-pill">
@@ -1940,23 +2193,17 @@ function buildContextChips(state: SessionState | null) {
 }
 
 function describeProgressStage(stage: string) {
-  const labels: Record<string, string> = {
-    accepted: "请求已接收",
-    load_session: "加载会话",
-    planning: "解析与规划",
-    retrieval: "检索上下文",
-    sql_generation: "生成 SQL",
-    sql_validation: "校验 SQL",
-    execution: "执行查询",
-    answer_building: "组织回答",
-    completed: "已完成",
-    failed: "失败",
-  };
-  return labels[stage] || stage;
+  return getProgressStageMeta(stage).label;
 }
 
 function describeResponseStatus(status: string) {
   const normalized = status.toLowerCase();
+  if (["running"].includes(normalized)) {
+    return "进行中";
+  }
+  if (["queued"].includes(normalized)) {
+    return "排队中";
+  }
   if (["success", "completed", "ok"].includes(normalized)) {
     return "已完成";
   }
