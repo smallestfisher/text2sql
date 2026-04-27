@@ -20,6 +20,7 @@ from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.permission_service import PermissionService
+from backend.app.services.progress_service import ProgressService
 from backend.app.services.policy_engine import PolicyEngine
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.query_plan_compiler import QueryPlanCompiler
@@ -67,6 +68,7 @@ class AppContainer:
         self.feedback_repository = DbFeedbackRepository(self.runtime_database_connector)
         self.runtime_log_repository = DbRuntimeLogRepository(self.runtime_database_connector)
         self.evaluation_run_repository = DbEvaluationRunRepository(self.runtime_database_connector)
+        self.progress_service = ProgressService()
 
         self.prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
         self.llm_client = LLMClient(
@@ -166,6 +168,7 @@ class AppContainer:
             retrieval_service=self.retrieval_service,
             session_service=self.session_service,
             audit_service=self.audit_service,
+            progress_service=self.progress_service,
             runtime_log_repository=self.runtime_log_repository,
             domain_config=self.domain_config,
         )

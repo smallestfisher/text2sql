@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from backend.app.api.dependencies import get_container, get_current_user, resolve_request_user_context
 from backend.app.core.container import AppContainer
@@ -22,6 +25,48 @@ from backend.app.models.trace import TraceRecord
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+@router.post("/query/stream")
+async def chat_query_stream(
+    request: PlanRequest,
+    http_request: Request,
+    container: AppContainer = Depends(get_container),
+) -> StreamingResponse:
+    request.user_context = resolve_request_user_context(
+        http_request,
+        container,
+        fallback=request.user_context,
+    )
+    trace_id = container.audit_service.new_trace().trace_id
+    queue = container.progress_service.subscribe(trace_id)
+
+    async def event_stream():
+        future = asyncio.create_task(asyncio.to_thread(container.orchestrator.chat, request, trace_id))
+        try:
+            while True:
+                item = await asyncio.to_thread(queue.get)
+                if item is None:
+                    break
+                payload = item.model_dump(mode="json")
+                yield f"event: {item.type}\n".encode("utf-8")
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+        finally:
+            container.progress_service.unsubscribe(trace_id, queue)
+            try:
+                await future
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/query", response_model=ChatResponse)

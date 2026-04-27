@@ -9,8 +9,8 @@ class AuditService:
     def __init__(self, repository) -> None:
         self.repository = repository
 
-    def new_trace(self) -> TraceRecord:
-        return TraceRecord(trace_id=f"trace_{uuid.uuid4().hex[:12]}")
+    def new_trace(self, trace_id: str | None = None) -> TraceRecord:
+        return TraceRecord(trace_id=trace_id or f"trace_{uuid.uuid4().hex[:12]}")
 
     def append_step(
         self,

@@ -15,6 +15,7 @@ import type {
   SessionState,
   SessionTraceWorkspaceRecord,
   TraceRecord,
+  ProgressEvent,
   UserContext,
   UserUpsertPayload,
 } from "./types";
@@ -72,6 +73,8 @@ function App() {
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
   const [pendingQuestion, setPendingQuestion] = useState("");
+  const [pendingProgress, setPendingProgress] = useState<ProgressEvent[]>([]);
+  const [pendingTraceId, setPendingTraceId] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
   const [chatPending, setChatPending] = useState(false);
   const [activeTab, setActiveTab] = useState<InspectorTab>("result");
@@ -106,7 +109,7 @@ function App() {
       return;
     }
     node.scrollTop = node.scrollHeight;
-  }, [messages, pendingQuestion, chatPending]);
+  }, [messages, pendingQuestion, pendingProgress, chatPending]);
 
   useEffect(() => {
     if (token && viewMode === "admin" && (currentUser?.roles || []).includes("admin")) {
@@ -164,6 +167,9 @@ function App() {
     setTraceArtifacts([]);
     setActiveTraceId(null);
     setWorkspaceError("");
+    setPendingQuestion("");
+    setPendingProgress([]);
+    setPendingTraceId(null);
     window.localStorage.removeItem(SESSION_KEY);
   }
 
@@ -241,6 +247,8 @@ function App() {
     setActiveTraceId(null);
     setWorkspaceError("");
     setPendingQuestion("");
+    setPendingProgress([]);
+    setPendingTraceId(null);
     setQuestion("");
     setSidebarOpen(false);
     setInspectorOpen(false);
@@ -248,7 +256,7 @@ function App() {
   }
 
   async function createSession(title = "新对话") {
-    if (!token) {
+    if (!token || chatPending) {
       return;
     }
     const response = await api.createSession(token, title);
@@ -273,6 +281,8 @@ function App() {
     setChatPending(true);
     setWorkspaceError("");
     setPendingQuestion(trimmed);
+    setPendingProgress([]);
+    setPendingTraceId(null);
     setMessages((current) =>
       normalizeMessages([
         ...current,
@@ -289,6 +299,7 @@ function App() {
           role: "assistant",
           content: "正在处理查询，请稍候...",
           created_at: new Date(Date.now() + 1000).toISOString(),
+          trace_id: `pending-${pendingSeed}`,
         },
       ]),
     );
@@ -297,7 +308,8 @@ function App() {
     }
 
     let response: ChatResponse | null = null;
-    let sessionId = selectedSessionId;
+    let sessionId = selectedSessionId ?? undefined;
+    let streamedTraceId: string | null = null;
     try {
       if (!sessionId) {
         const sessionTitle = trimmed.length > 18 ? `${trimmed.slice(0, 18)}...` : trimmed;
@@ -308,10 +320,35 @@ function App() {
         window.localStorage.setItem(SESSION_KEY, sessionId);
       }
 
-      response = await api.chatQuery(token, trimmed, sessionId);
-      setLatestResponse(response);
-      setSessionState(response.next_session_state);
-      primeImmediateTraceArtifact(response);
+      let streamStarted = false;
+      let streamFailure: string | null = null;
+      await api.chatQueryStream(token, trimmed, sessionId, (event) => {
+        streamStarted = true;
+        streamedTraceId = event.trace_id;
+        setPendingProgress((current) => [...current, event]);
+        setPendingTraceId(event.trace_id);
+        if (event.type === "completed" && event.metadata?.response) {
+          response = event.metadata.response as ChatResponse;
+          setLatestResponse(response);
+          setSessionState(response.next_session_state);
+          primeImmediateTraceArtifact(response);
+        }
+        if (event.type === "failed") {
+          streamFailure = event.detail || "请求失败";
+        }
+      });
+      if (!response && streamFailure) {
+        throw new Error(streamFailure);
+      }
+      if (!response && !streamStarted) {
+        response = await api.chatQuery(token, trimmed, sessionId);
+        setLatestResponse(response);
+        setSessionState(response.next_session_state);
+        primeImmediateTraceArtifact(response);
+      }
+      if (!response) {
+        throw new Error("流式响应未返回最终结果");
+      }
       await refreshSessions(token, sessionId);
       setLatestResponse(response);
       setActiveTab("result");
@@ -325,6 +362,7 @@ function App() {
             pendingAssistantId,
             sessionId: resolvedSessionId,
             assistantContent: response?.answer?.summary || "本次请求已完成，请查看详情面板。",
+            assistantTraceId: response?.trace?.trace_id || streamedTraceId || undefined,
           }),
         );
         setLatestResponse(response);
@@ -338,12 +376,14 @@ function App() {
       }
     } finally {
       setPendingQuestion("");
+      setPendingProgress([]);
+      setPendingTraceId(null);
       setChatPending(false);
     }
   }
 
   async function handleSelectSession(sessionId: string) {
-    if (!token) {
+    if (!token || chatPending) {
       return;
     }
     try {
@@ -355,7 +395,7 @@ function App() {
   }
 
   async function handleDeleteSession(sessionId: string) {
-    if (!token) {
+    if (!token || chatPending) {
       return;
     }
     try {
@@ -575,7 +615,7 @@ function App() {
 
             {!showAdminCenter ? (
               <>
-                <button className="primary-button" type="button" onClick={() => void createSession()}>
+                <button className="primary-button" type="button" onClick={() => void createSession()} disabled={chatPending}>
                   新建会话
                 </button>
               </>
@@ -614,7 +654,7 @@ function App() {
                     return (
                       <div key={session.id} className={`session-item${session.id === selectedSessionId ? " is-active" : ""}`}>
                         <div className="session-item-top">
-                          <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)}>
+                          <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)} disabled={chatPending}>
                             <div className="session-item-title">{session.title || "未命名会话"}</div>
                           </button>
                           <div className="session-item-time">{formatDate(session.updated_at)}</div>
@@ -633,6 +673,7 @@ function App() {
                           <button
                             className="session-delete-button"
                             type="button"
+                            disabled={chatPending}
                             onClick={() => void handleDeleteSession(session.id)}
                             aria-label="删除会话"
                           >
@@ -783,6 +824,9 @@ function App() {
                                 <span>{formatDate(message.created_at)}</span>
                               </div>
                               <div className="message-card">{message.content}</div>
+                              {message.role === "assistant" && chatPending && pendingProgress.length && message.id.startsWith("pending-assistant-") ? (
+                                <PendingProgressCard events={pendingProgress} />
+                              ) : null}
                               {message.role === "assistant" && messageArtifact ? (
                                 <ConversationResultCard
                                   artifact={messageArtifact}
@@ -818,6 +862,7 @@ function App() {
                     <textarea
                       className="composer-input"
                       rows={1}
+                      disabled={chatPending}
                       value={question}
                       onChange={(event) => setQuestion(event.target.value)}
                       onKeyDown={(event) => {
@@ -1384,6 +1429,35 @@ function AdminView(props: {
   );
 }
 
+function PendingProgressCard(props: { events: ProgressEvent[] }) {
+  if (!props.events.length) {
+    return null;
+  }
+  const latest = props.events[props.events.length - 1];
+  const steps = collapseProgressEvents(props.events);
+  return (
+    <div className="message-result-card is-pending">
+      <div className="message-result-head">
+        <div className="message-result-summary">
+          <strong>执行进度</strong>
+          <span>{describeProgressStage(latest.stage)}</span>
+          <span>{describeResponseStatus(latest.status)}</span>
+        </div>
+      </div>
+      {latest.detail ? <div className="message-result-note">{latest.detail}</div> : null}
+      <div className="progress-step-list">
+        {steps.map((event) => (
+          <div className="progress-step-item" key={`${event.trace_id}-${event.stage}`}>
+            <span className={`progress-step-badge is-${event.status.toLowerCase()}`}>{describeResponseStatus(event.status)}</span>
+            <span className="progress-step-label">{describeProgressStage(event.stage)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="message-result-note">Trace: {latest.trace_id}</div>
+    </div>
+  );
+}
+
 function ConversationResultCard(props: {
   artifact: SessionTraceWorkspaceRecord;
   isActive: boolean;
@@ -1759,6 +1833,7 @@ function resolvePendingMessages(
     pendingAssistantId: string;
     sessionId: string;
     assistantContent: string;
+    assistantTraceId?: string;
   },
 ) {
   return normalizeMessages(
@@ -1774,11 +1849,26 @@ function resolvePendingMessages(
           ...message,
           session_id: payload.sessionId,
           content: payload.assistantContent,
+          trace_id: payload.assistantTraceId ?? message.trace_id,
         };
       }
       return message;
     }),
   );
+}
+
+function collapseProgressEvents(events: ProgressEvent[]) {
+  const order: string[] = [];
+  const latestByStage = new Map<string, ProgressEvent>();
+  for (const event of events) {
+    if (!latestByStage.has(event.stage)) {
+      order.push(event.stage);
+    }
+    latestByStage.set(event.stage, event);
+  }
+  return order
+    .map((stage) => latestByStage.get(stage))
+    .filter((event): event is ProgressEvent => Boolean(event));
 }
 
 function StatPill(props: { label: string; value: string }) {
@@ -1847,6 +1937,22 @@ function buildContextChips(state: SessionState | null) {
   }
 
   return Array.from(new Set(chips)).slice(0, 6);
+}
+
+function describeProgressStage(stage: string) {
+  const labels: Record<string, string> = {
+    accepted: "请求已接收",
+    load_session: "加载会话",
+    planning: "解析与规划",
+    retrieval: "检索上下文",
+    sql_generation: "生成 SQL",
+    sql_validation: "校验 SQL",
+    execution: "执行查询",
+    answer_building: "组织回答",
+    completed: "已完成",
+    failed: "失败",
+  };
+  return labels[stage] || stage;
 }
 
 function describeResponseStatus(status: string) {

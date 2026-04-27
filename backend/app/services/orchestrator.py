@@ -4,11 +4,13 @@ import logging
 
 from backend.app.logging_config import clear_trace_id, set_trace_id
 from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.progress import ProgressEvent
 from backend.app.models.session_state import SessionState
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.permission_service import PermissionService
+from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.query_plan_compiler import QueryPlanCompiler
 from backend.app.services.query_plan_validator import QueryPlanValidator
@@ -40,6 +42,7 @@ class ConversationOrchestrator:
         retrieval_service: RetrievalService,
         session_service: SessionService,
         audit_service: AuditService,
+        progress_service: ProgressService,
         runtime_log_repository: DbRuntimeLogRepository,
         domain_config: dict,
     ) -> None:
@@ -56,11 +59,12 @@ class ConversationOrchestrator:
         self.retrieval_service = retrieval_service
         self.session_service = session_service
         self.audit_service = audit_service
+        self.progress_service = progress_service
         self.runtime_log_repository = runtime_log_repository
         self.domain_config = domain_config
 
-    def chat(self, request: PlanRequest) -> ChatResponse:
-        trace = self.audit_service.new_trace()
+    def chat(self, request: PlanRequest, trace_id: str | None = None) -> ChatResponse:
+        trace = self.audit_service.new_trace(trace_id=trace_id)
         set_trace_id(trace.trace_id)
         try:
             warnings: list[str] = []
@@ -70,12 +74,22 @@ class ConversationOrchestrator:
                 request.session_id,
                 request.question,
             )
+            self._publish_progress(
+                trace.trace_id,
+                event_type="accepted",
+                stage="accepted",
+                status="queued",
+                detail="request accepted",
+            )
 
             session_state = request.session_state
+            self._publish_progress(trace.trace_id, event_type="stage", stage="load_session", status="running", detail="loading session state")
             if request.session_id and session_state is None:
                 session_state = self.session_service.resolve_state(request.session_id)
             self.audit_service.append_step(trace, "load_session", "completed", "session state resolved")
+            self._publish_progress(trace.trace_id, event_type="stage", stage="load_session", status="completed", detail="session state resolved")
 
+            self._publish_progress(trace.trace_id, event_type="stage", stage="planning", status="running", detail="building query plan")
             query_intent, classification, query_plan, planning_warnings = self.query_planner.create_plan(
                 question=request.question,
                 session_state=session_state,
@@ -110,6 +124,7 @@ class ConversationOrchestrator:
                     },
                 },
             )
+            self._publish_progress(trace.trace_id, event_type="stage", stage="planning", status="completed", detail=classification.question_type)
             self._sync_classification_with_query_plan(classification, query_plan)
             terminal_reason = self._terminal_skip_reason(classification, query_plan)
             if terminal_reason is not None:
@@ -126,6 +141,7 @@ class ConversationOrchestrator:
                     terminal_reason=terminal_reason,
                 )
 
+            self._publish_progress(trace.trace_id, event_type="stage", stage="retrieval", status="running", detail="retrieving examples and knowledge")
             retrieval = self.retrieval_service.retrieve(query_intent)
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
             logger.info(
@@ -141,6 +157,7 @@ class ConversationOrchestrator:
                 f"{len(retrieval.hits)} hits",
                 metadata=retrieval_summary,
             )
+            self._publish_progress(trace.trace_id, event_type="stage", stage="retrieval", status="completed", detail=f"{len(retrieval.hits)} hits")
 
             query_plan_prompt = self.prompt_builder.build_query_plan_prompt(
                 question=request.question,
@@ -276,6 +293,7 @@ class ConversationOrchestrator:
             sql_hint_metadata = {"mode": "stub", "used": False}
             sql_prompt = None
             if not plan_errors:
+                self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status="running", detail="generating sql")
                 sql_prompt = self.prompt_builder.build_sql_prompt(query_plan)
                 prompt_context_metadata = {
                     "context_budget": sql_prompt.get("context_budget"),
@@ -319,7 +337,9 @@ class ConversationOrchestrator:
                     "sql_visible": bool(visible_sql),
                 },
             )
+            self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status=("completed" if sql else "skipped"), detail=("sql generated" if sql else "sql unavailable"))
 
+            self._publish_progress(trace.trace_id, event_type="stage", stage="sql_validation", status="running", detail="validating sql")
             required_filter_fields = self.permission_service.required_filter_fields(
                 query_plan=query_plan,
                 user_context=request.user_context,
@@ -386,7 +406,10 @@ class ConversationOrchestrator:
                 len(sql_errors),
                 len(sql_warnings),
             )
+            self._publish_progress(trace.trace_id, event_type="stage", stage="sql_validation", status=("completed" if not sql_errors else "failed"), detail=("sql valid" if not sql_errors else "sql validation failed"), metadata={"errors": sql_errors, "warnings": sql_warnings})
 
+            if not (plan_errors or sql_errors):
+                self._publish_progress(trace.trace_id, event_type="stage", stage="execution", status="running", detail="executing sql")
             execution = None if (plan_errors or sql_errors) else self.sql_executor.execute(
                 sql=sql,
                 user_context=request.user_context,
@@ -452,7 +475,9 @@ class ConversationOrchestrator:
                 execution.row_count if execution else None,
                 execution.elapsed_ms if execution else None,
             )
+            self._publish_progress(trace.trace_id, event_type="stage", stage="execution", status=("completed" if execution else "skipped"), detail=(execution.status if execution else "execution skipped"), metadata={"row_count": execution.row_count if execution else None})
 
+            self._publish_progress(trace.trace_id, event_type="stage", stage="answer_building", status="running", detail="building answer")
             plan_validation = ValidationResponse(
                 valid=not plan_errors,
                 errors=plan_errors,
@@ -475,6 +500,7 @@ class ConversationOrchestrator:
                 sql_validation=sql_validation,
             )
 
+            self._publish_progress(trace.trace_id, event_type="stage", stage="answer_building", status="completed", detail=answer.status if answer else "unknown")
             next_session_state = self.session_state_service.build_next_state(
                 query_plan=query_plan,
                 previous_state=session_state,
@@ -522,9 +548,35 @@ class ConversationOrchestrator:
                 plan_validation.valid,
                 sql_validation.valid,
             )
+            self._publish_progress(trace.trace_id, event_type="completed", stage="completed", status=answer.status if answer else "ok", detail=answer.summary if answer else None, metadata={"response": response.model_dump(mode="json")})
             return response
+        except Exception as exc:
+            self._publish_progress(trace.trace_id, event_type="failed", stage="failed", status="error", detail=str(exc))
+            raise
         finally:
+            self.progress_service.complete(trace.trace_id)
             clear_trace_id()
+
+    def _publish_progress(
+        self,
+        trace_id: str,
+        *,
+        event_type: str,
+        stage: str,
+        status: str,
+        detail: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        self.progress_service.publish(
+            ProgressEvent(
+                trace_id=trace_id,
+                type=event_type,
+                stage=stage,
+                status=status,
+                detail=detail,
+                metadata=metadata or {},
+            )
+        )
 
     def _sync_classification_with_query_plan(self, classification, query_plan) -> None:
         if classification.question_type == "invalid":
@@ -607,6 +659,14 @@ class ConversationOrchestrator:
             sql_validation=sql_validation,
             execution=None,
             next_session_state=next_session_state,
+        )
+        self._publish_progress(
+            trace.trace_id,
+            event_type="completed",
+            stage="completed",
+            status=answer.status if answer else "ok",
+            detail=answer.summary if answer else None,
+            metadata={"response": response.model_dump(mode="json")},
         )
         self._append_response_snapshot(trace, response)
         self._persist_runtime_artifacts(

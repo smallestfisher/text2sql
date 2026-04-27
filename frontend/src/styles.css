@@ -1573,3 +1573,59 @@ input:focus {
     width: 100%;
   }
 }
+
+.message-result-card.is-pending {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: rgba(21, 28, 44, 0.88);
+}
+
+.progress-step-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.progress-step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.progress-step-badge {
+  min-width: 60px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(17, 23, 38, 0.78);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.progress-step-badge.is-running,
+.progress-step-badge.is-queued {
+  background: rgba(119, 168, 255, 0.12);
+  border-color: rgba(119, 168, 255, 0.18);
+  color: var(--text);
+}
+
+.progress-step-badge.is-completed,
+.progress-step-badge.is-ok {
+  background: rgba(77, 224, 193, 0.12);
+  border-color: rgba(94, 196, 141, 0.2);
+  color: #d8fff5;
+}
+
+.progress-step-badge.is-failed,
+.progress-step-badge.is-error {
+  background: rgba(214, 111, 111, 0.14);
+  border-color: rgba(214, 111, 111, 0.2);
+  color: #ffd7d7;
+}
+
+.progress-step-label {
+  color: var(--text);
+  font-size: 13px;
+}

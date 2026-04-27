@@ -154,6 +154,16 @@ export interface TraceRecord {
   warnings: string[];
 }
 
+export interface ProgressEvent {
+  trace_id: string;
+  type: "accepted" | "stage" | "completed" | "failed";
+  stage: string;
+  status: string;
+  detail?: string | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface AnswerPayload {
   status: string;
   summary: string;

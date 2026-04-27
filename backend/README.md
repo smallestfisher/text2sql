@@ -49,6 +49,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `business_knowledge.json` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
 - 对横表和复杂口径，优先通过 prompt / few-shot / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
 - `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
+- `POST /api/chat/query/stream` 是前端默认提问入口；通过 SSE 推送 `accepted`、`planning`、`sql_generation`、`execution`、`completed` 等阶段事件
 
 ## Runtime 存储与升级
 
@@ -184,6 +185,7 @@ Unknown column 'can_download_results' in 'field list'
 - `GET /api/chat/sessions/{session_id}/workspace`
 - `GET /api/chat/snapshots/{session_id}`
 - `POST /api/chat/query`
+- `POST /api/chat/query/stream`
 - `POST /api/chat/feedback`
 - `GET /api/chat/feedbacks`
 - `GET /api/chat/feedbacks/summary`

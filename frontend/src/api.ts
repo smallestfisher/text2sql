@@ -1,6 +1,7 @@
 import type {
   BootstrapStatus,
   ChatResponse,
+  ProgressEvent,
   EvaluationReplayRequest,
   EvaluationReplayResult,
   EvaluationSummary,
@@ -58,6 +59,72 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
+
+async function requestEventStream(
+  path: string,
+  options: RequestOptions,
+  onEvent: (event: ProgressEvent) => void,
+): Promise<void> {
+  const emitEvent = (rawBlock: string) => {
+    const block = rawBlock.trim();
+    if (!block) {
+      return;
+    }
+    const dataLines = block
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.startsWith("data: ") ? line.slice(6) : line.slice(5));
+    if (!dataLines.length) {
+      return;
+    }
+    const payload = JSON.parse(dataLines.join("\n")) as ProgressEvent;
+    onEvent(payload);
+  };
+
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  headers.set("Accept", "text/event-stream");
+  if (options.token) {
+    headers.set("Authorization", `Bearer ${options.token}`);
+  }
+
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+
+  if (!response.ok || !response.body) {
+    let detail = response.statusText;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        detail = payload.detail;
+      }
+    } catch {
+      detail = response.statusText;
+    }
+    throw new Error(detail);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      emitEvent(part);
+    }
+  }
+  buffer += decoder.decode().replace(/\r\n/g, "\n");
+  emitEvent(buffer);
+}
 
 async function requestText(path: string, options: RequestOptions = {}): Promise<string> {
   const headers = new Headers();
@@ -154,6 +221,21 @@ export const api = {
         session_id: sessionId,
       },
     });
+  },
+  chatQueryStream(
+    token: string,
+    question: string,
+    sessionId: string | undefined,
+    onEvent: (event: ProgressEvent) => void,
+  ): Promise<void> {
+    return requestEventStream("/api/chat/query/stream", {
+      method: "POST",
+      token,
+      body: {
+        question,
+        session_id: sessionId,
+      },
+    }, onEvent);
   },
   adminRuntimeStatus(token: string): Promise<RuntimeStatus> {
     return request("/api/admin/runtime/status", { token });

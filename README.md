@@ -9,6 +9,7 @@
 - SQL、分类、相关性判断 prompt 目前统一以中文自然语言指令为主
 - PromptBuilder 只选择当前问题相关的 schema、业务知识和 few-shot，避免 token 膨胀
 - 前端会话恢复的主入口是 `GET /api/chat/sessions/{session_id}/workspace`
+- 前端提问默认走 `POST /api/chat/query/stream`，通过 SSE 主动推送阶段进度和最终结果，不再靠轮询猜状态
 - 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
 
 ## 快速启动
