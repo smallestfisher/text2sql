@@ -599,6 +599,77 @@ button {
   border: 1px solid rgba(149, 174, 255, 0.14);
 }
 
+.workspace-hero-panel {
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(180deg, rgba(31, 40, 62, 0.96), rgba(23, 30, 47, 0.92));
+  box-shadow: 0 10px 24px rgba(8, 12, 20, 0.18);
+}
+
+.workspace-toolbar-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.workspace-toolbar-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-toolbar-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workspace-toolbar-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(149, 174, 255, 0.12);
+  background: rgba(17, 24, 38, 0.44);
+  color: #d9e6ff;
+  font-size: 11px;
+}
+
+.workspace-toolbar-title {
+  min-width: 0;
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.workspace-toolbar-meta {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.workspace-toolbar-meta.is-error {
+  color: var(--danger);
+}
+
+.workspace-toolbar-stats {
+  justify-content: flex-end;
+}
+
+.workspace-context-strip {
+  gap: 8px;
+}
+
+.workspace-context-strip .context-chip {
+  padding: 6px 10px;
+}
+
 .hero-badge {
   width: fit-content;
   padding: 7px 12px;
@@ -1023,6 +1094,12 @@ button {
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(24, 31, 49, 0.96), rgba(18, 24, 38, 0.92));
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.inspector.is-attention {
+  border-color: rgba(119, 168, 255, 0.26);
+  box-shadow: 0 0 0 1px rgba(119, 168, 255, 0.14), 0 16px 36px rgba(8, 12, 20, 0.26);
 }
 
 .inspector-head {
@@ -1403,6 +1480,15 @@ input:focus {
     padding: 20px;
   }
 
+  .workspace-toolbar-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workspace-toolbar-stats {
+    justify-content: flex-start;
+  }
+
   .auth-layout {
     grid-template-columns: 1fr 400px;
   }
@@ -1513,6 +1599,14 @@ input:focus {
   .auth-showcase,
   .auth-card {
     padding: 22px;
+  }
+
+  .workspace-hero-panel {
+    padding: 14px 16px 12px;
+  }
+
+  .workspace-toolbar-title {
+    font-size: 18px;
   }
 
   .thread-scroll {

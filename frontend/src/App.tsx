@@ -152,7 +152,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<InspectorTab>("result");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorAttention, setInspectorAttention] = useState(false);
   const threadRef = useRef<HTMLDivElement | null>(null);
+  const inspectorRef = useRef<HTMLElement | null>(null);
 
   const [adminPending, setAdminPending] = useState(false);
   const [adminError, setAdminError] = useState("");
@@ -188,6 +190,14 @@ function App() {
       void loadAdminData(token);
     }
   }, [token, viewMode, currentUser]);
+
+  useEffect(() => {
+    if (!inspectorAttention) {
+      return;
+    }
+    const timer = window.setTimeout(() => setInspectorAttention(false), 900);
+    return () => window.clearTimeout(timer);
+  }, [inspectorAttention]);
 
   async function boot() {
     try {
@@ -480,6 +490,17 @@ function App() {
     } catch (error) {
       setWorkspaceError(errorMessage(error));
     }
+  }
+
+  function focusInspector(traceId: string) {
+    setActiveTraceId(traceId);
+    setActiveTab("result");
+    setInspectorOpen(true);
+    setInspectorAttention(false);
+    window.requestAnimationFrame(() => {
+      inspectorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      setInspectorAttention(true);
+    });
   }
 
   async function handleAdminReplayLog(log: RuntimeQueryLogRecord) {
@@ -829,27 +850,40 @@ function App() {
         ) : (
           <>
             <main className="main-column">
-      <section className="hero-panel admin-hero-panel">
-                <div className="hero-main">
-                  <div className="hero-badge">会话工作台</div>
-                  <div className="hero-title">{selectedSession?.title || "直接输入你的业务问题"}</div>
-                  <div className="hero-subtitle">
-                    {workspaceError
-                      ? workspaceError
-                      : selectedSession
-                        ? `${sessionState?.topic || sessionState?.subject_domain || "上下文未建立"} · 更新于 ${formatDate(selectedSession.updated_at)}`
-                        : "支持自然语言问数、上下文追问、SQL 审阅和 Trace 排查"}
+              <section className="hero-panel workspace-hero-panel">
+                <div className="workspace-toolbar-top">
+                  <div className="workspace-toolbar-copy">
+                    <div className="workspace-toolbar-title-row">
+                      <span className="workspace-toolbar-tag">工作台</span>
+                      <div className="workspace-toolbar-title">{selectedSession?.title || "直接输入你的业务问题"}</div>
+                    </div>
+                    <div className={`workspace-toolbar-meta${workspaceError ? " is-error" : ""}`}>
+                      {workspaceError
+                        ? workspaceError
+                        : selectedSession
+                          ? `${sessionState?.topic || sessionState?.subject_domain || "上下文未建立"} · 更新于 ${formatDate(selectedSession.updated_at)}`
+                          : "支持自然语言问数、上下文追问、SQL 审阅和 Trace 排查"}
+                    </div>
+                  </div>
+
+                  <div className="toolbar-stats workspace-toolbar-stats">
+                    <span className="toolbar-stat">
+                      当前域
+                      <strong>{sessionState?.subject_domain || "unknown"}</strong>
+                    </span>
+                    <span className="toolbar-stat">
+                      会话数
+                      <strong>{String(sessions.length)}</strong>
+                    </span>
+                    <span className="toolbar-stat">
+                      结果行数
+                      <strong>{String(inspectorResponse?.execution?.row_count ?? inspectorSqlAudit?.row_count ?? 0)}</strong>
+                    </span>
                   </div>
                 </div>
 
-                <div className="hero-stats">
-                  <StatPill label="当前域" value={sessionState?.subject_domain || "unknown"} />
-                  <StatPill label="会话数" value={String(sessions.length)} />
-                  <StatPill label="结果行数" value={String(inspectorResponse?.execution?.row_count ?? inspectorSqlAudit?.row_count ?? 0)} />
-                </div>
-
                 {contextChips.length ? (
-                  <div className="context-strip">
+                  <div className="context-strip workspace-context-strip">
                     {contextChips.map((chip) => (
                       <span className="context-chip" key={chip}>
                         {chip}
@@ -857,7 +891,7 @@ function App() {
                     ))}
                   </div>
                 ) : (
-                  <div className="context-strip">
+                  <div className="context-strip workspace-context-strip">
                     <span className="context-chip is-muted">发送第一条问题后，这里会显示当前会话上下文</span>
                   </div>
                 )}
@@ -906,11 +940,7 @@ function App() {
                                   token={token}
                                   currentUser={currentUser}
                                   canInspect={showInspector}
-                                  onSelect={() => {
-                                    setActiveTraceId(messageArtifact.trace_id);
-                                    setActiveTab("result");
-                                    setInspectorOpen(true);
-                                  }}
+                                  onSelect={() => focusInspector(messageArtifact.trace_id)}
                                 />
                               ) : null}
                             </div>
@@ -963,7 +993,7 @@ function App() {
             </main>
 
             {showInspector ? (
-              <aside className="inspector">
+              <aside ref={inspectorRef} className={`inspector${inspectorAttention ? " is-attention" : ""}`}>
                 <div className="inspector-head">
                   <div>
                     <div className="panel-title">会话详情</div>
@@ -1589,7 +1619,7 @@ function ConversationResultCard(props: {
         <div className="message-result-actions">
           {props.canInspect ? (
             <button className="secondary-button message-result-button" type="button" onClick={props.onSelect}>
-              查看详情
+              定位详情
             </button>
           ) : null}
           {canDownload ? (
@@ -2132,15 +2162,6 @@ function describeProgressBadge(event: ProgressEvent) {
     return "进行中";
   }
   return describeResponseStatus(event.status);
-}
-
-function StatPill(props: { label: string; value: string }) {
-  return (
-    <div className="stat-pill">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
-    </div>
-  );
 }
 
 function MetaRow(props: { label: string; value: string }) {
