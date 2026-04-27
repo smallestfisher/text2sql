@@ -1,6 +1,6 @@
 # Text2SQL
 
-面向业务分析问题的 LLM-first Text2SQL 工程。当前主链路已经从“本地规则/模板拼 SQL”切换为“LLM 基于真实表结构和业务知识直接生成 SQL，再由校验器、权限层和执行器治理”。
+面向业务分析问题的 LLM-first Text2SQL 工程。当前主链路已经从“本地规则/模板拼 SQL”切换为“LLM 基于真实表结构和业务知识直接生成 SQL，再由校验器、权限层和执行器治理”。如果你是第一次进入仓库，先看本文件，再看 `TEXT2SQL_ARCHITECTURE.md` 和 `DEBUG_PLAYBOOK.md`。
 
 ## 当前状态
 
@@ -20,6 +20,8 @@ pip install -r backend/requirements.txt
 uvicorn backend.app.main:app --reload --app-dir .
 ```
 
+更完整的后端运行、配置和 API 说明见 `backend/README.md`。
+
 ### Frontend
 
 ```bash
@@ -27,6 +29,8 @@ cd frontend
 npm install
 npm run dev
 ```
+
+前端工作台和权限展示规则见 `frontend/README.md`。
 
 默认前端会代理到 `http://127.0.0.1:8000`。如需改后端地址，可在启动前设置 `VITE_API_ORIGIN`。
 

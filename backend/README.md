@@ -1,6 +1,6 @@
 # Backend
 
-## Run
+## 运行
 
 安装依赖：
 
@@ -27,7 +27,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
 - 业务库兼容旧字段 `DATABASE_URL` / `DB_URI`
 
-## Current Scope
+## 当前范围
 
 当前后端实现的是“LLM-first 的 Text2SQL 主链路 + SQL 治理 + runtime 会话工作台支撑”：
 
@@ -201,7 +201,7 @@ Unknown column 'can_download_results' in 'field list'
 - `POST /api/query/sql`
 - `POST /api/query/execute`
 
-## Example
+## 示例
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/query/classify \
@@ -211,7 +211,7 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 
 ## 当前调试主路径
 
-推荐按这条路径调问题：
+推荐按这条路径调问题；更完整的调试与联调说明见 `../DEBUG_PLAYBOOK.md`：
 
 1. 在前端工作台或 `POST /api/chat/query` 复现问题
 2. 用 `GET /api/chat/sessions/{session_id}/workspace` 看消息、状态、`latest_response` 和 `trace_artifacts`
@@ -224,39 +224,39 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，当前主要覆盖 `classification / query_plan / permission_filter` 这几层：
 
 ```bash
-.venv/bin/python backend/offline_regression.py --failures-only
+python3 backend/offline_regression.py --failures-only
 ```
 
 只跑指定 case：
 
 ```bash
-.venv/bin/python backend/offline_regression.py \
-  --case-id eval_plan_actual_follow_up_001 \
-  --case-id eval_demand_follow_up_001
+python3 backend/offline_regression.py \
+  --case-id eval_real_plan_actual_mdl_input_panel_top10_001 \
+  --case-id eval_real_demand_latest5_p_202604_top_fgcode_001
 ```
 
 语义层配置 lint：
 
 ```bash
-.venv/bin/python backend/domain_config_lint.py
+python3 backend/domain_config_lint.py
 ```
 
 输出 JSON：
 
 ```bash
-.venv/bin/python backend/offline_regression.py --json
+python3 backend/offline_regression.py --json
 ```
 
 把完整报告写到文件：
 
 ```bash
-.venv/bin/python backend/offline_regression.py --output tmp/offline-regression.json
+python3 backend/offline_regression.py --output tmp/offline-regression.json
 ```
 
 把摘要和失败项分别落盘：
 
 ```bash
-.venv/bin/python backend/offline_regression.py --report-dir tmp/offline-regression
+python3 backend/offline_regression.py --report-dir tmp/offline-regression
 ```
 
 说明：
@@ -274,7 +274,7 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 - [DEBUG_PLAYBOOK.md](../DEBUG_PLAYBOOK.md)
 - [frontend/README.md](../frontend/README.md)
 
-## Structure
+## 目录结构
 
 - `app/api/routes`：HTTP 路由层
 - `app/core`：应用装配、settings、异常处理
