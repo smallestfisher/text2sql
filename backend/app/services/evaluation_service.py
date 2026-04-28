@@ -23,6 +23,7 @@ from backend.app.models.evaluation import (
     EvaluationSummary,
     RuntimeQueryLogMaterializeCaseRequest,
 )
+from backend.app.models.query_plan import QueryPlan
 
 
 class EvaluationService:
@@ -224,6 +225,7 @@ class EvaluationService:
         normalized_question = (snapshot.query_intent.normalized_question or record.question).strip()
         effective_scenario = scenario or self._default_example_scenario(snapshot.classification.question_type)
         merged_tags = list(dict.fromkeys([
+            "real",
             snapshot.classification.subject_domain,
             snapshot.classification.question_type,
             *(coverage_tags or []),
@@ -252,7 +254,7 @@ class EvaluationService:
             filters=list(snapshot.query_plan.filters),
             join_path=list(snapshot.query_plan.join_path),
             sql=snapshot.sql,
-            result_shape=snapshot.answer.status if snapshot.answer is not None else None,
+            result_shape=self._derive_example_result_shape(snapshot.query_plan),
             notes=notes or f"materialized from runtime query log {trace_id}",
         )
 
@@ -329,6 +331,13 @@ class EvaluationService:
                 user_context=user_context,
             )
         )
+
+    def _derive_example_result_shape(self, query_plan: QueryPlan) -> str:
+        if query_plan.dimensions:
+            return "_by_".join(query_plan.dimensions)
+        if query_plan.metrics:
+            return "metric_only"
+        return "unknown"
 
     def _run_case(
         self,

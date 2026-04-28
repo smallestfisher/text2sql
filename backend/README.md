@@ -32,10 +32,11 @@ uvicorn backend.app.main:app --reload --app-dir .
 当前后端实现的是“LLM-first 的 Text2SQL 主链路 + SQL 治理 + runtime 会话工作台支撑”：
 
 - 加载真实表结构描述、结构化业务知识和辅助语义配置
+- `semantic/domain_config.json` 是辅助语义配置的 manifest 入口，实际内容由 `semantic/domain_config/` 下的分片合并得到
 - 进行语义解析、问题分类和 relevance guard
 - 生成 Query Plan 作为 LLM SQL 生成约束
 - 由 LLM 直接基于真实表和业务知识生成 MySQL SQL
-- PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和场景 few-shot，避免 prompt 膨胀
+- PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和少量场景 few-shot，避免 prompt 膨胀
 - SQL 校验器做只读、安全、表字段范围、时间/版本、LIMIT 和风险治理
 - SQL 校验或执行失败时，触发一次 LLM SQL repair
 - 生成下一轮 `session_state`
@@ -46,7 +47,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 - 不再要求数据库预建额外分析对象
 - `business_knowledge.json` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
-- 对横表和复杂口径，优先通过 prompt / few-shot / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
+- 对横表和复杂口径，优先通过 prompt / 内置场景 few-shot / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
 - `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
 - `POST /api/chat/query/stream` 是前端默认提问入口；通过 SSE 推送 `accepted`、`planning`、`sql_generation`、`execution`、`completed` 等阶段事件
 
@@ -148,6 +149,9 @@ Unknown column '...'
 
 - `examples/nl2sql_examples.template.json` 现在默认可以为空。
 - 在线样例只应从真实调试链路通过 `materialize-example` 物化进入，不再手写假设样例。
+- example 会参与 RetrievalService 检索，并在命中时以 `retrieved_examples` 形式进入 SQL prompt。
+- SQL prompt 仍然保留内置场景模板 few-shot，用于 demand 横表、plan_actual 对比等专项结构约束。
+- `materialize-example` 或 examples 管理接口写入后会立即刷新 retrieval 索引；当前不需要重启服务才能让新样例生效。
 - `eval/evaluation_cases.json` 也只应保留真实问题或真实 trace 物化出的回归样本，不再维护假设 case。
 
 ### Admin Users / Roles
@@ -199,6 +203,11 @@ Unknown column '...'
 - `POST /api/query/sql`
 - `POST /api/query/execute`
 
+说明：
+
+- `POST /api/query/sql` 现在建议同时传 `question` 或 `query_intent`，这样 retrieval 命中的 example / knowledge 更接近主聊天链路
+- 如果只传 `query_plan`，系统仍可生成 SQL，但 retrieval 只能基于 `query_plan` 反推一个简化意图
+
 ## 示例
 
 ```bash
@@ -211,27 +220,26 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 
 推荐按这条路径调问题；更完整的调试与联调说明见 `../DEBUG_PLAYBOOK.md`：
 
-1. 在前端工作台或 `POST /api/chat/query` 复现问题
+1. 在前端工作台或 `POST /api/chat/query/stream` 复现问题
 2. 用 `GET /api/chat/sessions/{session_id}/workspace` 看消息、状态、`latest_response` 和 `trace_artifacts`
 3. 看 `GET /api/chat/traces/{trace_id}`、`/sql-audit`、`/retrieval`
 4. 对历史问题优先走 `POST /api/admin/runtime/query-logs/{trace_id}/replay`
 5. 有代表性的失败样本再物化为 eval case 或 example
 
-## Offline Regression
+## Eval / Replay
 
-在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，当前主要覆盖 `classification / query_plan` 这几层：
+当前不再维护离线 planner-only 回归脚本。`eval/evaluation_cases.json` 的定位是：
 
-```bash
-python3 backend/offline_regression.py --failures-only
-```
+- 在线 `eval` 的 case 源
+- runtime `replay` 的补充回归样本
+- 只保留真实问题或真实 trace 物化出的 case
 
-只跑指定 case：
+推荐入口：
 
-```bash
-python3 backend/offline_regression.py \
-  --case-id eval_real_plan_actual_mdl_input_panel_top10_001 \
-  --case-id eval_real_demand_latest5_p_202604_top_fgcode_001
-```
+1. 在真实链路复现问题并拿到 `trace_id`
+2. 优先走 `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+3. 对稳定且有代表性的真实问题，再走 `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
+4. 通过管理接口 `POST /api/admin/eval/run` 批量执行当前 case 集
 
 语义层配置 lint：
 
@@ -239,32 +247,24 @@ python3 backend/offline_regression.py \
 python3 backend/domain_config_lint.py
 ```
 
-输出 JSON：
-
-```bash
-python3 backend/offline_regression.py --json
-```
-
-把完整报告写到文件：
-
-```bash
-python3 backend/offline_regression.py --output tmp/offline-regression.json
-```
-
-把摘要和失败项分别落盘：
-
-```bash
-python3 backend/offline_regression.py --report-dir tmp/offline-regression
-```
-
 说明：
 
-- 离线回归不会连接数据库，也不会写 runtime 审计表
-- 当前会复用 `eval/evaluation_cases.json`
-- 当前主要用于收敛分类和规划；LLM-first SQL 生成与 SQL 校验需要在 live 或 replay 链路验证
-- 控制台输出会包含 `question_type / scenario / failure_types` 的聚合统计
-- `--report-dir` 会输出 `summary.json` 和 `failures.json`
-- `.github/workflows/offline-regression.yml` 会执行 JSON 校验、semantic lint、`compileall` 和离线回归
+- `eval/evaluation_cases.json` 仍然保留，但用于在线 eval / replay，不再作为离线回归脚本输入
+- LLM intent、SQL 生成、SQL 校验和执行结果应优先在 live / replay / eval 链路验证
+- 如需新增 case，优先从真实 trace 物化，而不是手写假设样本
+
+### Example 约束
+
+`examples/nl2sql_examples.template.json` 当前建议遵守下面规则：
+
+- 只保留真实问题、真实 trace、且 SQL 与业务结果都人工确认过的样例
+- `coverage_tags` 建议至少包含 `real`、业务域和关键口径标签
+- `result_shape` 建议使用结构语义，而不是随意命名：
+  - 单维分组：直接写维度名，例如 `biz_month`、`stage_product_id`
+  - 多维分组：使用 `_by_` 连接，例如 `factory_by_biz_month`
+  - 无维度但有指标：`metric_only`
+- 优先通过 `materialize-example` 生成样例，再按需要补充 `coverage_tags` 和 `notes`
+- example 被命中后会进入 SQL prompt，因此保留下来的样例应能代表一类稳定问法，而不是单次偶然修通结果
 
 ## 相关阅读
 

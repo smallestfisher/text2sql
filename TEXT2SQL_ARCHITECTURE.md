@@ -41,7 +41,7 @@
 
 而是：
 
-- 基于真实 `tables.json`、`business_knowledge.json`、Query Plan、检索结果和少量真实 few-shot
+- 基于真实 `tables.json`、`business_knowledge.json`、Query Plan、检索结果和少量场景 few-shot
 - 让 LLM 直接生成 MySQL 只读 SQL
 - 再由 Query Plan validator、SQL validator、执行器和 runtime 体系做闭环治理
 
@@ -58,7 +58,7 @@
 LLM 是主生成器，但不是裸奔：
 
 - Query Planner 先把问题收敛成结构化 Query Plan
-- PromptBuilder 只给当前问题真正相关的 schema、知识和 example
+- PromptBuilder 只给当前问题真正相关的 schema、知识和少量 few-shot
 - SqlValidator 再校验只读、安全、来源范围、时间/版本、LIMIT、风险级别
 - 失败时允许一次 repair，而不是无限次自我修复
 
@@ -67,7 +67,7 @@ LLM 是主生成器，但不是裸奔：
 - `tables.json` 是真实物理表、字段、关系、时间字段、版本字段的主来源
 - 系统不要求数据库预建额外分析对象
 - 某些历史语义视图或预建对象可以存在，但不能成为运行主依赖
-- 对复杂逻辑，优先通过 prompt / knowledge / example / validator 驱动 LLM 正确生成 SQL
+- 对复杂逻辑，优先通过 prompt / knowledge / few-shot / validator 驱动 LLM 正确生成 SQL
 
 ### 2.3 Prompt 必须做预算控制
 
@@ -75,8 +75,8 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 - 不把全量 schema 一次性塞进 prompt
 - 不把全量业务知识塞进 prompt
-- 不把所有 example 全部注入
-- 只选择当前 Query Plan 命中的表、知识、few-shot
+- 不把全量上下文全部注入
+- 只选择当前 Query Plan 命中的表、知识和少量 few-shot
 - 在 trace 中记录 prompt 上下文摘要，便于回溯“本次到底给了模型什么”
 
 ### 2.4 会话工作台不是聊天 UI，而是可恢复的查询工作流界面
@@ -292,25 +292,28 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 1. 建立 trace
 2. 发布 `accepted`
 3. 解析 / 恢复 session state
-4. 规划 Query Plan
-5. 判断是否提前终止
-6. 检索上下文
-7. 构造 query-plan prompt，获取 LLM plan hint
-8. 权限过滤注入 Query Plan
-9. compile Query Plan
-10. validate Query Plan
-11. 再次判断是否提前终止
-12. 构造 SQL prompt
-13. 调 LLM 生成 SQL
-14. validate SQL
-15. 失败时尝试一次 repair
-16. 执行 SQL
-17. 执行失败时再尝试一次基于错误的 repair
-18. 构造回答
-19. 生成下一轮 session state
-20. 写入消息 / 状态 / trace / query log / sql audit
-21. 发布 `completed`
-22. finally 中发布 progress complete
+4. 构建 planning trace：依次产出 parser intent、LLM intent、normalized intent、classification 和初始 Query Plan
+5. 判断是否需要在 plan 阶段提前终止
+6. 检索 examples / metric / business knowledge 等上下文
+7. compile Query Plan，把检索证据和规则补充进 plan
+8. validate Query Plan
+9. 再次判断是否提前终止
+10. 构造 SQL prompt
+11. 调 LLM 生成 SQL
+12. validate SQL
+13. 校验失败时尝试一次基于 validator 反馈的 SQL repair
+14. 执行 SQL
+15. 执行失败时再尝试一次基于数据库错误的 SQL repair
+16. 构造回答
+17. 生成下一轮 session state
+18. 写入消息 / 状态 / trace / query log / sql audit
+19. 发布 `completed`
+20. finally 中发布 progress complete
+
+这里有两个容易和旧架构混淆的点，需要单独说明：
+
+- 当前主链路里已经没有单独的 “query-plan prompt / plan hint” 阶段；LLM 在主执行链路里主要参与 `llm_intent`、`classification` 和 `generate_sql / repair_sql`
+- parser 仍然保留，但它现在主要是理解基线和 trace 证据；如果标准化后的 intent 不可用，主链路不会退回到 parser baseline 继续执行
 
 ### 5.4 进度事件阶段定义
 
@@ -426,8 +429,8 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 当前规则是：
 
-- 如果 normalized intent 不可用，系统保留 parser intent 作为最后的结构化输入基线
-- 否则使用 normalized intent 进入主链路
+- 如果 normalized intent 可用，使用 normalized intent 进入主链路
+- 如果 normalized intent 不可用，主链路不会继续沿用 parser 结果执行；parser 只保留为 trace 对照基线
 
 当前 trace 中会显式记录：
 
@@ -559,20 +562,19 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 这层的目标是：
 
-- 给 PromptBuilder 提供更相关的 few-shot 和知识依据
-- 给 trace / debug 留下检索证据
-- 避免 prompt 完全靠裸 schema
+- 给 SQL prompt 和后续 few-shot 资产治理提供更相关的 evidence
+- 给 trace / debug 留下检索命中依据
+- 避免问题定位时完全靠裸 schema
 
 ### 7.2 PromptBuilder
 
 `PromptBuilder` 是控制 prompt 质量的关键模块。
 
-它至少负责三类 prompt：
+它当前主要负责这些 prompt：
 
 - intent prompt
 - classification prompt
 - relevance guard prompt
-- query plan prompt
 - SQL prompt
 
 其中 SQL prompt 的重点是：
@@ -580,17 +582,24 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 1. 根据 `query_plan.tables` 选择真实 source schema
 2. 把允许字段、表、业务知识、场景指令整理成结构化 payload
 3. 针对 demand 这类横表场景追加专项指令
-4. 在必要时注入少量真实 few-shot
+4. 在必要时注入少量 few-shot
 5. 记录 context_summary 和 context_budget，便于 trace 审计
 
 当前工程在 demand 场景里的很多“复杂口径”并不是用本地模板硬编码，而是通过：
 
 - 专项业务知识
 - SQL prompt 中的专项约束
-- few-shot 的 SQL 形态提示
+- 内置场景模板 few-shot 的 SQL 形态提示
+- 检索命中的真实 example SQL
 - validator 的结构校验
 
 共同逼近正确 SQL。
+
+补充一个当前实现边界：
+
+- `examples/nl2sql_examples.template.json` 会参与 RetrievalService 的 example 检索、管理接口和调试证据
+- SQL prompt 会把命中的 example 以 `retrieved_examples` 形式带入
+- 主 SQL prompt 同时保留内置场景模板 few-shot；当前是“检索样例 + 场景模板”双轨并存
 
 ### 7.3 当前 Trace 里的理解层观测点
 
@@ -608,7 +617,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - LLM intent 补了什么
 - normalizer 去掉了什么
 - 最终选了哪份 intent 进入主链路
-- classifier 是走了 `llm_primary` 还是 `baseline_selected`
+- classifier 的最终 decision_source 是 `llm_primary`、`llm_aligned_with_baseline`、`llm_rejected`，还是 `llm_unavailable`
 
 ---
 
@@ -640,7 +649,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 `QueryPlanCompiler` 负责把 planner 的结构进一步收敛成适合 SQL prompt 的 plan，重点不是拼 SQL，而是：
 
 - 结合 retrieval 和 runtime 语义做 plan 修正
-- 应用 LLM plan hint（如果可接受）
+- 把别名字段、排序字段、补充筛选等收敛成更稳定的结构化 plan
 - 保持 plan 输出结构一致
 
 ### 9.2 QueryPlanValidator
@@ -947,10 +956,10 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 - 状态
 - 行数
 - 小表格预览
-- 定位详情
+- 查看详情
 - 下载
 
-点击 `定位详情` 后：
+点击 `查看详情` 后：
 
 - 设置 `activeTraceId`
 - 切换 `activeTab="result"`
@@ -1002,20 +1011,18 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 
 **从真实线上/联调问题中沉淀样例与回归资产**。
 
-### 14.3 eval / offline regression
+### 14.3 eval / replay / lint
 
 当前还支持：
 
 - `EvaluationService`
 - runtime replay
-- offline regression
 - domain config lint
 
 这几层的意义分别是：
 
 - replay：重放单题
 - eval：批量评估一组真实 case
-- offline regression：在缺少真实 DB/LLM 时回归上层逻辑
 - lint：校验领域配置本身的结构质量
 
 ---
@@ -1200,7 +1207,7 @@ runtime 库负责：
 
 - 把 progress event 升级成跨进程事件总线
 - 给 trace step 增加更细粒度的 prompt/context 摘要
-- 引入更强的离线回归和 golden trace 比对
+- 引入更强的 eval 资产治理和 golden trace 比对
 - 对高频稳定复杂口径做“评审后”的数据库侧固化，但必须是补充层，不是主路径替代
 
 ---

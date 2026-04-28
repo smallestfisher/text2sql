@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request
 
 from backend.app.api.dependencies import get_container, resolve_request_user_context
 from backend.app.core.container import AppContainer
+from backend.app.models.classification import QueryIntent
 from backend.app.models.api import (
     ClassificationResponse,
     ExecutionResponse,
@@ -45,6 +46,48 @@ def _sql_skip_warning(query_plan) -> str | None:
     if query_plan.need_clarification:
         return "sql generation skipped: query plan requires clarification"
     return None
+
+
+def _query_intent_from_query_plan(query_plan) -> QueryIntent:
+    return QueryIntent(
+        normalized_question="",
+        matched_metrics=list(query_plan.metrics),
+        matched_entities=list(query_plan.entities),
+        requested_dimensions=list(query_plan.dimensions),
+        filters=list(query_plan.filters),
+        time_context=query_plan.time_context,
+        version_context=query_plan.version_context,
+        requested_sort=list(query_plan.sort),
+        requested_limit=query_plan.limit,
+        analysis_mode=query_plan.analysis_mode,
+        subject_domain=query_plan.subject_domain,
+        has_follow_up_cue=False,
+        has_explicit_slots=bool(
+            query_plan.metrics
+            or query_plan.dimensions
+            or query_plan.filters
+            or (query_plan.time_context and query_plan.time_context.grain != "unknown")
+            or query_plan.version_context is not None
+            or query_plan.sort
+            or query_plan.limit is not None
+            or query_plan.analysis_mode is not None
+        ),
+    )
+
+
+def _resolve_sql_generation_intent(request: SqlGenerationRequest) -> QueryIntent:
+    if request.query_intent is not None:
+        return request.query_intent
+
+    query_plan = request.query_plan
+    base_intent = _query_intent_from_query_plan(query_plan)
+    if request.question:
+        return base_intent.model_copy(
+            update={
+                "normalized_question": request.question.strip().lower(),
+            }
+        )
+    return base_intent
 
 
 @router.post("/classify", response_model=ClassificationResponse)
@@ -134,7 +177,8 @@ def generate_sql(
     generated_sql = None
     skip_warning = _sql_skip_warning(query_plan)
     if not plan_errors and skip_warning is None:
-        sql_prompt = container.prompt_builder.build_sql_prompt(query_plan)
+        retrieval = container.retrieval_service.retrieve(_resolve_sql_generation_intent(request))
+        sql_prompt = container.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval)
         generated_sql = container.llm_client.generate_sql_hint(sql_prompt)
     required_filter_fields: list[str] = []
     sql_errors: list[str] = []

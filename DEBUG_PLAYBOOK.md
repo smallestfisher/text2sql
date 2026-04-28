@@ -32,7 +32,7 @@
 
 ## 3. 一个问题进来后，先看哪条链路
 
-一次 `POST /api/chat/query` 的关键步骤大致是：
+一次 `POST /api/chat/query/stream` 的关键步骤大致是：
 
 1. 读取当前 `session_state`
 2. 提取指标、实体、时间、版本和 follow-up 信号
@@ -66,7 +66,7 @@
 
 推荐按这条路径排：
 
-1. 在前端工作台或 `POST /api/chat/query` 复现问题
+1. 在前端工作台或 `POST /api/chat/query/stream` 复现问题
 2. 看 `GET /api/chat/sessions/{session_id}/workspace`
 3. 看 `GET /api/chat/traces/{trace_id}`、`/sql-audit`、`/retrieval`
 4. 历史问题优先走 `POST /api/admin/runtime/query-logs/{trace_id}/replay`
@@ -292,7 +292,7 @@
 1. `POST /api/query/plan`
 2. `POST /api/query/sql`
 3. `POST /api/query/execute`
-4. `POST /api/chat/query`
+4. `POST /api/chat/query/stream`
 5. `GET /api/chat/sessions/{session_id}/workspace`
 6. `POST /api/admin/runtime/query-logs/{trace_id}/replay`
 
@@ -336,8 +336,21 @@
 
 - `examples/nl2sql_examples.template.json` 只收真实问题、真实 trace、且 SQL 与业务结果都人工确认后的样例
 - `eval/evaluation_cases.json` 也只保留真实问题、真实 trace 或真实 replay 沉淀出的 case
+- example 会参与检索、管理和调试证据，并在命中时以 `retrieved_examples` 形式进入 SQL prompt
+- SQL prompt 同时保留内置场景模板 few-shot，用于 demand 横表、plan_actual 对比等专项结构约束
 
 不要再维护假设样本。
+
+### 9.1.1 Example 格式约束
+
+- `coverage_tags` 至少包含 `real`、业务域和关键口径标签
+- `result_shape` 用结构语义，不用随意命名：
+  - 单维分组：直接写维度名，例如 `biz_month`
+  - 多维分组：使用 `_by_` 连接
+  - 无维度但有指标：`metric_only`
+- 新样例优先通过 `materialize-example` 物化，再补充必要的 `notes`
+- `materialize-example` 写入后当前会立即刷新 retrieval 索引；通常不需要重启服务
+- 如果一条样例会误导同域其他问题，即使来源真实，也不应该继续保留在 example 集里
 
 ### 9.2 推荐沉淀流程
 
@@ -358,22 +371,15 @@
 
 ---
 
-## 10. 离线回归怎么用
+## 10. Eval / Replay 怎么用
 
-在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以先跑离线回归。
+当前不再维护离线 planner-only 回归脚本。问题回归优先走真实链路：
 
-常用命令：
-
-```bash
-python3 backend/offline_regression.py --failures-only
-```
-
-只跑指定 case：
-
-```bash
-python3 backend/offline_regression.py \
-  --case-id eval_real_plan_actual_mdl_input_panel_top10_001
-```
+1. 先在前端或 `POST /api/chat/query/stream` 复现问题
+2. 记录 `trace_id`
+3. 优先 replay 该 trace
+4. 若值得长期保留，再 materialize 成 eval case
+5. 用在线 eval 批量回归这些真实 case
 
 语义配置 lint：
 
@@ -383,10 +389,9 @@ python3 backend/domain_config_lint.py
 
 说明：
 
-- 离线回归不会连接数据库
-- 不会写 runtime 审计表
-- 当前主要覆盖 `classification / query_plan`
-- LLM-first SQL 生成与 SQL 校验仍要在 live 或 replay 链路验证
+- `eval/evaluation_cases.json` 继续保留，但定位是在线 eval / replay case 集
+- LLM intent、SQL 生成、SQL 校验和执行结果应在 live / replay / eval 链路验证
+- 不再单独维护离线 planner-only 回归入口
 
 ---
 

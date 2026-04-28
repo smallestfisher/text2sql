@@ -1392,7 +1392,7 @@ function AdminView(props: {
                     </div>
                   </div>
                   <div className="mini-tags">
-                    <span className="mini-tag">{log.answer_status || "unknown"}</span>
+                    <span className="mini-tag">{describeResponseStatus(log.answer_status || "unknown")}</span>
                     <span className="mini-tag">{String(log.row_count ?? 0)} rows</span>
                     {notesChars ? <span className="mini-tag">{notesChars}</span> : null}
                     {fewShotUsed ? <span className="mini-tag">{fewShotUsed}</span> : null}
@@ -1430,7 +1430,7 @@ function AdminView(props: {
                   </div>
                 </div>
                 <div className="mini-tags">
-                  <span className="mini-tag">{replayAnswer?.status || "unknown"}</span>
+                  <span className="mini-tag">{describeResponseStatus(replayAnswer?.status || "unknown")}</span>
                   <span className="mini-tag">{String(replayExecution?.row_count ?? 0)} rows</span>
                 </div>
               </div>
@@ -1458,7 +1458,7 @@ function AdminView(props: {
                 </div>
                 <div className="compact-stat">
                   <span>执行状态</span>
-                  <strong>{replayExecution?.status || "unknown"}</strong>
+                  <strong>{describeResponseStatus(replayExecution?.status || "unknown")}</strong>
                 </div>
                 <div className="compact-stat">
                   <span>Prompt上下文</span>
@@ -1585,9 +1585,9 @@ function ConversationResultCard(props: {
   const previewColumns = (execution?.columns || []).slice(0, 4);
   const previewRows = (execution?.rows || []).slice(0, 5);
   const canDownload = Boolean(
-    previewRows.length
-    && props.token
-    && props.artifact.trace?.trace_id,
+    props.token
+    && props.artifact.trace?.trace_id
+    && (response?.sql || props.artifact.sql_audit?.sql_text),
   );
 
   return (
@@ -1601,7 +1601,7 @@ function ConversationResultCard(props: {
         <div className="message-result-actions">
           {props.canInspect ? (
             <button className="secondary-button message-result-button" type="button" onClick={props.onSelect}>
-              定位详情
+              查看详情
             </button>
           ) : null}
           {canDownload ? (
@@ -1684,7 +1684,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       <div className="detail-card accent-card">
         <div className="panel-row">
           <div className="detail-title">回答</div>
-          {execution?.rows?.length && props.token && props.latestTrace ? (
+          {props.token && props.latestTrace && props.latestResponse.sql ? (
             <button
               className="secondary-button"
               type="button"
@@ -1852,7 +1852,7 @@ function TracePanel(props: {
             <div className="trace-step" key={`${step.name}-${index}`}>
               <div className="trace-step-head">
                 <div className="trace-step-name">{step.name}</div>
-                <div className="trace-step-status">{step.status}</div>
+                <div className="trace-step-status">{describeResponseStatus(step.status)}</div>
               </div>
               {step.detail ? <div className="trace-step-copy">{step.detail}</div> : null}
               {step.metadata && Object.keys(step.metadata).length ? (
@@ -2211,8 +2211,29 @@ function describeResponseStatus(status: string) {
   if (["success", "completed", "ok"].includes(normalized)) {
     return "已完成";
   }
-  if (["no_data", "empty"].includes(normalized)) {
+  if (["no_data", "empty", "empty_result"].includes(normalized)) {
     return "无结果";
+  }
+  if (["timeout"].includes(normalized)) {
+    return "执行超时";
+  }
+  if (["blocked"].includes(normalized)) {
+    return "已拦截";
+  }
+  if (["not_configured"].includes(normalized)) {
+    return "未配置";
+  }
+  if (["sql_missing"].includes(normalized)) {
+    return "SQL缺失";
+  }
+  if (["permission_denied"].includes(normalized)) {
+    return "无权限";
+  }
+  if (["db_error"].includes(normalized)) {
+    return "数据库错误";
+  }
+  if (["stub"].includes(normalized)) {
+    return "规划完成";
   }
   if (["clarification_needed"].includes(normalized)) {
     return "需澄清";
@@ -2220,8 +2241,17 @@ function describeResponseStatus(status: string) {
   if (["skipped"].includes(normalized)) {
     return "已跳过";
   }
+  if (["accepted"].includes(normalized)) {
+    return "已接收";
+  }
+  if (["pending"].includes(normalized)) {
+    return "待处理";
+  }
   if (["failed", "error", "invalid", "denied"].includes(normalized)) {
     return "失败";
+  }
+  if (["completed_with_warning"].includes(normalized)) {
+    return "已完成，有告警";
   }
   return status;
 }

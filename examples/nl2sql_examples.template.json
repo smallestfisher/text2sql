@@ -6,6 +6,7 @@
     "intent": "查询 2026 年 MDL 工厂投入型号 top10 及其 panel 物量",
     "scenario": "real_debug_case",
     "coverage_tags": [
+      "real",
       "plan_actual",
       "production_actuals",
       "act_type",
@@ -51,7 +52,7 @@
     ],
     "join_path": [],
     "sql": "SELECT product_ID, SUM(Panel_qty) AS actual_input_panel_qty FROM production_actuals WHERE work_date BETWEEN '2026-01-01' AND '2026-12-31' AND FACTORY = 'MDL' AND act_type = '投入' GROUP BY product_ID ORDER BY actual_input_panel_qty DESC LIMIT 10;",
-    "result_shape": "top_n_table",
+    "result_shape": "stage_product_id",
     "notes": "真实调试样例。LLM 生成 SQL 已经按生产实绩表、act_type=投入、Panel_qty 物量口径校验通过。"
   },
   {
@@ -61,6 +62,7 @@
     "intent": "查询 2026 年 2 月 Array 工厂审批版投入物量、实际投入物量、Gap 和达成率",
     "scenario": "real_debug_case",
     "coverage_tags": [
+      "real",
       "plan_actual",
       "monthly_plan_approved",
       "production_actuals",
@@ -110,7 +112,7 @@
     ],
     "join_path": [],
     "sql": "WITH approved_input AS (SELECT plan_month AS biz_month, factory_code AS factory, SUM(target_IN_glass_qty) AS approved_input_qty FROM monthly_plan_approved WHERE plan_month = '2026-02' AND factory_code = 'ARRAY' GROUP BY plan_month, factory_code), actual_input AS (SELECT DATE_FORMAT(work_date, '%Y-%m') AS biz_month, FACTORY AS factory, SUM(GLS_qty) AS actual_input_qty FROM production_actuals WHERE work_date BETWEEN '2026-02-01' AND '2026-02-28' AND FACTORY = 'ARRAY' AND act_type = '投入' GROUP BY DATE_FORMAT(work_date, '%Y-%m'), FACTORY) SELECT approved_input.biz_month AS biz_month, approved_input.factory AS factory, approved_input.approved_input_qty, COALESCE(actual_input.actual_input_qty, 0) AS actual_input_qty, COALESCE(actual_input.actual_input_qty, 0) - approved_input.approved_input_qty AS input_gap_qty, CASE WHEN approved_input.approved_input_qty = 0 THEN NULL ELSE COALESCE(actual_input.actual_input_qty, 0) / approved_input.approved_input_qty END AS input_achievement_rate FROM approved_input LEFT JOIN actual_input ON approved_input.biz_month = actual_input.biz_month AND approved_input.factory = actual_input.factory ORDER BY approved_input.biz_month LIMIT 200;",
-    "result_shape": "comparison_table",
+    "result_shape": "biz_month",
     "notes": "真实调试样例。该问题要求同时返回审批投入、实际投入、Gap 和达成率；Array 口径默认使用 GLS_qty 与 target_IN_glass_qty。"
   },
   {
@@ -163,7 +165,7 @@
     ],
     "join_path": [],
     "sql": "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 5), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 2 MONTH), '%Y%m') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 3 MONTH), '%Y%m') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 4 MONTH), '%Y%m') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 5 MONTH), '%Y%m') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 6 MONTH), '%Y%m') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month = '202604' AND PM_VERSION IN (SELECT PM_VERSION FROM latest_versions) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1;",
-    "result_shape": "top_1_table",
+    "result_shape": "FGCODE",
     "notes": "真实调试样例。当前记录的是 live LLM 生成出的 demand 横表展开 SQL。"
   },
   {
@@ -217,7 +219,7 @@
     ],
     "join_path": [],
     "sql": "WITH latest_version AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 1), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CUSTOMER, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 2 MONTH), '%Y%m') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 3 MONTH), '%Y%m') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 4 MONTH), '%Y%m') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 5 MONTH), '%Y%m') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 6 MONTH), '%Y%m') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT demand_month, SUM(COALESCE(demand_qty, 0)) AS ttl_demand_qty FROM demand_unpivot WHERE PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_month BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y%m') AND DATE_FORMAT(CURDATE(), '%Y%m') GROUP BY demand_month ORDER BY demand_month;",
-    "result_shape": "monthly_series",
+    "result_shape": "biz_month",
     "notes": "真实调试样例。当前校验目标是最新 1 版 P 版需求 + 最近 6 个月 + 月度 total 需求物量的语义解析与 SQL 结构。"
   }
 ]

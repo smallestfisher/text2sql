@@ -24,6 +24,8 @@ class PlanValidationRequest(BaseModel):
 
 
 class SqlGenerationRequest(BaseModel):
+    question: str | None = None
+    query_intent: QueryIntent | None = None
     query_plan: QueryPlan
     user_context: UserContext | None = None
 

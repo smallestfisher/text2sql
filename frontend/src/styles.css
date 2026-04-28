@@ -1324,6 +1324,14 @@ button {
   display: grid;
   gap: 6px;
   padding: 14px;
+  min-width: 0;
+}
+
+.compact-stat strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .result-table-wrap {

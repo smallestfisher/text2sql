@@ -316,23 +316,32 @@ class QueryPlanner:
         filters = list(filters or [])
         requested_dimensions = list(requested_dimensions or [])
         sort = list(sort or [])
+        if matched_metrics:
+            resolved_sort: list[SortItem] = []
+            for item in sort:
+                if item.field == "__matched_metric__":
+                    resolved_field = self.semantic_runtime.metric_column(matched_metrics[0])
+                    resolved_sort.append(SortItem(field=resolved_field, order=item.order))
+                else:
+                    resolved_sort.append(item)
+            sort = resolved_sort
         if limit is None:
             limit = self.semantic_runtime.default_limit(classification.subject_domain)
 
         subject_domain = classification.subject_domain
+        dimension_time_grain = getattr(time_context, "grain", "unknown")
+        if limit is not None and sort:
+            dimension_time_grain = "unknown"
         resolved_dimensions = self.semantic_runtime.suggest_dimensions(
             subject_domain=subject_domain,
-            metrics=matched_metrics,
             requested_dimensions=requested_dimensions,
-            analysis_mode=analysis_mode,
-            limit=limit,
-            sort=sort,
+            matched_entities=matched_entities,
+            filter_fields={item.field for item in filters},
+            time_grain=dimension_time_grain,
         )
-        tables = self.semantic_runtime.select_tables(
-            subject_domain=subject_domain,
+        tables = self.semantic_runtime.resolve_tables_for_plan(
+            domain_name=subject_domain,
             metrics=matched_metrics,
-            dimensions=resolved_dimensions,
-            filters=filters,
         )
         query_plan = QueryPlan(
             subject_domain=subject_domain,

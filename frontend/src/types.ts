@@ -386,7 +386,6 @@ export interface RuntimeStatus {
   llm: Record<string, unknown>;
   vector_retrieval: Record<string, unknown>;
   retrieval_corpus: Record<string, unknown>;
-  classification: Record<string, unknown>;
   sql_ast: Record<string, unknown>;
 }
 

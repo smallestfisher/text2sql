@@ -9,6 +9,8 @@ from backend.app.config import DOMAIN_CONFIG_PATH
 
 
 class DomainConfigLoader:
+    """Loads the semantic config manifest and merges included fragments."""
+
     def __init__(self, domain_config_path=DOMAIN_CONFIG_PATH) -> None:
         self.domain_config_path = domain_config_path
 
@@ -53,6 +55,7 @@ class DomainConfigLoader:
         for include in includes:
             if not isinstance(include, str) or not include.strip():
                 raise ValueError(f"domain config include must be a non-empty string: {resolved_path}")
+            # Includes are resolved relative to the manifest or fragment file itself.
             included_path = (resolved_path.parent / include).resolve()
             included_payload = self._load_document(included_path, visited=(*visited, resolved_path))
             merged = self._merge_values(merged, included_payload, path=included_path)

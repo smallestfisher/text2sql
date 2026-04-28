@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
-from backend.app.config import BUSINESS_KNOWLEDGE_PATH, TABLES_METADATA_PATH
+from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
+from backend.app.models.example_library import ExampleRecord
 from backend.app.models.query_plan import QueryPlan
+from backend.app.models.retrieval import RetrievalContext
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -217,7 +219,11 @@ class PromptBuilder:
             },
         }
 
-    def build_sql_prompt(self, query_plan: QueryPlan) -> dict:
+    def build_sql_prompt(
+        self,
+        query_plan: QueryPlan,
+        retrieval: RetrievalContext | None = None,
+    ) -> dict:
         selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
         source_schemas = {
             table_name: self._tables_metadata.get(table_name, {})
@@ -225,11 +231,12 @@ class PromptBuilder:
             if table_name in self._tables_metadata
         }
         field_resolution = self._field_resolution(query_plan)
+        retrieved_examples = self._select_retrieved_examples(query_plan, retrieval)
         sql_preferences = [
             "以 query_plan.tables 为真实数据库对象的首要依据。",
             "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。",
         ]
-        few_shot = None
+        scenario_few_shot = None
         if self._is_demand_plan(query_plan, selected_sources):
             sql_preferences = [
                 "对于 p_demand/v_demand 这类横向需求表，MONTH 是起始需求月份。REQUIREMENT_QTY 对应 base MONTH，NEXT_REQUIREMENT 对应 base MONTH 加 1 个月，LAST_REQUIREMENT 对应 base MONTH 加 2 个月，MONTH4 到 MONTH7 对应 base MONTH 加 3 到 6 个月。",
@@ -246,7 +253,7 @@ class PromptBuilder:
                     "对于 ttl/total 类型的月度需求问题，外层 SELECT 应返回 demand_month 和聚合后的 demand_qty；GROUP BY 必须是 demand_month；ORDER BY 应按 demand_month。",
                     *sql_preferences,
                 ]
-                few_shot = {
+                scenario_few_shot = {
                     "question_pattern": "最新p版，最近6个月的ttl需求物量",
                     "sql_shape": [
                         "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 1)",
@@ -255,7 +262,7 @@ class PromptBuilder:
                     ],
                 }
             else:
-                few_shot = {
+                scenario_few_shot = {
                     "question_pattern": "最新N版P版需求中，YYYYMM需求最多的FGCODE是哪一个",
                     "sql_shape": [
                         "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT N)",
@@ -284,7 +291,7 @@ class PromptBuilder:
                 "优先先分别按月份、工厂聚合审批侧和实际侧，再做 JOIN 计算派生指标。",
                 *sql_preferences,
             ]
-            few_shot = {
+            scenario_few_shot = {
                 "question_pattern": "2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
                 "sql_shape": [
                     "WITH approved_input AS (SELECT plan_month AS biz_month, factory_code AS factory, SUM(target_IN_glass_qty) AS approved_input_qty FROM monthly_plan_approved WHERE plan_month = 'YYYY-MM' AND factory_code = 'ARRAY' GROUP BY plan_month, factory_code)",
@@ -304,7 +311,9 @@ class PromptBuilder:
             "tables_metadata_count": len(source_schemas),
             "business_notes_chars": len(business_notes),
             "business_notes_source": business_notes_source,
-            "few_shot_used": few_shot is not None,
+            "few_shot_used": scenario_few_shot is not None or bool(retrieved_examples),
+            "retrieved_example_count": len(retrieved_examples),
+            "retrieved_example_ids": [item["id"] for item in retrieved_examples],
             "subject_domain": query_plan.subject_domain,
             "business_knowledge_entry_ids": self._selected_business_knowledge_ids(query_plan, selected_sources),
         }
@@ -334,7 +343,10 @@ class PromptBuilder:
                     "只返回 SQL，不要返回 markdown 或解释。",
                 ],
                 "sql_preferences": sql_preferences,
-                "few_shot": few_shot,
+                "few_shot": {
+                    "scenario_template": scenario_few_shot,
+                    "retrieved_examples": retrieved_examples,
+                },
             },
         }
 
@@ -343,6 +355,20 @@ class PromptBuilder:
             return json.loads(TABLES_METADATA_PATH.read_text(encoding="utf-8"))
         except Exception:
             return {}
+
+    def _load_examples(self) -> dict[str, ExampleRecord]:
+        try:
+            payload = json.loads(EXAMPLES_TEMPLATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        examples: dict[str, ExampleRecord] = {}
+        for item in payload if isinstance(payload, list) else []:
+            try:
+                example = ExampleRecord(**item)
+            except Exception:
+                continue
+            examples[example.id] = example
+        return examples
 
     def _load_business_knowledge(self) -> list[dict]:
         try:
@@ -458,6 +484,43 @@ class PromptBuilder:
         entry_keywords = {str(item).lower() for item in entry.get("keywords", []) if item}
         score += sum(1 for term in terms if term in entry_keywords)
         return score
+
+    def _select_retrieved_examples(
+        self,
+        query_plan: QueryPlan,
+        retrieval: RetrievalContext | None,
+    ) -> list[dict]:
+        if retrieval is None:
+            return []
+
+        examples = self._load_examples()
+        selected: list[dict] = []
+        for hit in retrieval.hits:
+            if hit.source_type != "example":
+                continue
+            example = examples.get(hit.source_id)
+            if example is None:
+                continue
+            if example.subject_domain != query_plan.subject_domain:
+                continue
+            selected.append(
+                {
+                    "id": example.id,
+                    "question": example.question,
+                    "intent": example.intent,
+                    "tables": example.tables,
+                    "metrics": example.metrics,
+                    "dimensions": example.dimensions,
+                    "filters": [item.model_dump(mode="json") for item in example.filters],
+                    "sql": example.sql,
+                    "result_shape": example.result_shape,
+                    "notes": example.notes,
+                    "matched_features": hit.matched_features,
+                }
+            )
+            if len(selected) >= 2:
+                break
+        return selected
 
     def _is_demand_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> bool:
         sources = set(selected_sources or []) | set(query_plan.tables)

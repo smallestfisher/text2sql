@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Manifest entry for semantic/domain_config/* fragments.
 DOMAIN_CONFIG_PATH = REPO_ROOT / "semantic" / "domain_config.json"
 QUERY_PLAN_SCHEMA_PATH = REPO_ROOT / "schemas" / "query_plan.schema.json"
 SESSION_STATE_SCHEMA_PATH = REPO_ROOT / "schemas" / "session_state.schema.json"

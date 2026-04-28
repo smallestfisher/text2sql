@@ -45,6 +45,11 @@
    - 只做 deterministic planning / compile / sanitize
    - 不再承担高层语义猜测职责
 
+补充说明：
+
+- 当前 retrieval / example 资产仍然存在，但它们不改变上述理解主链路
+- example 会参与检索，并在 SQL 生成阶段以 `retrieved_examples` 形式进入 prompt；同时保留内置场景模板 few-shot
+
 ---
 
 ## 3. 已完成项

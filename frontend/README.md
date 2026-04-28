@@ -10,6 +10,7 @@
 - 中间：消息流、欢迎态快捷问题卡片、输入框
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
 - 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、反馈和 replay
+- 管理员通过 runtime trace 物化 example 后，新样例当前可立即参与后端 retrieval / SQL prompt；通常不需要重启服务
 
 ## 当前交互规则
 
@@ -28,6 +29,11 @@
 - 前几列和前几行预览
 - `查看详情`
 - `下载`
+
+说明：
+
+- 前端结果卡和详情侧栏默认展示用户友好的中文状态文案，例如 `无结果`、`需澄清`
+- 原始后端状态枚举仍然保留在 trace / runtime log / SQL audit 等调试接口中
 
 点击 `查看详情` 后，会把右侧详情面板切换到该消息对应的 `trace_id`。
 
@@ -102,7 +108,7 @@ npm run build
 - `GET /api/chat/sessions`
 - `DELETE /api/chat/sessions/{session_id}`
 - `GET /api/chat/sessions/{session_id}/workspace`
-- `POST /api/chat/query`
+- `POST /api/chat/query/stream`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/export`
 - `GET /api/admin/runtime/status`
