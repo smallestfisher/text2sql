@@ -5,7 +5,6 @@ import json
 from backend.app.config import BUSINESS_KNOWLEDGE_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
 from backend.app.models.query_plan import QueryPlan
-from backend.app.models.retrieval import RetrievalContext
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -17,54 +16,6 @@ class PromptBuilder:
         self.semantic_runtime = semantic_runtime
         self._tables_metadata = self._load_tables_metadata()
         self._business_knowledge = self._load_business_knowledge()
-
-    def build_query_plan_prompt(
-        self,
-        question: str,
-        query_intent: QueryIntent,
-        retrieval: RetrievalContext,
-        base_plan: QueryPlan | None = None,
-        session_state: SessionState | None = None,
-    ) -> dict:
-        profile = self._query_profile(query_intent.subject_domain)
-        return {
-            "task": "query_plan_generation",
-            "question": question,
-            "subject_domain": query_intent.subject_domain,
-            "metrics": query_intent.matched_metrics,
-            "entities": query_intent.matched_entities,
-            "session_semantic_diff": self._session_semantic_diff(query_intent, session_state),
-            "retrieval_terms": retrieval.retrieval_terms,
-            "retrieval_hits": [hit.model_dump() for hit in retrieval.hits],
-            "query_profile": profile,
-            "domain_tables": self._domain_tables(query_intent.subject_domain),
-            "base_plan": base_plan.model_dump() if base_plan is not None else None,
-            "allowed_fields": sorted(self._allowed_fields(base_plan)) if base_plan is not None else [],
-            "session_state": session_state.model_dump() if session_state is not None else None,
-            "instructions": {
-                "return_format": "json",
-                "constraints": [
-                    "优先使用真实物理表，不要优先依赖数据库预建分析对象。",
-                    "数据库预建分析对象只作为辅助提示，真实数据库里可能并不存在。",
-                    "只能使用系统已登记的 domain、真实表、指标和字段。",
-                    "尊重 base_plan，只在确有必要时微调 filters、dimensions、sort、version_context 和 limit。",
-                    "不要发明允许列表之外的新指标、新字段或新表。",
-                    "如果是追问，且当前问题只是在细化筛选或时间范围，应保留之前的主题。",
-                ],
-                "fields": [
-                    "subject_domain",
-                    "tables",
-                    "metrics",
-                    "dimensions",
-                    "filters",
-                    "version_context",
-                    "sort",
-                    "limit",
-                    "join_path",
-                    "reason",
-                ],
-            },
-        }
 
     def build_classification_prompt(
         self,

@@ -62,9 +62,6 @@ class SemanticRuntime:
         messages = self.question_understanding.get("clarification_questions", {})
         return messages.get(key, default)
 
-    def classification_rules(self) -> list[dict]:
-        classification = self.question_understanding.get("classification", {})
-        return list(classification.get("rules", []))
 
     def metric_resolution_rules(self) -> list[dict]:
         return list(self.question_understanding.get("metric_resolution_rules", []))
@@ -114,7 +111,7 @@ class SemanticRuntime:
         profile = self.query_profile(domain_name)
         selection = profile.get("table_selection", {})
         prefer_metric_tables = bool(selection.get("prefer_metric_tables", True))
-        fallback_to_domain_tables = bool(selection.get("fallback_to_domain_tables", True))
+        use_domain_tables_when_metric_tables_missing = bool(selection.get("use_domain_tables_when_metric_tables_missing", True))
 
         if prefer_metric_tables and metrics:
             ordered_tables: list[str] = []
@@ -125,21 +122,21 @@ class SemanticRuntime:
             if ordered_tables:
                 return ordered_tables
 
-        if fallback_to_domain_tables:
+        if use_domain_tables_when_metric_tables_missing:
             return self.domain_tables(domain_name)
         return []
 
-    def default_limit(self, domain_name: str, fallback: int = 200) -> int:
+    def default_limit(self, domain_name: str, default_value: int = 200) -> int:
         profile = self.query_profile(domain_name)
-        return int(profile.get("default_limit", fallback))
+        return int(profile.get("default_limit", default_value))
 
-    def max_limit(self, domain_name: str, fallback: int = 200) -> int:
+    def max_limit(self, domain_name: str, default_value: int = 200) -> int:
         profile = self.query_profile(domain_name)
-        return int(profile.get("max_limit", fallback))
+        return int(profile.get("max_limit", default_value))
 
-    def clamp_limit(self, domain_name: str, limit: int | None, fallback: int = 200) -> int:
-        default_limit = self.default_limit(domain_name, fallback=fallback)
-        max_limit = self.max_limit(domain_name, fallback=default_limit)
+    def clamp_limit(self, domain_name: str, limit: int | None, default_value: int = 200) -> int:
+        default_limit = self.default_limit(domain_name, default_value=default_value)
+        max_limit = self.max_limit(domain_name, default_value=default_limit)
         if limit is None or limit <= 0:
             return default_limit
         return min(limit, max_limit)
@@ -172,7 +169,7 @@ class SemanticRuntime:
         compiled.limit = self.clamp_limit(
             compiled.subject_domain,
             compiled.limit,
-            fallback=default_limit,
+            default_value=default_limit,
         )
         compiled = self.apply_domain_constraints(compiled)
         allowed_fields = self.allowed_fields_for_plan(compiled)
@@ -270,48 +267,6 @@ class SemanticRuntime:
                     continue
                 columns.add(token)
         return columns
-
-    def llm_plan_is_acceptable(self, candidate: QueryPlan, base_plan: QueryPlan) -> tuple[bool, list[str]]:
-        reasons: list[str] = []
-
-        if candidate.subject_domain == "unknown" and base_plan.subject_domain != "unknown":
-            reasons.append("llm plan lost known subject domain")
-
-        if base_plan.metrics and not candidate.metrics:
-            reasons.append("llm plan dropped all metrics")
-
-        if (
-            base_plan.version_context
-            and base_plan.version_context.value
-            and candidate.version_context is None
-        ):
-            reasons.append("llm plan dropped version context from base plan")
-
-        allowed_fields = self.allowed_fields_for_plan(candidate)
-        if allowed_fields:
-            bad_dimensions = [item for item in candidate.dimensions if item not in allowed_fields]
-            if bad_dimensions:
-                reasons.append("llm plan dimensions are outside allowed fields")
-            bad_filters = [item.field for item in candidate.filters if item.field not in allowed_fields]
-            if bad_filters:
-                reasons.append("llm plan filters are outside allowed fields")
-
-        if candidate.subject_domain != "unknown" and not candidate.tables:
-            reasons.append("llm plan does not provide tables")
-
-        if candidate.limit > self.max_limit(candidate.subject_domain, fallback=base_plan.limit):
-            reasons.append("llm plan limit exceeds configured maximum")
-
-        profile_version_field = self.query_profile(candidate.subject_domain).get("version_field")
-        if (
-            candidate.version_context
-            and candidate.version_context.field
-            and profile_version_field
-            and candidate.version_context.field != profile_version_field
-        ):
-            reasons.append("llm plan version field is not supported by domain configuration")
-
-        return not reasons, reasons
 
     def query_profile(self, domain_name: str) -> dict:
         return self.query_profiles.get(domain_name, {})
@@ -528,17 +483,7 @@ class SemanticRuntime:
                 hint_counter[domain] += int(hint.get("weight", 1))
 
         if hint_counter:
-            if (
-                session_state is not None
-                and requested_dimensions
-                and not matched_metrics
-                and not filters
-            ):
-                return session_state.subject_domain
             return hint_counter.most_common(1)[0][0]
-
-        if session_state and self.domain_inference.get("fallback_to_session", True):
-            return session_state.subject_domain
 
         return "unknown"
 

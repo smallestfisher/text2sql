@@ -359,7 +359,7 @@
     "clarification_questions": {
       "unknown_request": "请补充你要查询的主题、指标和时间范围，例如库存、计划投入或实际产出。",
       "missing_metric": "请补充要查询的指标，例如库存量、计划投入量、实际产出或销售业绩。",
-      "fallback": "请补充查询目标、时间范围或统计口径。"
+      "clarification": "请补充查询目标、时间范围或统计口径。"
     }
   }
 }

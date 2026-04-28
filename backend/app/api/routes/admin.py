@@ -224,9 +224,6 @@ def runtime_status(container: AppContainer = Depends(get_container)) -> dict:
         "llm": container.llm_client.health(),
         "vector_retrieval": container.vector_retriever.health(),
         "retrieval_corpus": container.retrieval_service.health(),
-        "classification": {
-            "llm_enabled": container.settings.classification_llm_enabled,
-        },
         "sql_ast": container.sql_ast_validator.health(),
     }
 

@@ -66,6 +66,6 @@
         ]
       }
     ],
-    "fallback_to_session": true
+    "inherit_session_domain_when_unspecified": false
   }
 }

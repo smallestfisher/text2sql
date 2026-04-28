@@ -92,11 +92,11 @@ class ChatResponseRestoreService:
         query_intent_payload = plan_metadata.get("query_intent") or plan_metadata.get("semantic_parse") or {}
         compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
 
-        fallback_state = session_state or SessionState(session_id=query_log.session_id or "session_pending")
+        restored_state = session_state or SessionState(session_id=query_log.session_id or "session_pending")
 
         classification = QuestionClassification(**{
             "question_type": classification_payload.get("question_type", query_log.question_type or "new"),
-            "subject_domain": classification_payload.get("subject_domain", query_log.subject_domain or fallback_state.subject_domain),
+            "subject_domain": classification_payload.get("subject_domain", query_log.subject_domain or restored_state.subject_domain),
             "inherit_context": classification_payload.get("inherit_context", False),
             "need_clarification": classification_payload.get("need_clarification", False),
             "reason": classification_payload.get("reason"),
@@ -122,8 +122,8 @@ class ChatResponseRestoreService:
         })
 
         query_plan_source = (
-            fallback_state.last_query_plan.model_dump(mode="json")
-            if fallback_state.last_query_plan is not None
+            restored_state.last_query_plan.model_dump(mode="json")
+            if restored_state.last_query_plan is not None
             else compiled_plan_payload
         )
         query_plan = QueryPlan(**{
@@ -144,7 +144,7 @@ class ChatResponseRestoreService:
             "reason_code": query_plan_source.get("reason_code", classification.reason_code),
             "analysis_mode": query_plan_source.get("analysis_mode"),
             "sort": query_plan_source.get("sort", []),
-            "limit": query_plan_source.get("limit", fallback_state.limit or 200),
+            "limit": query_plan_source.get("limit", restored_state.limit or 200),
             "reason": query_plan_source.get("reason", classification.reason),
         })
 
@@ -178,7 +178,7 @@ class ChatResponseRestoreService:
             summary=self._assistant_summary(messages, query_log.trace_id) or query_log.answer_status or "已恢复历史响应摘要。",
         )
 
-        execution = self._fallback_execution(
+        execution = self._restore_execution(
             query_log=query_log,
             sql_audit=sql_audit,
             execute_metadata=execute_metadata,
@@ -195,10 +195,10 @@ class ChatResponseRestoreService:
             plan_validation=plan_validation,
             sql_validation=sql_validation,
             execution=execution,
-            next_session_state=fallback_state,
+            next_session_state=restored_state,
         )
 
-    def _fallback_execution(
+    def _restore_execution(
         self,
         *,
         query_log: RuntimeQueryLogRecord,

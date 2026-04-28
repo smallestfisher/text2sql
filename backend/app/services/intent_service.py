@@ -16,7 +16,7 @@ class IntentService:
         self.llm_client = llm_client
         self.prompt_builder = prompt_builder
 
-    def generate_shadow_intent(
+    def generate_intent(
         self,
         *,
         question: str,
@@ -26,7 +26,7 @@ class IntentService:
         if self.llm_client is None or self.prompt_builder is None:
             return {
                 "status": "skipped",
-                "reason": "intent shadow dependencies unavailable",
+                "reason": "intent dependencies unavailable",
                 "intent": None,
                 "raw": None,
             }
@@ -40,7 +40,7 @@ class IntentService:
         if hint.get("mode") != "live":
             return {
                 "status": "stub",
-                "reason": hint.get("note") or "intent shadow llm unavailable",
+                "reason": hint.get("note") or "intent llm unavailable",
                 "intent": None,
                 "raw": hint,
             }

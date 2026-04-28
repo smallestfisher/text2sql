@@ -95,10 +95,10 @@ class ConversationOrchestrator:
             classification = planning_trace["classification"]
             planning_warnings = planning_trace["warnings"]
             parser_intent = planning_trace["parser_intent"]
-            shadow_intent = planning_trace["shadow_intent"]
-            normalized_shadow_intent = planning_trace["normalized_shadow_intent"]
+            llm_intent = planning_trace["llm_intent"]
+            normalized_intent = planning_trace["normalized_intent"]
             intent_selection = planning_trace["intent_selection"]
-            shadow_diff = planning_trace["shadow_diff"]
+            llm_diff = planning_trace["llm_diff"]
             normalized_diff = planning_trace["normalized_diff"]
             semantic_diff = planning_trace["semantic_diff"]
             logger.info(
@@ -126,24 +126,24 @@ class ConversationOrchestrator:
             )
             self.audit_service.append_step(
                 trace,
-                "shadow_intent",
-                shadow_intent["status"],
-                shadow_intent.get("reason") or shadow_intent["status"],
+                "llm_intent",
+                llm_intent["status"],
+                llm_intent.get("reason") or llm_intent["status"],
                 metadata={
-                    "intent": shadow_intent["intent"].model_dump(mode="json") if shadow_intent.get("intent") is not None else None,
-                    "raw": shadow_intent.get("raw"),
-                    "diff_vs_parser": shadow_diff,
+                    "intent": llm_intent["intent"].model_dump(mode="json") if llm_intent.get("intent") is not None else None,
+                    "raw": llm_intent.get("raw"),
+                    "diff_vs_parser": llm_diff,
                 },
             )
             self.audit_service.append_step(
                 trace,
                 "normalized_intent",
-                normalized_shadow_intent["status"],
-                ", ".join(normalized_shadow_intent.get("warnings", [])) or normalized_shadow_intent["status"],
+                normalized_intent["status"],
+                ", ".join(normalized_intent.get("warnings", [])) or normalized_intent["status"],
                 metadata={
-                    "intent": normalized_shadow_intent["intent"].model_dump(mode="json") if normalized_shadow_intent.get("intent") is not None else None,
-                    "warnings": normalized_shadow_intent.get("warnings", []),
-                    "diff_vs_shadow": normalized_diff,
+                    "intent": normalized_intent["intent"].model_dump(mode="json") if normalized_intent.get("intent") is not None else None,
+                    "warnings": normalized_intent.get("warnings", []),
+                    "diff_vs_llm_intent": normalized_diff,
                     "intent_selection": intent_selection,
                 },
             )
@@ -227,44 +227,6 @@ class ConversationOrchestrator:
             )
             self._publish_progress(trace.trace_id, event_type="stage", stage="retrieval", status="completed", detail=f"{len(retrieval.hits)} hits")
 
-            query_plan_prompt = self.prompt_builder.build_query_plan_prompt(
-                question=request.question,
-                query_intent=query_intent,
-                retrieval=retrieval,
-                base_plan=query_plan,
-                session_state=session_state,
-            )
-            base_query_plan = query_plan.model_copy(deep=True)
-            llm_plan_hint = self.llm_client.generate_query_plan_hint(query_plan_prompt)
-            plan_hint_detail = "stub prompt built"
-            plan_hint_metadata = {
-                "mode": llm_plan_hint.get("mode"),
-                "model": llm_plan_hint.get("model"),
-                "attempt": llm_plan_hint.get("attempt"),
-            }
-            if llm_plan_hint.get("mode") == "live":
-                candidate_query_plan = self.query_plan_compiler.apply_llm_hint(query_plan, llm_plan_hint)
-                acceptable, rejection_reasons = self.query_plan_compiler.semantic_runtime.llm_plan_is_acceptable(
-                    candidate_query_plan,
-                    base_query_plan,
-                )
-                if acceptable:
-                    query_plan = candidate_query_plan
-                    plan_hint_detail = "live llm query plan hint accepted"
-                else:
-                    plan_hint_detail = "live llm query plan hint rejected"
-                    plan_hint_metadata["rejection_reasons"] = rejection_reasons
-                    warnings.append(
-                        "llm query plan hint rejected before compile: " + "; ".join(rejection_reasons)
-                    )
-            self.audit_service.append_step(
-                trace,
-                "build_query_plan_prompt",
-                "completed",
-                plan_hint_detail,
-                metadata=plan_hint_metadata,
-            )
-
             query_plan = self.query_plan_compiler.compile(query_plan=query_plan, retrieval=retrieval)
             logger.info(
                 "plan trace_id=%s tables=%s metrics=%s dimensions=%s",
@@ -289,21 +251,6 @@ class ConversationOrchestrator:
             )
             plan_errors = plan_result.errors
             plan_warnings = plan_result.warnings
-            if plan_errors and llm_plan_hint.get("mode") == "live":
-                fallback_plan = base_query_plan.model_copy(deep=True)
-                fallback_plan = self.query_plan_compiler.compile(query_plan=fallback_plan, retrieval=retrieval)
-                fallback_result = self.query_plan_validator.validate_detailed(
-                    query_plan=fallback_plan,
-                    domain_config=self.domain_config,
-                )
-                fallback_errors = fallback_result.errors
-                fallback_warnings = fallback_result.warnings
-                if not fallback_errors:
-                    warnings.append("llm query plan hint rejected; fallback to local planner result")
-                    query_plan = fallback_plan
-                    plan_errors = []
-                    plan_warnings = fallback_warnings
-                    plan_result = fallback_result
             warnings.extend(plan_warnings)
             logger.info(
                 "plan validation trace_id=%s valid=%s errors=%s warnings=%s",
@@ -456,7 +403,6 @@ class ConversationOrchestrator:
                 metadata={
                     "llm_sql_used": bool(sql_hint_metadata.get("used")),
                     "llm_sql_mode": sql_hint_metadata.get("mode"),
-                    "fallback_reason": sql_hint_metadata.get("fallback_reason"),
                     "error_count": len(sql_errors),
                     "warning_count": len(sql_warnings),
                     "errors": sql_errors,

@@ -3,7 +3,7 @@
 本文档描述当前工程的**真实运行架构**，目标是回答四类问题：
 
 - 系统里有哪些模块，它们各自负责什么
-- 一次真实提问从前端进入后端，经过哪些阶段，在哪些地方会终止或回退
+- 一次真实提问从前端进入后端，经过哪些阶段，在哪些地方会终止或被拦截
 - 运行时数据、会话状态、Trace、SQL 审计和前端工作台是如何串起来的
 - 后续调试、扩展或重构时，哪些边界可以动，哪些边界不应该破坏
 
@@ -28,9 +28,9 @@
 同时，问题理解层已经不再是纯 `parser/classifier/planner-first`：
 
 - `QueryIntentParser` 负责 shallow parse
-- `LLMIntentService` 负责 shadow intent
+- `LLMIntentService` 负责 LLM intent
 - `IntentNormalizer` 负责本地收口
-- `QuestionClassifier` 已切到 `LLM-primary + local fallback/hard guard`
+- `QuestionClassifier` 已切到 `LLM-primary + baseline arbitration + hard guard`
 - `QueryPlanner` 已回归 deterministic planner/compiler
 
 换句话说，这个系统不是：
@@ -227,7 +227,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 系统明确区分**业务查询库**和**运行时库**
 - 会话、trace、query log、feedback、eval 都是 runtime 数据
 - 主聊天流程不直接散落在路由里，而是统一走 orchestrator
-- intent shadow、intent primary、classifier LLM primary 都通过 settings 开关注入
+- 理解主链路当前默认启用 LLM intent 与 LLM classifier，不再依赖过渡开关
 
 ---
 
@@ -343,22 +343,19 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 当前理解链路已经演进为：
 
 1. `QueryIntentParser` 产出 shallow parse
-2. `LLMIntentService` 产出 shadow intent
+2. `LLMIntentService` 产出 LLM intent
 3. `IntentNormalizer` 收口 LLM intent
-4. `QueryPlanner` 选择 effective intent：`normalized` 或 `parser fallback`
+4. `QueryPlanner` 选择 effective intent：优先 `normalized`，不可用时直接保留 `parser`
 5. `QuestionClassifier` 基于 effective intent 做分类
 6. `QueryPlanner` 基于 effective intent + classification 生成 deterministic `QueryPlan`
 
 对应的核心开关有：
 
-- `INTENT_SHADOW_ENABLED`
-- `INTENT_PRIMARY_ENABLED`
-- `INTENT_FALLBACK_ENABLED`
 - `CLASSIFICATION_LLM_ENABLED`
 
 ### 6.1 QueryIntentParser
 
-`QueryIntentParser` 现在不再承担“最终理解器”职责，而是一个 shallow extractor。它负责先解析出高确定性信号，通常包括：
+`QueryIntentParser` 现在不再承担“最终理解器”职责，而是一个更纯的 shallow extractor。它只负责解析高确定性的显式信号，不再在 parser 层做 metric resolve、demand shortcut 或 session 继承。通常包括：
 
 - 命中的指标 `matched_metrics`
 - 命中的实体 `matched_entities`
@@ -385,7 +382,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 ### 6.2 LLMIntentService + IntentNormalizer
 
-`LLMIntentService` 不直接接管主链路，而是先生成 shadow intent。当前输出结构已经统一为 `StructuredIntent`，核心字段包括：
+`LLMIntentService` 直接接管主链路的高层语义理解。当前输出结构已经统一为 `StructuredIntent`，核心字段包括：
 
 - `subject_domain`
 - `metrics`
@@ -410,7 +407,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 当前系统会同时保留三份意图：
 
 - `parser_intent`
-- `shadow_intent`
+- `llm_intent`
 - `normalized_intent`
 
 并记录两组差异：
@@ -425,25 +422,20 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 ### 6.3 Intent 选择
 
-主链路是否采用 normalized intent，不再由 orchestrator 临时判断，而是统一由 `QueryPlanner` 决定。
+主链路统一由 `QueryPlanner` 完成：parser 提供基线，LLM intent 提供主理解，normalizer 收口后进入后续分类与规划。
 
 当前规则是：
 
-- 如果 `INTENT_PRIMARY_ENABLED=false`，固定使用 parser intent
-- 如果 normalized intent 不可用，且 `INTENT_FALLBACK_ENABLED=true`，回退到 parser intent
-- 如果 normalized intent 置信度过低，回退到 parser intent
-- 如果 normalized intent 没有任何可执行槽位，回退到 parser intent
+- 如果 normalized intent 不可用，系统保留 parser intent 作为最后的结构化输入基线
 - 否则使用 normalized intent 进入主链路
 
 当前 trace 中会显式记录：
 
 - `intent_selection.selected_source`
-- `intent_selection.fallback_used`
-- `intent_selection.fallback_reason`
 
 ### 6.4 QuestionClassifier
 
-`QuestionClassifier` 现在已经切成 `LLM-primary + local fallback/hard guard`。
+`QuestionClassifier` 现在已经切成 `LLM-primary + baseline arbitration + hard guard`。
 
 它仍然负责决定：
 
@@ -463,7 +455,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 1. 本地 hard guard
 2. LLM primary classification
-3. 本地 scoring fallback
+3. 本地 local classification 基线
 
 其中本地 hard guard 仍保留：
 
@@ -475,15 +467,15 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 在进入会话分类后：
 
-- 本地 scoring 仍会计算，但现在主要作为 `fallback_classification`
+- 本地 baseline 启发式仍会计算，但只作为 `baseline_classification` 仲裁基线
 - 只要 `CLASSIFICATION_LLM_ENABLED=true` 且有 session，就优先尝试 LLM classification
 - LLM 输出仍需通过本地 accept/reject 校验
-- 不可接受时回退到 scoring fallback
+- 不可接受时保留本地分类结果
 
 当前 trace / debug 中会显式记录：
 
 - `decision_source`
-- `fallback_classification`
+- `baseline_classification`
 - `score_details`
 - `score_gap`
 - `llm_hint`
@@ -605,7 +597,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 当前 trace 中，理解链路已经明确拆出这些步骤：
 
 - `parse_intent`
-- `shadow_intent`
+- `llm_intent`
 - `normalized_intent`
 - `classify_question`
 - `plan`
@@ -616,7 +608,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - LLM intent 补了什么
 - normalizer 去掉了什么
 - 最终选了哪份 intent 进入主链路
-- classifier 是走了 `llm_primary` 还是 `scoring_fallback`
+- classifier 是走了 `llm_primary` 还是 `baseline_selected`
 
 ---
 
@@ -666,7 +658,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 先在“SQL 生成前”阻断明显无效 plan
 - 让 LLM 生成 SQL 时拥有更稳定的输入边界
 
-如果 LLM query plan hint 导致 plan 校验失败，系统会尝试 fallback 回本地 planner 的结果，而不是盲信 LLM。
+planner 终版不再引入额外的 LLM query plan hint 改写链路；QueryPlan 由 deterministic planner/compiler 直接产出并校验。
 
 ---
 
@@ -676,13 +668,11 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 `LLMClient` 在主链路里承担三类调用：
 
-- `generate_query_plan_hint`
 - `generate_sql_hint`
 - `repair_sql`
 
 其中：
 
-- query plan hint 是对本地基础 plan 的轻微优化建议
 - SQL hint 是主 SQL 生成输出
 - repair 是在 validator 或执行器返回错误后的一次定向修复
 

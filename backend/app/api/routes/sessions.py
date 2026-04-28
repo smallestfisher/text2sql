@@ -28,7 +28,7 @@ def create_session(
     user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     session = container.session_service.create_session(
         user_id=user_context.user_id if user_context else None,

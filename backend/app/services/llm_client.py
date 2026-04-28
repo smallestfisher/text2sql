@@ -29,69 +29,12 @@ class LLMClient:
     def enabled(self) -> bool:
         return self.client is not None
 
-    def generate_query_plan_hint(self, prompt_payload: dict) -> dict:
-        if not self.enabled:
-            return {
-                "mode": "stub",
-                "model": self.model_name,
-                "note": "LLM is not connected; heuristic planner is active.",
-                "task": prompt_payload.get("task"),
-            }
-
-        system_prompt = (
-            "你是一个 Text2SQL 规划器。只返回紧凑 JSON。"
-            "不要输出 markdown。只保留你有把握的字段。"
-        )
-        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                content = self._complete(messages)
-                parsed = self._extract_json(content)
-                if parsed:
-                    parsed["mode"] = "live"
-                    parsed["model"] = self.model_name
-                    parsed["attempt"] = attempt
-                    return parsed
-                if attempt < self.max_retries:
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": content,
-                        }
-                    )
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "只返回合法 JSON，去掉所有解释性文字和 markdown 代码块。",
-                        }
-                    )
-            except Exception as exc:
-                if attempt >= self.max_retries:
-                    return {
-                        "mode": "stub",
-                        "model": self.model_name,
-                        "note": f"LLM call failed, fallback to heuristic planner: {exc}",
-                        "task": prompt_payload.get("task"),
-                    }
-                time.sleep(min(0.4 * attempt, 1.0))
-
-        return {
-            "mode": "stub",
-            "model": self.model_name,
-            "note": "LLM returned non-JSON content, fallback to heuristic planner.",
-            "task": prompt_payload.get("task"),
-        }
-
     def generate_classification_hint(self, prompt_payload: dict) -> dict:
         if not self.enabled:
             return {
                 "mode": "stub",
                 "model": self.model_name,
-                "note": "LLM is not connected; structured classifier is active.",
+                "note": "LLM is not connected; classification generation is unavailable.",
                 "task": prompt_payload.get("task"),
             }
 
@@ -128,7 +71,7 @@ class LLMClient:
                     return {
                         "mode": "stub",
                         "model": self.model_name,
-                        "note": f"LLM call failed, fallback to structured classifier: {exc}",
+                        "note": f"LLM call failed, classification generation skipped: {exc}",
                         "task": prompt_payload.get("task"),
                     }
                 time.sleep(min(0.4 * attempt, 1.0))
@@ -136,7 +79,7 @@ class LLMClient:
         return {
             "mode": "stub",
             "model": self.model_name,
-            "note": "LLM returned non-JSON content, fallback to structured classifier.",
+            "note": "LLM returned non-JSON content, classification generation skipped.",
             "task": prompt_payload.get("task"),
         }
 
@@ -145,7 +88,7 @@ class LLMClient:
             return {
                 "mode": "stub",
                 "model": self.model_name,
-                "note": "LLM is not connected; intent shadow is disabled.",
+                "note": "LLM is not connected; intent generation is unavailable.",
                 "task": prompt_payload.get("task"),
             }
 
@@ -181,7 +124,7 @@ class LLMClient:
                     return {
                         "mode": "stub",
                         "model": self.model_name,
-                        "note": f"LLM call failed, intent shadow skipped: {exc}",
+                        "note": f"LLM call failed, intent generation skipped: {exc}",
                         "task": prompt_payload.get("task"),
                     }
                 time.sleep(min(0.4 * attempt, 1.0))
@@ -189,7 +132,7 @@ class LLMClient:
         return {
             "mode": "stub",
             "model": self.model_name,
-            "note": "LLM returned non-JSON content, intent shadow skipped.",
+            "note": "LLM returned non-JSON content, intent generation skipped.",
             "task": prompt_payload.get("task"),
         }
 

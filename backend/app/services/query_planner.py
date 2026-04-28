@@ -25,10 +25,6 @@ class QueryPlanner:
         prompt_builder: PromptBuilder | None = None,
         intent_service: IntentService | None = None,
         intent_normalizer: IntentNormalizer | None = None,
-        classification_llm_enabled: bool = False,
-        intent_shadow_enabled: bool = False,
-        intent_primary_enabled: bool = False,
-        intent_fallback_enabled: bool = True,
     ) -> None:
         self.domain_config = domain_config
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
@@ -37,13 +33,9 @@ class QueryPlanner:
             semantic_runtime=self.semantic_runtime,
             llm_client=llm_client,
             prompt_builder=prompt_builder,
-            classification_llm_enabled=classification_llm_enabled,
         )
         self.intent_service = intent_service
         self.intent_normalizer = intent_normalizer
-        self.intent_shadow_enabled = intent_shadow_enabled
-        self.intent_primary_enabled = intent_primary_enabled
-        self.intent_fallback_enabled = intent_fallback_enabled
 
     def build_planning_trace(
         self,
@@ -52,15 +44,15 @@ class QueryPlanner:
     ) -> dict[str, Any]:
         parser_query_intent = self.parser.parse(question=question, session_state=session_state)
         parser_intent = StructuredIntent.from_query_intent(parser_query_intent)
-        shadow_intent = self._build_shadow_intent(
+        llm_intent = self._build_llm_intent(
             question=question,
             query_intent=parser_query_intent,
             session_state=session_state,
         )
-        normalized_shadow_intent = self._normalize_shadow_intent(shadow_intent)
+        normalized_intent = self._normalize_intent(llm_intent)
         query_intent, intent_selection = self._select_effective_query_intent(
             parser_query_intent=parser_query_intent,
-            normalized_shadow_intent=normalized_shadow_intent,
+            normalized_intent_payload=normalized_intent,
         )
         classification, classifier_warnings = self.classifier.classify(
             question=question,
@@ -80,13 +72,13 @@ class QueryPlanner:
             "query_intent": query_intent,
             "parser_query_intent": parser_query_intent,
             "parser_intent": parser_intent,
-            "shadow_intent": shadow_intent,
-            "normalized_shadow_intent": normalized_shadow_intent,
+            "llm_intent": llm_intent,
+            "normalized_intent": normalized_intent,
             "intent_selection": intent_selection,
-            "shadow_diff": self._summarize_intent_diff(parser_intent, shadow_intent.get("intent")),
+            "llm_diff": self._summarize_intent_diff(parser_intent, llm_intent.get("intent")),
             "normalized_diff": self._summarize_intent_diff(
-                shadow_intent.get("intent"),
-                normalized_shadow_intent.get("intent"),
+                llm_intent.get("intent"),
+                normalized_intent.get("intent"),
             ),
             "classification": classification,
             "warnings": warnings,
@@ -116,33 +108,33 @@ class QueryPlanner:
             "classifier_debug": classifier_debug,
         }
 
-    def _build_shadow_intent(
+    def _build_llm_intent(
         self,
         *,
         question: str,
         query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict[str, Any]:
-        if not self.intent_shadow_enabled or self.intent_service is None:
+        if self.intent_service is None:
             return {
                 "status": "skipped",
-                "reason": "intent shadow disabled",
+                "reason": "intent service unavailable",
                 "intent": None,
                 "raw": None,
             }
-        return self.intent_service.generate_shadow_intent(
+        return self.intent_service.generate_intent(
             question=question,
             query_intent=query_intent,
             session_state=session_state,
         )
 
-    def _normalize_shadow_intent(self, shadow_intent: dict[str, Any]) -> dict[str, Any]:
-        intent = shadow_intent.get("intent")
+    def _normalize_intent(self, llm_intent: dict[str, Any]) -> dict[str, Any]:
+        intent = llm_intent.get("intent")
         if intent is None or self.intent_normalizer is None:
             return {
                 "status": "skipped",
                 "intent": None,
-                "warnings": [shadow_intent.get("reason") or "shadow intent unavailable"],
+                "warnings": [llm_intent.get("reason") or "llm intent unavailable"],
             }
         return self.intent_normalizer.normalize(intent)
 
@@ -150,48 +142,33 @@ class QueryPlanner:
         self,
         *,
         parser_query_intent: QueryIntent,
-        normalized_shadow_intent: dict[str, Any],
+        normalized_intent_payload: dict[str, Any],
     ) -> tuple[QueryIntent, dict[str, Any]]:
-        normalized_intent = normalized_shadow_intent.get("intent")
-        fallback_reason: str | None = None
-
-        if not self.intent_primary_enabled:
-            return parser_query_intent, {
-                "selected_source": "parser",
-                "fallback_used": False,
-                "fallback_reason": "intent primary disabled",
-            }
-
+        normalized_intent = normalized_intent_payload.get("intent")
         if normalized_intent is None:
-            fallback_reason = "normalized intent unavailable"
-        elif normalized_intent.confidence is not None and normalized_intent.confidence < 0.45:
-            fallback_reason = f"normalized intent confidence too low: {normalized_intent.confidence:.3f}"
-        elif (
-            normalized_intent.subject_domain == "unknown"
-            and not normalized_intent.metrics
-            and not normalized_intent.dimensions
-            and not normalized_intent.filters
-        ):
-            fallback_reason = "normalized intent has no actionable slots"
-
-        if fallback_reason is not None:
-            if self.intent_fallback_enabled:
-                return parser_query_intent, {
-                    "selected_source": "parser",
-                    "fallback_used": True,
-                    "fallback_reason": fallback_reason,
-                }
-            return parser_query_intent, {
-                "selected_source": "parser",
-                "fallback_used": False,
-                "fallback_reason": fallback_reason,
+            return QueryIntent(
+                normalized_question=parser_query_intent.normalized_question,
+                matched_metrics=[],
+                matched_entities=[],
+                requested_dimensions=[],
+                filters=[],
+                time_context=parser_query_intent.time_context.__class__(),
+                version_context=None,
+                requested_sort=[],
+                requested_limit=None,
+                analysis_mode=None,
+                subject_domain="unknown",
+                has_follow_up_cue=parser_query_intent.has_follow_up_cue,
+                has_explicit_slots=False,
+            ), {
+                "selected_source": "none",
+                "selection_reason": "llm intent unavailable; no execution baseline retained",
             }
 
         effective_query_intent = normalized_intent.to_query_intent(base_query_intent=parser_query_intent)
         return effective_query_intent, {
             "selected_source": "normalized",
-            "fallback_used": False,
-            "fallback_reason": None,
+            "selection_reason": "normalized intent selected",
         }
 
     def _summarize_intent_diff(
@@ -259,255 +236,118 @@ class QueryPlanner:
         limit = query_intent.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
         requested_dimensions = list(query_intent.requested_dimensions)
 
-        if classification.inherit_context and session_state is not None:
-            matched_entities = matched_entities or session_state.entities
-            matched_metrics = matched_metrics or session_state.metrics
-            filters = self._merge_filters(
-                session_state.filters,
-                filters,
-                remove_fields=classification.context_delta.remove_filters,
+        if classification.question_type == "follow_up" and session_state is not None:
+            context_delta = classification.context_delta or self.semantic_runtime.build_context_delta(query_intent)
+            merged = self.semantic_runtime.merge_with_session(
+                session_state=session_state,
+                query_intent=query_intent,
+                context_delta=context_delta,
             )
-            if time_context.grain == "unknown" and session_state.time_context is not None:
-                time_context = session_state.time_context
-            if version_context is None:
-                version_context = session_state.version_context
-            if analysis_mode is None:
-                analysis_mode = session_state.analysis_mode
-            if not requested_dimensions:
-                requested_dimensions = list(session_state.dimensions)
-            sort = classification.context_delta.replace_sort or session_state.sort
-            limit = classification.context_delta.replace_limit or session_state.limit or limit
+            matched_entities = merged.matched_entities
+            matched_metrics = merged.matched_metrics
+            filters = merged.filters
+            time_context = merged.time_context
+            version_context = merged.version_context
+            analysis_mode = merged.analysis_mode
+            sort = list(merged.requested_sort)
+            limit = merged.requested_limit or limit
+            requested_dimensions = list(merged.requested_dimensions)
 
-        dimensions = self._infer_dimensions(
-            subject_domain=classification.subject_domain,
-            requested_dimensions=requested_dimensions,
-            matched_entities=matched_entities,
-            filters=filters,
-            time_context=time_context,
-            version_context=version_context,
-            analysis_mode=analysis_mode,
-        )
-
-        plan = self._create_query_plan(
-            query_intent=query_intent,
+        query_plan = self.build_plan_from_intent(
             classification=classification,
-            matched_entities=matched_entities,
             matched_metrics=matched_metrics,
+            matched_entities=matched_entities,
             filters=filters,
-            dimensions=dimensions,
             time_context=time_context,
             version_context=version_context,
             analysis_mode=analysis_mode,
             sort=sort,
             limit=limit,
+            requested_dimensions=requested_dimensions,
         )
-        plan = self.semantic_runtime.sanitize_query_plan(plan)
-        self._apply_post_plan_adjustments(plan, query_intent, classification)
-
-        if plan.need_clarification:
-            classification.question_type = "clarification_needed"
-            classification.need_clarification = True
-            classification.reason = plan.reason
-            classification.reason_code = plan.reason_code
-            classification.clarification_question = plan.clarification_question
-            if "clarification required before stable SQL generation" not in warnings:
-                warnings.append("clarification required before stable SQL generation")
-        if classification.question_type == "invalid":
-            plan.tables = []
-            plan.metrics = []
-            plan.dimensions = []
-            plan.filters = []
-        return query_intent, classification, plan, warnings
+        return query_intent, classification, query_plan, warnings
 
     def build_plan_from_intent(
         self,
         *,
-        query_intent: QueryIntent,
         classification: QuestionClassification,
+        query_intent: QueryIntent | None = None,
         session_state: SessionState | None = None,
+        matched_metrics: list[str] | None = None,
+        matched_entities: list[str] | None = None,
+        filters: list | None = None,
+        time_context=None,
+        version_context=None,
+        analysis_mode: str | None = None,
+        sort: list[SortItem] | None = None,
+        limit: int | None = None,
+        requested_dimensions: list[str] | None = None,
     ) -> QueryPlan:
-        matched_entities = query_intent.matched_entities
-        matched_metrics = query_intent.matched_metrics
-        filters = query_intent.filters
-        time_context = query_intent.time_context
-        version_context = query_intent.version_context
-        analysis_mode = query_intent.analysis_mode
-        sort = list(query_intent.requested_sort)
-        limit = query_intent.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
-        requested_dimensions = list(query_intent.requested_dimensions)
+        if query_intent is not None:
+            matched_entities = list(query_intent.matched_entities)
+            matched_metrics = list(query_intent.matched_metrics)
+            filters = list(query_intent.filters)
+            time_context = query_intent.time_context
+            version_context = query_intent.version_context
+            analysis_mode = query_intent.analysis_mode
+            sort = list(query_intent.requested_sort)
+            limit = query_intent.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
+            requested_dimensions = list(query_intent.requested_dimensions)
 
-        if classification.inherit_context and session_state is not None:
-            matched_entities = matched_entities or session_state.entities
-            matched_metrics = matched_metrics or session_state.metrics
-            filters = self._merge_filters(
-                session_state.filters,
-                filters,
-                remove_fields=classification.context_delta.remove_filters,
-            )
-            if time_context.grain == "unknown" and session_state.time_context is not None:
-                time_context = session_state.time_context
-            if version_context is None:
-                version_context = session_state.version_context
-            if analysis_mode is None:
-                analysis_mode = session_state.analysis_mode
-            if not requested_dimensions:
-                requested_dimensions = list(session_state.dimensions)
-            sort = classification.context_delta.replace_sort or session_state.sort
-            limit = classification.context_delta.replace_limit or session_state.limit or limit
+            if classification.question_type == "follow_up" and session_state is not None:
+                context_delta = classification.context_delta or self.semantic_runtime.build_context_delta(query_intent)
+                merged = self.semantic_runtime.merge_with_session(
+                    session_state=session_state,
+                    query_intent=query_intent,
+                    context_delta=context_delta,
+                )
+                matched_entities = merged.matched_entities
+                matched_metrics = merged.matched_metrics
+                filters = merged.filters
+                time_context = merged.time_context
+                version_context = merged.version_context
+                analysis_mode = merged.analysis_mode
+                sort = list(merged.requested_sort)
+                limit = merged.requested_limit or limit
+                requested_dimensions = list(merged.requested_dimensions)
 
-        dimensions = self._infer_dimensions(
-            subject_domain=classification.subject_domain,
+        matched_metrics = list(matched_metrics or [])
+        matched_entities = list(matched_entities or [])
+        filters = list(filters or [])
+        requested_dimensions = list(requested_dimensions or [])
+        sort = list(sort or [])
+        if limit is None:
+            limit = self.semantic_runtime.default_limit(classification.subject_domain)
+
+        subject_domain = classification.subject_domain
+        resolved_dimensions = self.semantic_runtime.suggest_dimensions(
+            subject_domain=subject_domain,
+            metrics=matched_metrics,
             requested_dimensions=requested_dimensions,
-            matched_entities=matched_entities,
-            filters=filters,
-            time_context=time_context,
-            version_context=version_context,
             analysis_mode=analysis_mode,
+            limit=limit,
+            sort=sort,
         )
-
-        plan = self._create_query_plan(
-            query_intent=query_intent,
-            classification=classification,
-            matched_entities=matched_entities,
-            matched_metrics=matched_metrics,
+        tables = self.semantic_runtime.select_tables(
+            subject_domain=subject_domain,
+            metrics=matched_metrics,
+            dimensions=resolved_dimensions,
             filters=filters,
-            dimensions=dimensions,
+        )
+        query_plan = QueryPlan(
+            subject_domain=subject_domain,
+            question_type=classification.question_type,
+            metrics=matched_metrics,
+            dimensions=resolved_dimensions,
+            filters=filters,
+            tables=tables,
             time_context=time_context,
             version_context=version_context,
             analysis_mode=analysis_mode,
             sort=sort,
             limit=limit,
-        )
-        plan = self.semantic_runtime.sanitize_query_plan(plan)
-        self._apply_post_plan_adjustments(plan, query_intent, classification)
-
-        if classification.question_type == "invalid":
-            plan.tables = []
-            plan.metrics = []
-            plan.dimensions = []
-            plan.filters = []
-
-        return plan
-
-    def _create_query_plan(
-        self,
-        *,
-        query_intent: QueryIntent,
-        classification: QuestionClassification,
-        matched_entities: list[str],
-        matched_metrics: list[str],
-        filters,
-        dimensions: list[str],
-        time_context,
-        version_context,
-        analysis_mode: str | None,
-        sort,
-        limit: int,
-    ) -> QueryPlan:
-        return QueryPlan(
-            question_type=classification.question_type,
-            subject_domain=classification.subject_domain,
-            tables=self._pick_tables(classification.subject_domain, matched_metrics),
             entities=matched_entities,
-            metrics=matched_metrics,
-            dimensions=dimensions,
-            filters=filters,
-            join_path=[],
-            time_context=time_context,
-            version_context=version_context,
-            inherit_context=classification.inherit_context,
-            context_delta=classification.context_delta,
             need_clarification=classification.need_clarification,
             clarification_question=classification.clarification_question,
-            reason_code=classification.reason_code,
-            analysis_mode=analysis_mode,
-            sort=sort,
-            limit=limit,
-            reason=classification.reason,
         )
-
-    def _apply_post_plan_adjustments(
-        self,
-        plan: QueryPlan,
-        query_intent: QueryIntent,
-        classification: QuestionClassification,
-    ) -> None:
-        analysis_mode = query_intent.analysis_mode
-        if (
-            query_intent.requested_limit is not None
-            and not query_intent.requested_dimensions
-            and analysis_mode != "trend"
-        ):
-            metric_fields = {
-                self.semantic_runtime.metric_column(metric_name)
-                for metric_name in plan.metrics
-            }
-            if any(item.field in metric_fields for item in plan.sort):
-                plan.dimensions = [
-                    item for item in plan.dimensions if item not in {"biz_date", "biz_month"}
-                ]
-        if analysis_mode == "compare" and not query_intent.requested_sort:
-            if "biz_month" in plan.dimensions:
-                plan.sort = [SortItem(field="biz_month", order="asc")]
-            elif "biz_date" in plan.dimensions:
-                plan.sort = [SortItem(field="biz_date", order="asc")]
-            elif not plan.dimensions:
-                plan.sort = []
-
-        if (
-            plan.subject_domain == "demand"
-            and plan.dimensions == ["demand_month"]
-            and "demand_qty" in plan.metrics
-            and not query_intent.requested_sort
-        ):
-            plan.sort = [SortItem(field="demand_month", order="asc")]
-
-        if plan.need_clarification:
-            classification.question_type = "clarification_needed"
-            classification.need_clarification = True
-            classification.reason = plan.reason
-            classification.reason_code = plan.reason_code
-            classification.clarification_question = plan.clarification_question
-
-    def _pick_tables(self, subject_domain: str, matched_metrics: list[str]) -> list[str]:
-        return self.semantic_runtime.resolve_tables_for_plan(subject_domain, matched_metrics)
-
-    def _infer_dimensions(
-        self,
-        subject_domain: str,
-        requested_dimensions: list[str],
-        matched_entities: list[str],
-        filters,
-        time_context,
-        version_context,
-        analysis_mode: str | None = None,
-    ) -> list[str]:
-        filter_fields = {item.field for item in filters}
-        dimensions = self.semantic_runtime.suggest_dimensions(
-            subject_domain=subject_domain,
-            requested_dimensions=requested_dimensions,
-            matched_entities=matched_entities,
-            filter_fields=filter_fields,
-            time_grain=time_context.grain,
-        )
-        if analysis_mode == 'trend':
-            preferred_time_dimension = 'biz_month' if time_context.grain == 'month' else 'biz_date'
-            if preferred_time_dimension not in dimensions:
-                dimensions = dimensions + [preferred_time_dimension]
-        if version_context is not None and 'PM_VERSION' in dimensions and 'PM_VERSION' not in requested_dimensions:
-            dimensions = [item for item in dimensions if item != 'PM_VERSION']
-        return dimensions
-
-    def _merge_filters(self, current_filters, new_filters, remove_fields=None):
-        remove_fields = set(remove_fields or [])
-        merged = {
-            self._filter_key(item): item
-            for item in current_filters
-            if item.field not in remove_fields
-        }
-        for item in new_filters:
-            merged[self._filter_key(item)] = item
-        return list(merged.values())
-
-    def _filter_key(self, filter_item) -> str:
-        return f"{filter_item.field}:{filter_item.op}"
+        return self.semantic_runtime.sanitize_query_plan(query_plan)

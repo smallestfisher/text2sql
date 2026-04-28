@@ -36,7 +36,7 @@ async def chat_query_stream(
     request.user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     trace_id = container.audit_service.new_trace().trace_id
     queue = container.progress_service.subscribe(trace_id)
@@ -78,7 +78,7 @@ def chat_query(
     request.user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     return container.orchestrator.chat(request)
 

@@ -16,7 +16,7 @@ def get_container() -> AppContainer:
 def resolve_request_user_context(
     request: Request,
     container: AppContainer,
-    fallback: UserContext | None = None,
+    default_user_context: UserContext | None = None,
 ) -> UserContext | None:
     authorization = request.headers.get("Authorization", "").strip()
     if authorization.lower().startswith("bearer "):
@@ -25,7 +25,7 @@ def resolve_request_user_context(
             return container.auth_service.resolve_token(token)
         except Exception as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return fallback
+    return default_user_context
 
 
 def get_current_user(

@@ -90,10 +90,6 @@ class AppContainer:
             prompt_builder=self.prompt_builder,
             intent_service=self.intent_service,
             intent_normalizer=self.intent_normalizer,
-            classification_llm_enabled=self.settings.classification_llm_enabled,
-            intent_shadow_enabled=self.settings.intent_shadow_enabled,
-            intent_primary_enabled=self.settings.intent_primary_enabled,
-            intent_fallback_enabled=self.settings.intent_fallback_enabled,
         )
         self.query_plan_validator = QueryPlanValidator(semantic_runtime=self.semantic_runtime)
         self.query_plan_compiler = QueryPlanCompiler(

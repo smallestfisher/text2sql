@@ -134,7 +134,7 @@ class EvaluationService:
             session_questions = self._load_prior_session_questions(record.session_id, trace_id)
 
         original_user_id = record.user_id if request.reuse_original_user else None
-        replay_user = self._resolve_replay_user(request.user_id, fallback_user_id=original_user_id)
+        replay_user = self._resolve_replay_user(request.user_id, default_user_id=original_user_id)
         response = self._run_question(
             question=record.question,
             session_questions=session_questions,
@@ -173,7 +173,7 @@ class EvaluationService:
             session_questions = self._load_prior_session_questions(record.session_id, trace_id)
 
         original_user_id = record.user_id if request.reuse_original_user else None
-        effective_user = self._resolve_replay_user(request.user_id, fallback_user_id=original_user_id)
+        effective_user = self._resolve_replay_user(request.user_id, default_user_id=original_user_id)
         snapshot = self._build_original_response_snapshot(trace_id)
         if snapshot is None:
             raise ValueError("query log does not contain enough trace data to materialize an evaluation case")
@@ -462,9 +462,9 @@ class EvaluationService:
     def _resolve_replay_user(
         self,
         requested_user_id: str | None,
-        fallback_user_id: str | None = None,
+        default_user_id: str | None = None,
     ) -> UserContext | None:
-        target_user_id = requested_user_id or fallback_user_id
+        target_user_id = requested_user_id or default_user_id
         if not target_user_id:
             return None
         if self.auth_service is None:

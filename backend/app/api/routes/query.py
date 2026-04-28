@@ -56,7 +56,7 @@ def classify_query(
     request.user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     query_intent, classification, warnings = container.query_planner.classify(
         question=request.question,
@@ -78,7 +78,7 @@ def create_query_plan(
     request.user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     query_intent, classification, query_plan, warnings = container.query_planner.create_plan(
         question=request.question,
@@ -121,7 +121,7 @@ def generate_sql(
     request.user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     query_plan = request.query_plan
     plan_result = container.query_plan_validator.validate_detailed(
@@ -196,7 +196,7 @@ def execute_sql(
     request.user_context = resolve_request_user_context(
         http_request,
         container,
-        fallback=request.user_context,
+        default_user_context=request.user_context,
     )
     sql_result = container.sql_validator.validate_detailed(
         request.sql,

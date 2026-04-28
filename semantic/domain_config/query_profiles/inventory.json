@@ -51,7 +51,7 @@
       "warn_if_missing_time_filter": true,
       "table_selection": {
         "prefer_metric_tables": true,
-        "fallback_to_domain_tables": true
+        "use_domain_tables_when_metric_tables_missing": true
       },
       "default_sort": [
         {
