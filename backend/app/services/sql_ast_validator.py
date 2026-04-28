@@ -399,34 +399,54 @@ class SqlAstValidator:
         return joins
 
     def _extract_sqlglot_group_by_fields(self, root: Any) -> list[str]:
-        group = root.args.get("group") if hasattr(root, "args") else None
+        select = self._outer_select_node(root)
+        group = select.args.get("group") if select is not None and hasattr(select, "args") else None
         if group is None:
             return []
-        return self._unique_strings([
-            item.name
-            for item in group.find_all(exp.Column)
-            if getattr(item, "name", None)
-        ])
+        fields: list[str] = []
+        for expression in getattr(group, "expressions", []) or []:
+            fields.extend(self._expression_column_names(expression))
+        return self._unique_strings(fields)
 
     def _extract_sqlglot_order_by_fields(self, root: Any) -> list[str]:
-        order = root.args.get("order") if hasattr(root, "args") else None
+        select = self._outer_select_node(root)
+        order = select.args.get("order") if select is not None and hasattr(select, "args") else None
         if order is None:
             return []
-        return self._unique_strings([
-            item.name
-            for item in order.find_all(exp.Column)
-            if getattr(item, "name", None)
-        ])
+        fields: list[str] = []
+        for expression in getattr(order, "expressions", []) or []:
+            fields.extend(self._expression_column_names(expression))
+        return self._unique_strings(fields)
 
     def _extract_sqlglot_select_fields(self, root: Any) -> list[str]:
-        select = root.find(exp.Select) if not isinstance(root, exp.Select) else root
+        select = self._outer_select_node(root)
         if select is None:
             return []
-        return self._unique_strings([
-            item.name
-            for item in select.find_all(exp.Column)
-            if getattr(item, "name", None)
-        ])
+        fields: list[str] = []
+        for expression in getattr(select, "expressions", []) or []:
+            fields.extend(self._expression_column_names(expression))
+        return self._unique_strings(fields)
+
+    def _outer_select_node(self, root: Any) -> Any:
+        if exp is None or root is None:
+            return None
+        if isinstance(root, exp.Select):
+            return root
+        this_node = root.args.get("this") if hasattr(root, "args") else None
+        if isinstance(this_node, exp.Select):
+            return this_node
+        return root.find(exp.Select)
+
+    def _expression_column_names(self, expression: Any) -> list[str]:
+        if exp is None or expression is None:
+            return []
+        return self._unique_strings(
+            [
+                item.name
+                for item in expression.find_all(exp.Column)
+                if getattr(item, "name", None)
+            ]
+        )
 
     def _extract_limit_value(self, limit_node: Any) -> int | None:
         if limit_node is None:
