@@ -6,7 +6,7 @@ from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, 
 from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.query_plan import QueryPlan
-from backend.app.models.retrieval import RetrievalContext
+from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -223,6 +223,7 @@ class PromptBuilder:
         self,
         query_plan: QueryPlan,
         retrieval: RetrievalContext | None = None,
+        question: str | None = None,
     ) -> dict:
         selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
         source_schemas = {
@@ -236,7 +237,6 @@ class PromptBuilder:
             "以 query_plan.tables 为真实数据库对象的首要依据。",
             "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。",
         ]
-        scenario_few_shot = None
         if self._is_demand_plan(query_plan, selected_sources):
             sql_preferences = [
                 "对于 p_demand/v_demand 这类横向需求表，MONTH 是起始需求月份。REQUIREMENT_QTY 对应 base MONTH，NEXT_REQUIREMENT 对应 base MONTH 加 1 个月，LAST_REQUIREMENT 对应 base MONTH 加 2 个月，MONTH4 到 MONTH7 对应 base MONTH 加 3 到 6 个月。",
@@ -247,29 +247,6 @@ class PromptBuilder:
                 "如果 query_plan.filters 中 PM_VERSION 的 op 是 latest_n，应先用 SELECT PM_VERSION FROM <source table> GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT count 计算最新 N 个版本。",
                 *sql_preferences,
             ]
-            if query_plan.dimensions == ["demand_month"] and "demand_qty" in query_plan.metrics:
-                sql_preferences = [
-                    "当 query_plan.dimensions 只有 demand_month 时，结果必须按 demand_month 聚合并返回 demand_month，不能改成按 FGCODE、customer、PM_VERSION 或其他维度分组。",
-                    "对于 ttl/total 类型的月度需求问题，外层 SELECT 应返回 demand_month 和聚合后的 demand_qty；GROUP BY 必须是 demand_month；ORDER BY 应按 demand_month。",
-                    *sql_preferences,
-                ]
-                scenario_few_shot = {
-                    "question_pattern": "最新p版，最近6个月的ttl需求物量",
-                    "sql_shape": [
-                        "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 1)",
-                        "demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand ...)",
-                        "SELECT demand_month, SUM(demand_qty) AS ttl_demand_qty FROM demand_unpivot WHERE demand_month BETWEEN 'YYYYMM' AND 'YYYYMM' AND PM_VERSION IN (...) GROUP BY demand_month ORDER BY demand_month LIMIT 200",
-                    ],
-                }
-            else:
-                scenario_few_shot = {
-                    "question_pattern": "最新N版P版需求中，YYYYMM需求最多的FGCODE是哪一个",
-                    "sql_shape": [
-                        "WITH latest_versions AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT N)",
-                        "demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand ...)",
-                        "SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month='YYYYMM' AND PM_VERSION IN (...) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1",
-                    ],
-                }
         elif self._is_plan_actual_input_compare(query_plan, selected_sources):
             uses_panel_metrics = self._uses_panel_input_compare(query_plan)
             approved_metric = "approved_input_panel_qty" if uses_panel_metrics else "approved_input_qty"
@@ -291,16 +268,8 @@ class PromptBuilder:
                 "优先先分别按月份、工厂聚合审批侧和实际侧，再做 JOIN 计算派生指标。",
                 *sql_preferences,
             ]
-            scenario_few_shot = {
-                "question_pattern": "2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
-                "sql_shape": [
-                    "WITH approved_input AS (SELECT plan_month AS biz_month, factory_code AS factory, SUM(target_IN_glass_qty) AS approved_input_qty FROM monthly_plan_approved WHERE plan_month = 'YYYY-MM' AND factory_code = 'ARRAY' GROUP BY plan_month, factory_code)",
-                    "actual_input AS (SELECT DATE_FORMAT(work_date, '%Y-%m') AS biz_month, FACTORY AS factory, SUM(GLS_qty) AS actual_input_qty FROM production_actuals WHERE work_date BETWEEN 'YYYY-MM-01' AND 'YYYY-MM-31' AND FACTORY = 'ARRAY' AND act_type = '投入' GROUP BY DATE_FORMAT(work_date, '%Y-%m'), FACTORY)",
-                    "SELECT approved_input.biz_month AS biz_month, approved_input.factory AS factory, approved_input.approved_input_qty, COALESCE(actual_input.actual_input_qty, 0) AS actual_input_qty, COALESCE(actual_input.actual_input_qty, 0) - approved_input.approved_input_qty AS input_gap_qty, CASE WHEN approved_input.approved_input_qty = 0 THEN NULL ELSE COALESCE(actual_input.actual_input_qty, 0) / approved_input.approved_input_qty END AS input_achievement_rate FROM approved_input LEFT JOIN actual_input ON approved_input.biz_month = actual_input.biz_month AND approved_input.factory = actual_input.factory ORDER BY approved_input.biz_month LIMIT 200",
-                ],
-            }
-        business_notes = self._business_notes_for_plan(query_plan, selected_sources)
-        business_notes_source = self._business_notes_source_for_plan(query_plan, selected_sources)
+        business_notes = self._business_notes_for_plan(query_plan, selected_sources, retrieval)
+        business_notes_source = self._business_notes_source_for_plan(query_plan, selected_sources, retrieval)
         context_budget = {
             "business_notes_max_chars": self.BUSINESS_NOTES_MAX_CHARS,
             "business_notes_mode": "ranked_relevant_chunks",
@@ -311,20 +280,23 @@ class PromptBuilder:
             "tables_metadata_count": len(source_schemas),
             "business_notes_chars": len(business_notes),
             "business_notes_source": business_notes_source,
-            "few_shot_used": scenario_few_shot is not None or bool(retrieved_examples),
+            "few_shot_used": bool(retrieved_examples),
             "retrieved_example_count": len(retrieved_examples),
             "retrieved_example_ids": [item["id"] for item in retrieved_examples],
             "subject_domain": query_plan.subject_domain,
-            "business_knowledge_entry_ids": self._selected_business_knowledge_ids(query_plan, selected_sources),
+            "business_knowledge_entry_ids": self._selected_business_knowledge_ids(query_plan, selected_sources, retrieval),
+            "join_pattern_ids": self._selected_join_pattern_ids(retrieval),
         }
         return {
             "task": "sql_generation",
+            "question": question,
             "query_plan": query_plan.model_dump(),
             "allowed_sources": selected_sources,
             "allowed_fields": sorted(self._sql_allowed_fields(query_plan)),
             "field_resolution": field_resolution,
             "tables_metadata": source_schemas,
             "business_notes": business_notes,
+            "join_patterns": self._selected_join_patterns(retrieval),
             "context_budget": context_budget,
             "context_summary": context_summary,
             "instructions": {
@@ -344,7 +316,6 @@ class PromptBuilder:
                 ],
                 "sql_preferences": sql_preferences,
                 "few_shot": {
-                    "scenario_template": scenario_few_shot,
                     "retrieved_examples": retrieved_examples,
                 },
             },
@@ -378,24 +349,34 @@ class PromptBuilder:
         entries = payload.get("entries", [])
         return entries if isinstance(entries, list) else []
 
-    def _business_notes_for_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> str:
-        return self._structured_business_notes_for_plan(query_plan, selected_sources)
+    def _business_notes_for_plan(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+        retrieval: RetrievalContext | None = None,
+    ) -> str:
+        return self._structured_business_notes_for_plan(query_plan, selected_sources, retrieval)
 
     def _business_notes_source_for_plan(
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
+        retrieval: RetrievalContext | None = None,
     ) -> str:
-        if self._select_business_knowledge_entries(query_plan, selected_sources):
-            return "structured_knowledge"
-        return "none"
+        selected_entries = self._select_business_knowledge_entries(query_plan, selected_sources, retrieval)
+        if not selected_entries:
+            return "none"
+        if self._retrieved_knowledge_hit_scores(retrieval):
+            return "structured_knowledge+retrieval"
+        return "structured_knowledge"
 
     def _structured_business_notes_for_plan(
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
+        retrieval: RetrievalContext | None = None,
     ) -> str:
-        selected_entries = self._select_business_knowledge_entries(query_plan, selected_sources)
+        selected_entries = self._select_business_knowledge_entries(query_plan, selected_sources, retrieval)
         if not selected_entries:
             return ""
         sections: list[str] = []
@@ -412,6 +393,16 @@ class PromptBuilder:
             for note in notes:
                 lines.append(f"- {note}")
             block = "\n".join(lines)
+            separator_chars = 2 if sections else 0
+            projected = total_chars + separator_chars + len(block)
+            if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
+                continue
+            sections.append(block)
+            total_chars = projected
+            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+                break
+        join_pattern_sections = self._retrieved_join_pattern_blocks(retrieval)
+        for block in join_pattern_sections:
             separator_chars = 2 if sections else 0
             projected = total_chars + separator_chars + len(block)
             if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
@@ -439,13 +430,21 @@ class PromptBuilder:
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
+        retrieval: RetrievalContext | None = None,
     ) -> list[dict]:
         if not self._business_knowledge:
             return []
         terms = self._business_note_terms(query_plan, selected_sources)
-        selected: list[tuple[int, int, dict]] = []
+        knowledge_hit_scores = self._retrieved_knowledge_hit_scores(retrieval)
+        selected: list[tuple[float, int, dict]] = []
         for index, entry in enumerate(self._business_knowledge):
-            score = self._score_business_knowledge_entry(query_plan, selected_sources, terms, entry)
+            score = self._score_business_knowledge_entry(
+                query_plan,
+                selected_sources,
+                terms,
+                entry,
+                knowledge_hit_scores,
+            )
             if score <= 0:
                 continue
             selected.append((score, -index, entry))
@@ -456,10 +455,11 @@ class PromptBuilder:
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
+        retrieval: RetrievalContext | None = None,
     ) -> list[str]:
         return [
             str(entry.get("id"))
-            for entry in self._select_business_knowledge_entries(query_plan, selected_sources)
+            for entry in self._select_business_knowledge_entries(query_plan, selected_sources, retrieval)
             if entry.get("id")
         ]
 
@@ -469,8 +469,9 @@ class PromptBuilder:
         selected_sources: list[str] | None,
         terms: set[str],
         entry: dict,
-    ) -> int:
-        score = 0
+        knowledge_hit_scores: dict[str, float] | None = None,
+    ) -> float:
+        score = 0.0
         domains = {str(item).lower() for item in entry.get("domains", []) if item}
         if query_plan.subject_domain and query_plan.subject_domain.lower() in domains:
             score += 5
@@ -483,7 +484,53 @@ class PromptBuilder:
                 score += 4
         entry_keywords = {str(item).lower() for item in entry.get("keywords", []) if item}
         score += sum(1 for term in terms if term in entry_keywords)
+        entry_id = str(entry.get("id", ""))
+        if entry_id and knowledge_hit_scores and entry_id in knowledge_hit_scores:
+            score += 6 + knowledge_hit_scores[entry_id]
         return score
+
+    def _retrieved_knowledge_hit_scores(
+        self,
+        retrieval: RetrievalContext | None,
+    ) -> dict[str, float]:
+        if retrieval is None:
+            return {}
+        scores: dict[str, float] = {}
+        for hit in retrieval.hits:
+            if hit.source_type != "knowledge":
+                continue
+            entry_id = hit.source_id.removeprefix("business_knowledge:")
+            if entry_id == hit.source_id:
+                continue
+            scores[entry_id] = max(scores.get(entry_id, 0.0), hit.score)
+        return scores
+
+    def _retrieved_join_pattern_blocks(
+        self,
+        retrieval: RetrievalContext | None,
+    ) -> list[str]:
+        if retrieval is None:
+            return []
+        sections: list[str] = []
+        for hit in retrieval.hits:
+            if hit.source_type != "join_pattern":
+                continue
+            lines = [f"[join_pattern:{hit.source_id}]"]
+            tables = hit.metadata.get("tables", [])
+            join_path = hit.metadata.get("join_path", [])
+            notes = hit.metadata.get("notes", [])
+            if isinstance(tables, list) and tables:
+                lines.append("相关表: " + ", ".join(str(item) for item in tables if item))
+            if isinstance(join_path, list):
+                for item in join_path:
+                    if item:
+                        lines.append(f"- join: {item}")
+            if isinstance(notes, list):
+                for item in notes:
+                    if item:
+                        lines.append(f"- {item}")
+            sections.append("\n".join(lines))
+        return sections
 
     def _select_retrieved_examples(
         self,
@@ -501,7 +548,7 @@ class PromptBuilder:
             example = examples.get(hit.source_id)
             if example is None:
                 continue
-            if example.subject_domain != query_plan.subject_domain:
+            if not self._retrieved_example_matches_plan(query_plan, example, hit):
                 continue
             selected.append(
                 {
@@ -521,6 +568,59 @@ class PromptBuilder:
             if len(selected) >= 2:
                 break
         return selected
+
+    def _selected_join_patterns(self, retrieval: RetrievalContext | None) -> list[dict]:
+        if retrieval is None:
+            return []
+        selected: list[dict] = []
+        for hit in retrieval.hits:
+            if hit.source_type != "join_pattern":
+                continue
+            selected.append(
+                {
+                    "id": hit.source_id,
+                    "summary": hit.summary,
+                    "matched_features": hit.matched_features,
+                    "domains": hit.metadata.get("domains", []),
+                    "tables": hit.metadata.get("tables", []),
+                    "join_path": hit.metadata.get("join_path", []),
+                    "notes": hit.metadata.get("notes", []),
+                }
+            )
+        return selected[:2]
+
+    def _selected_join_pattern_ids(self, retrieval: RetrievalContext | None) -> list[str]:
+        return [item["id"] for item in self._selected_join_patterns(retrieval)]
+
+    def _retrieved_example_matches_plan(
+        self,
+        query_plan: QueryPlan,
+        example: ExampleRecord,
+        hit: RetrievalHit,
+    ) -> bool:
+        if example.subject_domain == query_plan.subject_domain:
+            return True
+
+        plan_tables = set(query_plan.tables)
+        if plan_tables and plan_tables.intersection(example.tables):
+            return True
+
+        plan_metrics = set(query_plan.metrics)
+        if plan_metrics and plan_metrics.intersection(example.metrics):
+            return True
+
+        plan_filter_fields = {item.field for item in query_plan.filters}
+        example_filter_fields = {item.field for item in example.filters}
+        if plan_filter_fields and plan_filter_fields.intersection(example_filter_fields):
+            return True
+
+        return bool(
+            hit.score >= 2.0
+            and any(
+                feature.startswith(("metrics:", "filters:", "version:", "time_", "metric:"))
+                for feature in hit.matched_features
+            )
+        )
 
     def _is_demand_plan(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> bool:
         sources = set(selected_sources or []) | set(query_plan.tables)
@@ -634,17 +734,33 @@ class PromptBuilder:
             logical_field,
         )
         physical_allowed = self._sql_allowed_fields(query_plan)
-        return sorted(item for item in resolved if item in physical_allowed)
+        allowed_candidates = sorted(item for item in resolved if item in physical_allowed)
+        qualified = self._qualify_columns(query_plan, allowed_candidates)
+        return qualified or allowed_candidates
 
     def _physical_metric_candidates(self, query_plan: QueryPlan, metric_name: str) -> list[str]:
         if self.semantic_runtime is None:
             return []
-        return sorted(
+        metric_columns = sorted(
             self.semantic_runtime.metric_expression_columns(
                 metric_name,
                 table_names=query_plan.tables,
             )
         )
+        qualified = self._qualify_columns(query_plan, metric_columns)
+        return qualified or metric_columns
+
+    def _qualify_columns(self, query_plan: QueryPlan, columns: list[str]) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+        qualified: list[str] = []
+        for column in columns:
+            for table_name in query_plan.tables:
+                if column in self.semantic_runtime.table_fields(table_name):
+                    candidate = f"{table_name}.{column}"
+                    if candidate not in qualified:
+                        qualified.append(candidate)
+        return qualified
 
     def _domain_tables(self, subject_domain: str) -> list[str] | None:
         if self.semantic_runtime is None or subject_domain == "unknown":

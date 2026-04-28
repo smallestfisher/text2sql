@@ -24,6 +24,17 @@
       ]
     },
     {
+      "id": "demand_product_attributes_direct_join",
+      "domains": ["demand"],
+      "tables": ["p_demand", "v_demand", "product_attributes"],
+      "keywords": ["product_attributes", "IS_OXIDE", "Oxide", "产品数量", "FGCODE", "product_ID"],
+      "notes": [
+        "当需求问题涉及产品属性过滤时，可以直接通过 p_demand/v_demand.FGCODE = product_attributes.product_ID 关联产品属性维表。",
+        "像 Oxide 这类产品属性过滤应落在 product_attributes 上，例如 product_attributes.IS_OXIDE = 1。",
+        "如果问题要求的是产品数量而不是需求量，目标指标通常是 COUNT(DISTINCT product_attributes.product_ID)，但目标需求月份仍然必须基于横表展开后的 demand_month 过滤。"
+      ]
+    },
+    {
       "id": "inventory_daily_inventory",
       "domains": ["inventory"],
       "tables": ["daily_inventory"],

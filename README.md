@@ -6,19 +6,24 @@
 
 - `tables.json` 是真实数据库表和字段描述的主来源
 - `business_knowledge.json` 是主业务知识来源
+- `semantic/join_patterns.json` 是稳定多表关联经验的主来源
 - `semantic/domain_config.json` 仍然保留，但现在只是语义配置的 manifest 入口；真实内容按职责拆在 `semantic/domain_config/`
 - SQL、分类、相关性判断 prompt 目前统一以中文自然语言指令为主
-- PromptBuilder 只选择当前问题相关的 schema、业务知识和少量场景 few-shot，避免 token 膨胀
-- `examples/nl2sql_examples.template.json` 保留真实 few-shot 资产；命中后会以 `retrieved_examples` 形式进入 SQL prompt，同时保留内置场景模板 few-shot
+- PromptBuilder 只选择当前问题相关的 schema、业务知识和少量真实 few-shot，避免 token 膨胀
+- `examples/nl2sql_examples.template.json` 保留真实 few-shot 资产；命中后会以 `retrieved_examples` 形式进入 SQL prompt
+- 命中的 `join_pattern` 会以 `join_patterns` 形式进入 SQL prompt
 - 前端会话恢复的主入口是 `GET /api/chat/sessions/{session_id}/workspace`
 - 前端提问默认走 `POST /api/chat/query/stream`，通过 SSE 主动推送阶段进度和最终结果，不再靠轮询猜状态
 - 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
+- 当前检索方向已经明确为 `hybrid retrieval`：关键词 / 向量 / 结构化重排联合召回，而不是继续扩张规则门控
+- 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
 
 ## 快速启动
 
 ### Backend
 
 ```bash
+cp env.example .env
 pip install -r backend/requirements.txt
 uvicorn backend.app.main:app --reload --app-dir .
 ```
@@ -62,4 +67,4 @@ Unknown column '...'
 
 ## 一句话原则
 
-遇到准确率问题时，优先修 `tables.json`、`business_knowledge.json`、example / few-shot 资产、prompt 上下文和 validator；不要把系统重新拉回“大量场景规则 + 本地 SQL 模板”的旧路径。
+遇到准确率问题时，优先修 `tables.json`、`business_knowledge.json`、example / few-shot 资产、retrieval、prompt 上下文和 validator；不要把系统重新拉回“大量场景规则 + 本地 SQL 模板”的旧路径。

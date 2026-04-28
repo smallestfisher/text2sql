@@ -298,7 +298,7 @@ class ConversationOrchestrator:
             sql_prompt = None
             if not plan_errors:
                 self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status="running", detail="generating sql")
-                sql_prompt = self.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval)
+                sql_prompt = self.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question=request.question)
                 prompt_context_metadata = {
                     "context_budget": sql_prompt.get("context_budget"),
                     "context_summary": sql_prompt.get("context_summary"),

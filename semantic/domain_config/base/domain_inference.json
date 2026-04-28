@@ -13,6 +13,7 @@
       "input_achievement_rate": "plan_actual",
       "input_panel_achievement_rate": "plan_actual",
       "demand_qty": "demand",
+      "product_count": "demand",
       "sales_qty": "sales_financial",
       "financial_qty": "sales_financial"
     },

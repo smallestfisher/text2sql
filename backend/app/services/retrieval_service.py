@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import re
 
-from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, TABLES_METADATA_PATH
+from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, JOIN_PATTERNS_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
@@ -22,6 +22,7 @@ class RetrievalService:
         examples_path: Path = EXAMPLES_TEMPLATE_PATH,
         tables_metadata_path: Path = TABLES_METADATA_PATH,
         business_knowledge_path: Path = BUSINESS_KNOWLEDGE_PATH,
+        join_patterns_path: Path = JOIN_PATTERNS_PATH,
         vector_retriever: VectorRetriever | None = None,
         vector_top_k: int = 3,
     ) -> None:
@@ -30,11 +31,13 @@ class RetrievalService:
         self.examples_path = examples_path
         self.tables_metadata_path = tables_metadata_path
         self.business_knowledge_path = business_knowledge_path
+        self.join_patterns_path = join_patterns_path
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
         self.vector_top_k = vector_top_k
         self.examples = self._load_examples()
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
+        self.join_patterns = self._load_join_patterns()
         self.corpus_documents: list[dict] = []
         self.document_frequency: Counter[str] = Counter()
         self.average_doc_length = 1.0
@@ -49,6 +52,7 @@ class RetrievalService:
         hits.extend(self._retrieve_example_hits(query_intent, query_tokens))
         hits.extend(self._retrieve_metric_hits(query_intent, query_tokens))
         hits.extend(self._retrieve_knowledge_hits(query_intent, query_tokens))
+        hits.extend(self._retrieve_join_pattern_hits(query_intent, query_tokens))
         hits.extend(self._retrieve_vector_hits(query_intent, retrieval_terms))
         hits = self._rerank_hits(hits)
         top_hits = hits[:5]
@@ -66,6 +70,7 @@ class RetrievalService:
         self.examples = self._load_examples()
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
+        self.join_patterns = self._load_join_patterns()
         self._refresh_indexes()
 
     def summarize_retrieval(self, retrieval: RetrievalContext) -> dict:
@@ -95,6 +100,7 @@ class RetrievalService:
                 Counter(document["source_type"] for document in self.corpus_documents)
             ),
             "example_count": len(self.examples),
+            "join_pattern_count": len(self.join_patterns),
         }
 
     def validate_example(self, payload: dict | ExampleRecord) -> ExampleRecord:
@@ -112,6 +118,7 @@ class RetrievalService:
             self._build_example_documents()
             + self._build_metric_documents()
             + self._build_knowledge_documents()
+            + self._build_join_pattern_documents()
         )
         self.document_frequency = Counter()
         self.document_lookup = {
@@ -128,6 +135,10 @@ class RetrievalService:
     def _build_example_documents(self) -> list[dict]:
         documents: list[dict] = []
         for example in self.examples:
+            filter_terms = [
+                f"{item.field} {item.op} {self._stringify_filter_value(item.value)}"
+                for item in example.filters
+            ]
             documents.append(
                 self._build_document(
                     source_type="example",
@@ -138,17 +149,29 @@ class RetrievalService:
                         "scenario": example.scenario,
                         "coverage_tags": example.coverage_tags,
                         "question_type": example.question_type,
+                        "subject_domain": example.subject_domain,
                         "tables": example.tables,
+                        "metrics": example.metrics,
+                        "entities": example.entities,
+                        "dimensions": example.dimensions,
+                        "filter_fields": [item.field for item in example.filters],
+                        "join_path": example.join_path,
+                        "result_shape": example.result_shape,
                     },
                     text_parts=[
                         example.question,
                         example.normalized_question,
                         example.intent,
+                        example.subject_domain,
                         example.scenario or "",
                         " ".join(example.coverage_tags),
+                        " ".join(example.tables),
                         " ".join(example.metrics),
                         " ".join(example.entities),
                         " ".join(example.dimensions),
+                        " ".join(filter_terms),
+                        " ".join(example.join_path),
+                        example.result_shape or "",
                         example.notes or "",
                     ],
                 )
@@ -217,6 +240,15 @@ class RetrievalService:
         entries = payload.get("entries", [])
         return entries if isinstance(entries, list) else []
 
+    def _load_join_patterns(self) -> list[dict]:
+        try:
+            with self.join_patterns_path.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except Exception:
+            return []
+        patterns = payload.get("patterns", [])
+        return patterns if isinstance(patterns, list) else []
+
     def _build_knowledge_documents(self) -> list[dict]:
         documents: list[dict] = []
         for entry in self.business_knowledge:
@@ -283,6 +315,41 @@ class RetrievalService:
             )
         return documents
 
+    def _build_join_pattern_documents(self) -> list[dict]:
+        documents: list[dict] = []
+        for pattern in self.join_patterns:
+            if not isinstance(pattern, dict):
+                continue
+            pattern_id = str(pattern.get("id", "join_pattern"))
+            domains = [str(item) for item in pattern.get("domains", []) if item]
+            tables = [str(item) for item in pattern.get("tables", []) if item]
+            keywords = [str(item) for item in pattern.get("keywords", []) if item]
+            join_path = [str(item) for item in pattern.get("join_path", []) if item]
+            notes = [str(item) for item in pattern.get("notes", []) if item]
+            documents.append(
+                self._build_document(
+                    source_type="join_pattern",
+                    source_id=pattern_id,
+                    summary=notes[0] if notes else pattern_id,
+                    metadata={
+                        "domains": domains,
+                        "tables": tables,
+                        "keywords": keywords,
+                        "join_path": join_path,
+                        "notes": notes,
+                    },
+                    text_parts=[
+                        pattern_id,
+                        " ".join(domains),
+                        " ".join(tables),
+                        " ".join(keywords),
+                        " ".join(join_path),
+                        " ".join(notes),
+                    ],
+                )
+            )
+        return documents
+
     def _retrieve_example_hits(
         self,
         query_intent: QueryIntent,
@@ -290,11 +357,6 @@ class RetrievalService:
     ) -> list[RetrievalHit]:
         hits: list[RetrievalHit] = []
         for example in self.examples:
-            if (
-                query_intent.subject_domain != "unknown"
-                and example.subject_domain != query_intent.subject_domain
-            ):
-                continue
             structured_score, matched_features = self._score_example(example, query_intent)
             lexical_score = self._bm25_score(
                 query_tokens,
@@ -319,6 +381,7 @@ class RetrievalService:
                         "scenario": example.scenario,
                         "coverage_tags": example.coverage_tags,
                         "question_type": example.question_type,
+                        "subject_domain": example.subject_domain,
                         "tables": example.tables,
                     },
                 )
@@ -447,6 +510,63 @@ class RetrievalService:
             )
         return hits
 
+    def _retrieve_join_pattern_hits(
+        self,
+        query_intent: QueryIntent,
+        query_tokens: list[str],
+    ) -> list[RetrievalHit]:
+        hits: list[RetrievalHit] = []
+        query_table_hints = set(self._query_table_hints(query_intent))
+        query_filter_fields = {item.field for item in query_intent.filters}
+        for pattern in self.join_patterns:
+            if not isinstance(pattern, dict):
+                continue
+            score = 0.0
+            matched_features: list[str] = []
+            pattern_id = str(pattern.get("id", "join_pattern"))
+            pattern_domains = {str(item) for item in pattern.get("domains", []) if item}
+            pattern_tables = {str(item) for item in pattern.get("tables", []) if item}
+            pattern_keywords = {str(item) for item in pattern.get("keywords", []) if item}
+
+            if query_intent.subject_domain != "unknown" and query_intent.subject_domain in pattern_domains:
+                score += 0.35
+                matched_features.append(f"domain:{query_intent.subject_domain}")
+            matched_tables = sorted(pattern_tables.intersection(query_table_hints))
+            if matched_tables:
+                score += 0.35
+                matched_features.append("tables:" + ",".join(matched_tables[:3]))
+            matched_filters = sorted(pattern_keywords.intersection(query_filter_fields))
+            if matched_filters:
+                score += 0.15
+                matched_features.append("filters:" + ",".join(matched_filters[:3]))
+
+            lexical_score = self._bm25_score(query_tokens, self._lookup_document("join_pattern", pattern_id))
+            if lexical_score > 0:
+                score += lexical_score * 0.45
+                matched_features.append(f"keyword:{lexical_score:.3f}")
+            if score <= 0:
+                continue
+
+            hits.append(
+                RetrievalHit(
+                    source_type="join_pattern",
+                    source_id=pattern_id,
+                    score=score,
+                    summary=str(pattern.get("notes", [pattern_id])[0]),
+                    retrieval_channel="structured",
+                    source_score=score,
+                    matched_features=matched_features,
+                    metadata={
+                        "domains": list(pattern_domains),
+                        "tables": list(pattern_tables),
+                        "keywords": list(pattern_keywords),
+                        "join_path": [str(item) for item in pattern.get("join_path", []) if item],
+                        "notes": [str(item) for item in pattern.get("notes", []) if item],
+                    },
+                )
+            )
+        return hits
+
     def _retrieve_vector_hits(
         self,
         query_intent: QueryIntent,
@@ -463,7 +583,7 @@ class RetrievalService:
                 *query_intent.matched_entities,
             ]
         ).strip()
-        source_types = ["example", "metric", "knowledge"]
+        source_types = ["example", "metric", "knowledge", "join_pattern"]
         results = self.vector_retriever.search(
             query_text=query_text,
             top_k=self.vector_top_k,
@@ -498,6 +618,8 @@ class RetrievalService:
         example_entities = set(example.entities)
         example_filter_fields = {item.field for item in example.filters}
         parse_filter_fields = {item.field for item in query_intent.filters}
+        query_table_hints = self._query_table_hints(query_intent)
+        matched_tables = set(example.tables).intersection(query_table_hints)
         matched_metrics = example_metrics.intersection(query_intent.matched_metrics)
         matched_entities = example_entities.intersection(query_intent.matched_entities)
         matched_filter_fields = example_filter_fields.intersection(parse_filter_fields)
@@ -509,6 +631,9 @@ class RetrievalService:
         if matched_entities:
             score += 0.2
             matched_features.append("entities:" + ",".join(sorted(matched_entities)))
+        if matched_tables:
+            score += 0.2
+            matched_features.append("tables:" + ",".join(sorted(matched_tables)))
         if matched_filter_fields:
             score += 0.15
             matched_features.append("filters:" + ",".join(sorted(matched_filter_fields)))
@@ -529,6 +654,8 @@ class RetrievalService:
         if example.subject_domain == query_intent.subject_domain:
             score += 0.2
             matched_features.append(f"domain:{example.subject_domain}")
+        elif query_intent.subject_domain != "unknown":
+            score -= 0.05
         if lexical_overlap:
             score += min(0.2, 0.05 * len(lexical_overlap))
             matched_features.append("lexical:" + ",".join(lexical_overlap))
@@ -560,6 +687,7 @@ class RetrievalService:
             "example": 2,
             "metric": 1,
             "knowledge": 1,
+            "join_pattern": 1,
         }
         selected: list[RetrievalHit] = []
         selected_keys: set[tuple[str, str]] = set()
@@ -586,11 +714,18 @@ class RetrievalService:
         terms: list[str] = []
         terms.extend(query_intent.matched_metrics)
         terms.extend(query_intent.matched_entities)
-        terms.extend(item.field for item in query_intent.filters)
+        terms.extend(self._query_table_hints(query_intent))
+        for item in query_intent.filters:
+            terms.append(item.field)
+            terms.extend(self._filter_value_terms(item.value))
         if query_intent.time_context.grain != "unknown":
             terms.append(f"time_grain:{query_intent.time_context.grain}")
         if query_intent.version_context and query_intent.version_context.field:
             terms.append(f"version_field:{query_intent.version_context.field}")
+            if query_intent.version_context.value:
+                terms.append(str(query_intent.version_context.value))
+        if query_intent.subject_domain != "unknown":
+            terms.append(f"domain:{query_intent.subject_domain}")
         if query_intent.has_follow_up_cue:
             terms.append("question_type:follow_up_like")
         return self._unique(terms)
@@ -661,6 +796,7 @@ class RetrievalService:
     def _source_priority(self, source_type: str) -> int:
         priorities = {
             "example": 3,
+            "join_pattern": 2,
             "metric": 1,
             "knowledge": 1,
         }
@@ -676,8 +812,44 @@ class RetrievalService:
         result: list[str] = []
         seen: set[str] = set()
         for item in items:
+            if not item:
+                continue
             if item in seen:
                 continue
             seen.add(item)
             result.append(item)
         return result
+
+    def _query_table_hints(self, query_intent: QueryIntent) -> list[str]:
+        tables: list[str] = []
+        for metric in query_intent.matched_metrics:
+            tables.extend(self.semantic_runtime.metric_tables(metric))
+        for item in query_intent.filters:
+            if item.field in {"source_table", "demand_source"} and isinstance(item.value, str):
+                tables.append(item.value)
+        return self._unique([str(item) for item in tables if item])
+
+    def _filter_value_terms(self, value) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return [str(item) for item in value if item]
+        if isinstance(value, dict):
+            terms: list[str] = []
+            for item in value.values():
+                if item is None:
+                    continue
+                terms.append(str(item))
+            return terms
+        if value is None:
+            return []
+        return [str(value)]
+
+    def _stringify_filter_value(self, value) -> str:
+        if isinstance(value, list):
+            return " ".join(str(item) for item in value if item is not None)
+        if isinstance(value, dict):
+            return " ".join(str(item) for item in value.values() if item is not None)
+        if value is None:
+            return ""
+        return str(value)

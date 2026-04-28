@@ -171,6 +171,17 @@
         "flags": [
           "ignorecase"
         ]
+      },
+      {
+        "name": "oxide_product_flag",
+        "type": "regex",
+        "field": "IS_OXIDE",
+        "op": "=",
+        "pattern": "(?:^|[^A-Za-z0-9])Oxide(?:[^A-Za-z0-9]|$)|氧化物产品|氧化产品",
+        "value": 1,
+        "flags": [
+          "ignorecase"
+        ]
       }
     ],
     "dimensions": [

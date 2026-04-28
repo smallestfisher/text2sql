@@ -263,7 +263,7 @@ class SemanticRuntime:
             expression = str(definition.get("expression", ""))
             for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expression):
                 upper_token = token.upper()
-                if upper_token in {"SUM", "COUNT", "AVG", "MIN", "MAX", "NORMALIZED_FROM_HORIZONTAL_MONTH_COLUMNS"}:
+                if upper_token in {"SUM", "COUNT", "DISTINCT", "AVG", "MIN", "MAX", "NORMALIZED_FROM_HORIZONTAL_MONTH_COLUMNS"}:
                     continue
                 columns.add(token)
         return columns
@@ -595,6 +595,8 @@ class SemanticRuntime:
         compiled = self._inject_time_filters(compiled, profile)
         compiled = self._inject_version_filter(compiled, profile)
         compiled = self._inject_default_sort(compiled, profile)
+        compiled = self._augment_dimension_tables(compiled)
+        compiled = self._normalize_scalar_demand_product_count(compiled)
 
         drop_dimensions = set(profile.get("drop_dimensions", []))
         if drop_dimensions:
@@ -635,6 +637,44 @@ class SemanticRuntime:
             compiled.clarification_question = rule.get("clarification_question")
             break
 
+        return compiled
+
+    def _augment_dimension_tables(self, query_plan: QueryPlan) -> QueryPlan:
+        compiled = query_plan.model_copy(deep=True)
+        if compiled.subject_domain != "demand":
+            return compiled
+
+        filter_fields = {item.field for item in compiled.filters}
+        needs_product_attributes = (
+            "product_count" in compiled.metrics
+            or "IS_OXIDE" in filter_fields
+        )
+        if not needs_product_attributes:
+            return compiled
+
+        ordered_tables = list(compiled.tables)
+        for table_name in ["product_attributes"]:
+            if table_name not in ordered_tables:
+                ordered_tables.append(table_name)
+        compiled.tables = ordered_tables
+        return compiled
+
+    def _normalize_scalar_demand_product_count(self, query_plan: QueryPlan) -> QueryPlan:
+        compiled = query_plan.model_copy(deep=True)
+        if compiled.subject_domain != "demand":
+            return compiled
+        if "product_count" not in compiled.metrics:
+            return compiled
+
+        filter_fields = {item.field for item in compiled.filters}
+        has_month_filter = bool({"demand_month", "biz_month"}.intersection(filter_fields))
+        if not has_month_filter:
+            return compiled
+
+        if set(compiled.dimensions).issubset({"biz_month", "PM_VERSION"}):
+            compiled.dimensions = []
+        if all(item.field == "biz_month" for item in compiled.sort):
+            compiled.sort = []
         return compiled
 
     def _apply_explicit_source_table(self, query_plan: QueryPlan) -> QueryPlan:

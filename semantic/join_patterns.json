@@ -1,0 +1,60 @@
+{
+  "patterns": [
+    {
+      "id": "demand_product_attributes_direct_join",
+      "domains": ["demand"],
+      "tables": ["p_demand", "v_demand", "product_attributes"],
+      "keywords": ["FGCODE", "product_attributes", "product_ID", "IS_OXIDE", "Oxide", "产品数量"],
+      "join_path": [
+        "p_demand.FGCODE = product_attributes.product_ID",
+        "v_demand.FGCODE = product_attributes.product_ID"
+      ],
+      "notes": [
+        "当需求问题涉及产品属性过滤时，可以直接通过 p_demand/v_demand.FGCODE = product_attributes.product_ID 关联产品属性维表。",
+        "像 Oxide 这类属性过滤应落在 product_attributes 上，例如 product_attributes.IS_OXIDE = 1。",
+        "如果问题要求的是产品数量而不是需求量，目标指标通常是 COUNT(DISTINCT product_attributes.product_ID)，但目标需求月份仍然必须基于横表展开后的 demand_month 过滤。"
+      ]
+    },
+    {
+      "id": "demand_product_mapping_sales_financial_join",
+      "domains": ["demand", "sales_financial"],
+      "tables": ["p_demand", "v_demand", "product_mapping", "sales_financial_perf"],
+      "keywords": ["FGCODE", "product_mapping", "sales_financial_perf", "Cell", "Array", "CF"],
+      "join_path": [
+        "p_demand.FGCODE = product_mapping.FGCODE",
+        "v_demand.FGCODE = product_mapping.FGCODE",
+        "sales_financial_perf.FGCODE = product_mapping.FGCODE"
+      ],
+      "notes": [
+        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell、Array、CF 分别对应不同阶段编码。",
+        "当需求问题需要和销售或财务业绩对比时，通常通过 FGCODE 与 sales_financial_perf 关联。"
+      ]
+    },
+    {
+      "id": "inventory_product_attributes_join",
+      "domains": ["inventory"],
+      "tables": ["oms_inventory", "daily_inventory", "product_attributes"],
+      "keywords": ["inventory", "product_attributes", "product_ID", "customer"],
+      "join_path": [
+        "oms_inventory.product_ID = product_attributes.product_ID",
+        "daily_inventory.product_ID = product_attributes.product_ID"
+      ],
+      "notes": [
+        "当库存问题涉及产品属性或分类时，通常需要和 product_attributes 关联。"
+      ]
+    },
+    {
+      "id": "plan_actual_approved_vs_actual_join",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["审批版", "实际", "投入", "Gap", "达成率", "factory", "biz_month"],
+      "join_path": [
+        "monthly_plan_approved.plan_month = DATE_FORMAT(production_actuals.work_date, '%Y-%m')",
+        "monthly_plan_approved.factory_code = production_actuals.FACTORY"
+      ],
+      "notes": [
+        "审批版投入与实际投入对比时，应先分别按月份和工厂聚合审批侧与实际侧，再做 join 计算差异与达成率。"
+      ]
+    }
+  ]
+}

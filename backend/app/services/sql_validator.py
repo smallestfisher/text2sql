@@ -192,6 +192,18 @@ class SqlValidator:
             monthly_demand_shape_errors = self._validate_demand_monthly_shape(query_plan, inspection)
             errors.extend(monthly_demand_shape_errors)
 
+            demand_product_attribute_errors = self._validate_demand_product_attribute_filters(
+                query_plan,
+                sql,
+            )
+            errors.extend(demand_product_attribute_errors)
+
+            demand_product_count_errors = self._validate_demand_product_count_shape(
+                query_plan,
+                sql,
+            )
+            errors.extend(demand_product_count_errors)
+
         if required_filter_fields:
             if query_plan is None:
                 missing_filter_fields = list(required_filter_fields)
@@ -551,6 +563,52 @@ class SqlValidator:
                 query_plan.metrics,
             )
             errors.append('monthly demand sql must not group by FGCODE, customer, or PM_VERSION')
+        return errors
+
+    def _validate_demand_product_attribute_filters(
+        self,
+        query_plan: QueryPlan,
+        sql: str,
+    ) -> list[str]:
+        if query_plan.subject_domain != "demand":
+            return []
+
+        attribute_filter_fields = {
+            item.field
+            for item in query_plan.filters
+            if item.field.startswith("IS_")
+        }
+        if not attribute_filter_fields:
+            return []
+
+        errors: list[str] = []
+        for field_name in sorted(attribute_filter_fields):
+            wrong_table_pattern = rf"\b(?:p_demand|v_demand|product_mapping)\.{re.escape(field_name)}\b"
+            if re.search(wrong_table_pattern, sql, re.IGNORECASE):
+                errors.append(
+                    f"{field_name} must be filtered on product_attributes, not on demand or mapping tables"
+                )
+        return errors
+
+    def _validate_demand_product_count_shape(
+        self,
+        query_plan: QueryPlan,
+        sql: str,
+    ) -> list[str]:
+        if query_plan.subject_domain != "demand":
+            return []
+        if "product_count" not in query_plan.metrics:
+            return []
+
+        errors: list[str] = []
+        if not re.search(r"count\s*\(\s*distinct\b", sql, re.IGNORECASE):
+            errors.append("product_count query must use COUNT(DISTINCT ...)")
+        has_demand_month_filter = any(item.field == "demand_month" for item in query_plan.filters)
+        if has_demand_month_filter:
+            if not re.search(r"\bdemand_unpivot\b", sql, re.IGNORECASE):
+                errors.append("product_count query with demand_month filter must use demand_unpivot")
+            if re.search(r"\b(?:p_demand|v_demand)\.MONTH\s*=\s*'20\d{4}'", sql, re.IGNORECASE):
+                errors.append("product_count query must not filter raw MONTH = 'YYYYMM'; horizontal demand tables must be expanded to demand_month first")
         return errors
 
     def _build_risk_warnings(self, inspection, used_sources: list[str]) -> list[str]:

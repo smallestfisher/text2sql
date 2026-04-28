@@ -1368,20 +1368,10 @@ function AdminView(props: {
               props.adminLogs.slice(0, 10).map((log) => (
                 <div className="admin-list-item" key={log.trace_id}>
                   {(() => {
-                    const promptSummary = log.prompt_context_summary || {};
-                    const selectedSources = Array.isArray(promptSummary.selected_sources)
-                      ? promptSummary.selected_sources.join(", ")
-                      : "";
-                    const notesChars =
-                      typeof promptSummary.business_notes_chars === "number"
-                        ? `${promptSummary.business_notes_chars} chars`
-                        : "";
-                    const fewShotUsed =
-                      typeof promptSummary.few_shot_used === "boolean"
-                        ? promptSummary.few_shot_used
-                          ? "few-shot"
-                          : "no few-shot"
-                        : "";
+                    const promptSummary = normalizePromptSummary(log.prompt_context_summary);
+                    const selectedSources = promptSummary.selectedSources.join(", ");
+                    const notesChars = promptSummary.businessNotesChars ? `${promptSummary.businessNotesChars} chars` : "";
+                    const fewShotUsed = promptSummary.fewShotUsed == null ? "" : promptSummary.fewShotUsed ? "few-shot" : "no few-shot";
                     return (
                       <>
                   <div>
@@ -1394,6 +1384,10 @@ function AdminView(props: {
                   <div className="mini-tags">
                     <span className="mini-tag">{describeResponseStatus(log.answer_status || "unknown")}</span>
                     <span className="mini-tag">{String(log.row_count ?? 0)} rows</span>
+                    {promptSummary.businessNotesSource ? <span className="mini-tag">{promptSummary.businessNotesSource}</span> : null}
+                    {promptSummary.joinPatternIds.map((joinPatternId) => (
+                      <span className="mini-tag" key={joinPatternId}>{joinPatternId}</span>
+                    ))}
                     {notesChars ? <span className="mini-tag">{notesChars}</span> : null}
                     {fewShotUsed ? <span className="mini-tag">{fewShotUsed}</span> : null}
                   </div>
@@ -1671,6 +1665,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
   const answer = props.latestResponse.answer;
   const execution = props.latestResponse.execution;
   const retrieval = props.latestResponse.retrieval;
+  const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
 
   return (
     <section className="tab-panel">
@@ -1767,6 +1762,8 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
           <MetaRow label="规划校验" value={props.latestResponse.plan_validation.valid ? "通过" : "未通过"} />
           <MetaRow label="业务域" value={(retrieval?.domains || []).join(", ") || "-"} />
           <MetaRow label="指标" value={(retrieval?.metrics || []).join(", ") || "-"} />
+          <MetaRow label="知识来源" value={promptSummary.businessNotesSource || "-"} />
+          <MetaRow label="Join Pattern" value={promptSummary.joinPatternIds.join(", ") || "-"} />
         </div>
       </div>
     </section>
@@ -1896,6 +1893,41 @@ function findTraceArtifact(
     return null;
   }
   return items.find((item) => item.trace_id === traceId) || null;
+}
+
+function getPromptContextSummaryFromTrace(trace: TraceRecord | null | undefined) {
+  if (!trace?.steps?.length) {
+    return null;
+  }
+  const generateSqlStep = trace.steps.find((step) => step.name === "generate_sql" || step.name === "sql_generation");
+  return isRecord(generateSqlStep?.metadata?.prompt_context_summary)
+    ? generateSqlStep.metadata.prompt_context_summary
+    : null;
+}
+
+function normalizePromptSummary(summary: Record<string, unknown> | null | undefined) {
+  return {
+    selectedSources: getStringArrayValue(summary?.selected_sources),
+    businessNotesChars: typeof summary?.business_notes_chars === "number" ? summary.business_notes_chars : null,
+    fewShotUsed: typeof summary?.few_shot_used === "boolean" ? summary.few_shot_used : null,
+    businessNotesSource: getStringValue(summary?.business_notes_source),
+    joinPatternIds: getStringArrayValue(summary?.join_pattern_ids),
+  };
+}
+
+function getStringArrayValue(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function getStringValue(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function mergeQueryLogs(

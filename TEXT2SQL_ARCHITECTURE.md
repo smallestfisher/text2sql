@@ -41,13 +41,40 @@
 
 而是：
 
-- 基于真实 `tables.json`、`business_knowledge.json`、Query Plan、检索结果和少量场景 few-shot
+- 基于真实 `tables.json`、`business_knowledge.json`、Query Plan、检索结果和少量真实 few-shot
 - 让 LLM 直接生成 MySQL 只读 SQL
 - 再由 Query Plan validator、SQL validator、执行器和 runtime 体系做闭环治理
 
 这意味着系统的主链路可以概括为：
 
-**问题理解 → Query Plan → Prompt 上下文选择 → LLM 生成 SQL → 校验/修复 → 执行 → 组织回答 → 落库审计 → 前端恢复与排查**
+**问题理解 → 混合检索 → Query Plan → Prompt 上下文选择 → LLM 生成 SQL → 校验/修复 → 执行 → 组织回答 → 落库审计 → 前端恢复与排查**
+
+### 1.1 当前架构问题与下一步方向
+
+当前主链路虽然已经是 LLM-first，但仍存在一个现实问题：
+
+- 部分规则结果仍然在充当 retrieval / few-shot 的前置门控条件
+- 一旦 `subject_domain`、metric 或 filter 在前面没有打准，后面即使已经命中了正确 example，也可能进不了 SQL prompt
+
+这类问题的根因不是“规则数量不够”，而是**规则参与了过早决策**。因此，后续架构优化方向已经明确为：
+
+- 从 `rule-first gate` 调整为 `retrieval-first planning`
+- 规则保留在高确定性信号抽取与 SQL 校验两端
+- few-shot、business knowledge、join pattern 通过 hybrid retrieval 主导召回
+- planner 和 SQL 生成优先消费 retrieval 结果，而不是被 parser/domain 硬前置约束
+
+这次调整不是推翻现有 LLM-first，而是把它从“LLM 生成 SQL，前面仍有较强规则门控”进一步收敛为：
+
+- **parser 只抽取硬信号**
+- **retrieval 负责主召回**
+- **planner 负责综合决策**
+- **validator 负责 shape contract**
+
+当前实现里，这个方向已经开始落地为：
+
+- RetrievalService 同时检索 `example / knowledge / join_pattern / metric`
+- QueryPlanCompiler 会基于 retrieval 命中补 domain 和 support tables
+- PromptBuilder 会把命中的 `retrieved_examples`、`business_notes` 和 `join_patterns` 一起注入 SQL prompt
 
 ---
 
@@ -61,6 +88,25 @@ LLM 是主生成器，但不是裸奔：
 - PromptBuilder 只给当前问题真正相关的 schema、知识和少量 few-shot
 - SqlValidator 再校验只读、安全、来源范围、时间/版本、LIMIT、风险级别
 - 失败时允许一次 repair，而不是无限次自我修复
+
+### 2.1.1 Retrieval-first，不等于纯向量或纯相似度
+
+后续 retrieval 设计不是切到“纯向量检索”，而是使用 `hybrid retrieval`：
+
+- lexical / keyword：抓 `P版`、`V版`、`FGCODE`、`202605` 这类硬信号
+- vector retrieval：抓相似问法、近义业务表达、历史真实问题变体
+- structured rerank：按 metric、table、filter、time、version 重排
+
+也就是说，系统未来不是：
+
+- 靠规则硬命中场景
+- 或者靠 embedding 单独决定一切
+
+而是：
+
+- **规则抽取信号**
+- **hybrid retrieval 扩召回**
+- **planner/LLM 做综合判断**
 
 ### 2.2 优先真实表结构，不优先预建分析对象
 
@@ -78,6 +124,12 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 不把全量上下文全部注入
 - 只选择当前 Query Plan 命中的表、知识和少量 few-shot
 - 在 trace 中记录 prompt 上下文摘要，便于回溯“本次到底给了模型什么”
+
+补充一点：
+
+- prompt 中的 few-shot 不应再依赖过死的 domain 硬过滤
+- 允许基于 retrieval score、table overlap、metric overlap、filter overlap 放行相关 example
+- 避免“命中了却因为前面 domain 不准而不用”的问题
 
 ### 2.4 会话工作台不是聊天 UI，而是可恢复的查询工作流界面
 
@@ -136,6 +188,27 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 具体 SQL join 模板
 - 只能服务单一问题的临时规则
 
+后续会进一步把“稳定 join 经验”从普通知识项里抽离一层，形成可独立检索的 `join pattern` 资产。
+
+#### `semantic/join_patterns.json`
+
+职责：
+
+- 维护稳定的多表 join 经验
+- 表达特定业务场景下推荐的 join path、相关表和说明 notes
+- 参与 RetrievalService 检索，并以 `join_pattern` 形式进入 SQL prompt
+
+适合放进去的内容：
+
+- 事实表到维表的稳定 join path
+- 稳定的跨表口径组合方式
+- 多表场景下的结构性经验说明
+
+不适合放进去的内容：
+
+- 只服务单个问题的临时修复
+- 依赖当前一轮 trace 才成立的偶然 join
+
 #### `semantic/domain_config.json`
 
 职责：
@@ -150,6 +223,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 它不是 SQL 模板库
 - 它不是主编译器
 - 它可以用于“用户这句话是什么意思”，不能扩展成“SQL 必须怎么写”
+- 它适合表达稳定语义映射，不适合承载单问题业务特判
 
 ### 3.2 Backend 实现层
 
@@ -589,7 +663,6 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 - 专项业务知识
 - SQL prompt 中的专项约束
-- 内置场景模板 few-shot 的 SQL 形态提示
 - 检索命中的真实 example SQL
 - validator 的结构校验
 
@@ -599,7 +672,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 - `examples/nl2sql_examples.template.json` 会参与 RetrievalService 的 example 检索、管理接口和调试证据
 - SQL prompt 会把命中的 example 以 `retrieved_examples` 形式带入
-- 主 SQL prompt 同时保留内置场景模板 few-shot；当前是“检索样例 + 场景模板”双轨并存
+- 主 SQL prompt 不再依赖问题特定的内置场景模板；当前方向是“检索样例 + 业务知识 + validator 约束”
 
 ### 7.3 当前 Trace 里的理解层观测点
 

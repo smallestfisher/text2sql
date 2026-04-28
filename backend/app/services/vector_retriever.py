@@ -110,11 +110,14 @@ class VectorRetriever:
         return self._local_embed(text)
 
     def _remote_embed(self, text: str) -> list[float]:
-        response = self.client.embeddings.create(
-            model=self.model_name,
-            input=text,
-            timeout=self.timeout_seconds,
-        )
+        request_payload = {
+            "model": self.model_name,
+            "input": text,
+            "timeout": self.timeout_seconds,
+        }
+        if self.model_name.startswith("Qwen/Qwen3-Embedding-"):
+            request_payload["dimensions"] = self.dimensions
+        response = self.client.embeddings.create(**request_payload)
         vector = list(response.data[0].embedding)
         if not vector:
             return self._local_embed(text)

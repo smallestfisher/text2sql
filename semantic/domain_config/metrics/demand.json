@@ -22,6 +22,36 @@
           "grain": "month"
         }
       ]
+    },
+    {
+      "name": "product_count",
+      "aliases": [
+        "产品数量",
+        "产品数",
+        "产品个数",
+        "型号数量",
+        "型号数",
+        "型号个数"
+      ],
+      "semantic_column": "product_ID",
+      "aggregate_function": "COUNT",
+      "definitions": [
+        {
+          "table": "p_demand",
+          "expression": "COUNT(DISTINCT FGCODE)",
+          "grain": "month"
+        },
+        {
+          "table": "v_demand",
+          "expression": "COUNT(DISTINCT FGCODE)",
+          "grain": "month"
+        },
+        {
+          "table": "product_attributes",
+          "expression": "COUNT(DISTINCT product_ID)",
+          "grain": "month"
+        }
+      ]
     }
   ]
 }

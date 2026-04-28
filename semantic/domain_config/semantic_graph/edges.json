@@ -20,6 +20,30 @@
         "on": "sales_financial_perf.FGCODE = product_mapping.FGCODE"
       },
       {
+        "from": "v_demand",
+        "to": "product_attributes",
+        "type": "fg_to_product_attributes",
+        "on": "v_demand.FGCODE = product_attributes.product_ID"
+      },
+      {
+        "from": "p_demand",
+        "to": "product_attributes",
+        "type": "fg_to_product_attributes",
+        "on": "p_demand.FGCODE = product_attributes.product_ID"
+      },
+      {
+        "from": "sales_financial_perf",
+        "to": "product_attributes",
+        "type": "fg_to_product_attributes",
+        "on": "sales_financial_perf.FGCODE = product_attributes.product_ID"
+      },
+      {
+        "from": "product_mapping",
+        "to": "product_attributes",
+        "type": "mapping_to_product_attributes",
+        "on": "product_mapping.FGCODE = product_attributes.product_ID"
+      },
+      {
         "from": "daily_inventory",
         "to": "product_attributes",
         "type": "stage_product_dimension",

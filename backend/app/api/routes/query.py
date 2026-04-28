@@ -178,7 +178,7 @@ def generate_sql(
     skip_warning = _sql_skip_warning(query_plan)
     if not plan_errors and skip_warning is None:
         retrieval = container.retrieval_service.retrieve(_resolve_sql_generation_intent(request))
-        sql_prompt = container.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval)
+        sql_prompt = container.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question=request.question)
         generated_sql = container.llm_client.generate_sql_hint(sql_prompt)
     required_filter_fields: list[str] = []
     sql_errors: list[str] = []

@@ -56,6 +56,22 @@ def _resolve_runtime_database_url() -> str | None:
     )
 
 
+def _default_vector_provider() -> str:
+    return os.getenv("VECTOR_RETRIEVAL_PROVIDER", "siliconflow")
+
+
+def _default_vector_api_base() -> str | None:
+    explicit = os.getenv("VECTOR_API_BASE")
+    if explicit:
+        return explicit
+    openai_base = os.getenv("OPENAI_API_BASE")
+    if openai_base:
+        return openai_base
+    if _default_vector_provider() == "siliconflow":
+        return "https://api.siliconflow.cn/v1"
+    return None
+
+
 class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Text2SQL Backend")
     app_version: str = os.getenv("APP_VERSION", "0.3.0")
@@ -71,11 +87,11 @@ class Settings(BaseModel):
     llm_timeout_seconds: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
     llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))
-    vector_retrieval_provider: str = os.getenv("VECTOR_RETRIEVAL_PROVIDER", "local")
+    vector_retrieval_provider: str = _default_vector_provider()
     vector_api_key: str | None = os.getenv("VECTOR_API_KEY") or os.getenv("OPENAI_API_KEY")
-    vector_api_base: str | None = os.getenv("VECTOR_API_BASE") or os.getenv("OPENAI_API_BASE")
-    vector_model: str = os.getenv("VECTOR_MODEL", "text-embedding-3-small")
-    vector_dimensions: int = int(os.getenv("VECTOR_DIMENSIONS", "256"))
+    vector_api_base: str | None = _default_vector_api_base()
+    vector_model: str = os.getenv("VECTOR_MODEL", "Qwen/Qwen3-Embedding-8B")
+    vector_dimensions: int = int(os.getenv("VECTOR_DIMENSIONS", "1024"))
     vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "3"))
     vector_timeout_seconds: int = int(os.getenv("VECTOR_TIMEOUT_SECONDS", "20"))
     sql_timeout_seconds: int = int(os.getenv("SQL_TIMEOUT_SECONDS", "30"))

@@ -5,6 +5,7 @@
 安装依赖：
 
 ```bash
+cp env.example .env
 pip install -r backend/requirements.txt
 ```
 
@@ -26,6 +27,9 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 未显式配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接自动派生并使用 `manager` 数据库
 - 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
 - 业务库兼容旧字段 `DATABASE_URL` / `DB_URI`
+- 向量检索默认使用 `VECTOR_RETRIEVAL_PROVIDER=siliconflow`
+- 默认向量模型为 `VECTOR_MODEL=Qwen/Qwen3-Embedding-8B`
+- 默认向量维度为 `VECTOR_DIMENSIONS=1024`
 
 ## 当前范围
 
@@ -33,21 +37,24 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 - 加载真实表结构描述、结构化业务知识和辅助语义配置
 - `semantic/domain_config.json` 是辅助语义配置的 manifest 入口，实际内容由 `semantic/domain_config/` 下的分片合并得到
+- `semantic/join_patterns.json` 用于维护稳定的多表 join 经验，并参与 retrieval / prompt 注入
 - 进行语义解析、问题分类和 relevance guard
 - 生成 Query Plan 作为 LLM SQL 生成约束
 - 由 LLM 直接基于真实表和业务知识生成 MySQL SQL
-- PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和少量场景 few-shot，避免 prompt 膨胀
+- PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和少量真实 few-shot，避免 prompt 膨胀
+- PromptBuilder 会把命中的 `retrieved_examples`、`business_notes` 和 `join_patterns` 一起带入 SQL prompt
 - SQL 校验器做只读、安全、表字段范围、时间/版本、LIMIT 和风险治理
 - SQL 校验或执行失败时，触发一次 LLM SQL repair
 - 生成下一轮 `session_state`
 - 提供会话仓库、workspace 聚合接口、trace 恢复和 response snapshot
 - 提供查询日志、SQL 审计、反馈、replay、eval case 和管理接口
+- 检索层当前走 `hybrid retrieval` 方向：关键词 / 向量 / 结构化重排联合召回，规则不再承担过强的 few-shot 门控职责
 
 当前阶段的明确边界：
 
 - 不再要求数据库预建额外分析对象
 - `business_knowledge.json` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
-- 对横表和复杂口径，优先通过 prompt / 内置场景 few-shot / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
+- 对横表和复杂口径，优先通过 prompt / retrieved examples / business knowledge / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
 - `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
 - `POST /api/chat/query/stream` 是前端默认提问入口；通过 SSE 推送 `accepted`、`planning`、`sql_generation`、`execution`、`completed` 等阶段事件
 
@@ -150,7 +157,6 @@ Unknown column '...'
 - `examples/nl2sql_examples.template.json` 现在默认可以为空。
 - 在线样例只应从真实调试链路通过 `materialize-example` 物化进入，不再手写假设样例。
 - example 会参与 RetrievalService 检索，并在命中时以 `retrieved_examples` 形式进入 SQL prompt。
-- SQL prompt 仍然保留内置场景模板 few-shot，用于 demand 横表、plan_actual 对比等专项结构约束。
 - `materialize-example` 或 examples 管理接口写入后会立即刷新 retrieval 索引；当前不需要重启服务才能让新样例生效。
 - `eval/evaluation_cases.json` 也只应保留真实问题或真实 trace 物化出的回归样本，不再维护假设 case。
 

@@ -49,6 +49,48 @@
         ]
       },
       {
+        "name": "demand_product_count_p",
+        "text_any": [
+          "产品数量",
+          "产品数",
+          "产品个数",
+          "型号数量",
+          "型号数",
+          "型号个数"
+        ],
+        "required_filters": [
+          {
+            "field": "source_table",
+            "op": "=",
+            "value": "p_demand"
+          }
+        ],
+        "metrics": [
+          "product_count"
+        ]
+      },
+      {
+        "name": "demand_product_count_v",
+        "text_any": [
+          "产品数量",
+          "产品数",
+          "产品个数",
+          "型号数量",
+          "型号数",
+          "型号个数"
+        ],
+        "required_filters": [
+          {
+            "field": "source_table",
+            "op": "=",
+            "value": "v_demand"
+          }
+        ],
+        "metrics": [
+          "product_count"
+        ]
+      },
+      {
         "name": "approved_vs_actual_input_panel_compare_from_explicit_panel",
         "text_all": [
           "审批版",
