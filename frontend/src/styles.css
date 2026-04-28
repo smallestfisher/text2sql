@@ -412,12 +412,14 @@ button {
   align-content: start;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 2px;
 }
 
 .session-item {
   width: 100%;
+  min-width: 0;
   text-align: left;
   border-radius: var(--radius-lg);
   padding: 14px;
@@ -467,6 +469,7 @@ button {
 
 .session-item-top {
   align-items: flex-start;
+  min-width: 0;
 }
 
 .session-item-time,
@@ -475,8 +478,13 @@ button {
   font-size: 12px;
 }
 
+.session-item-time {
+  flex: 0 0 auto;
+}
+
 .session-item-bottom {
   margin-top: 8px;
+  min-width: 0;
 }
 
 .session-delete-button {
