@@ -8,9 +8,6 @@ CREATE TABLE IF NOT EXISTS users (
   user_id VARCHAR(64) PRIMARY KEY,
   username VARCHAR(191) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
-  can_view_sql BOOLEAN NOT NULL,
-  can_execute_sql BOOLEAN NOT NULL,
-  can_download_results BOOLEAN NOT NULL,
   is_active BOOLEAN NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL
@@ -21,24 +18,6 @@ CREATE TABLE IF NOT EXISTS user_roles (
   role_name VARCHAR(64) NOT NULL,
   created_at DATETIME NOT NULL,
   PRIMARY KEY (user_id, role_name)
-);
-
-CREATE TABLE IF NOT EXISTS data_permissions (
-  permission_id VARCHAR(64) PRIMARY KEY,
-  user_id VARCHAR(64) NOT NULL,
-  scope_type VARCHAR(32) NOT NULL,
-  scope_value VARCHAR(191) NOT NULL,
-  created_at DATETIME NOT NULL,
-  UNIQUE (user_id, scope_type, scope_value)
-);
-
-CREATE TABLE IF NOT EXISTS field_visibility_policies (
-  policy_id VARCHAR(64) PRIMARY KEY,
-  user_id VARCHAR(64) NOT NULL,
-  field_name VARCHAR(191) NOT NULL,
-  visibility_mode VARCHAR(32) NOT NULL,
-  created_at DATETIME NOT NULL,
-  UNIQUE (user_id, field_name)
 );
 
 CREATE TABLE IF NOT EXISTS chat_sessions (

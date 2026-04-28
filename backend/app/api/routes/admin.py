@@ -21,8 +21,6 @@ from backend.app.models.admin import (
 )
 from backend.app.models.auth import (
     AdminPasswordResetRequest,
-    DataScopeUpdateRequest,
-    FieldVisibilityUpdateRequest,
     RoleRecord,
     RoleUpsertRequest,
     UserContext,
@@ -438,30 +436,6 @@ def delete_user(
         raise HTTPException(status_code=404, detail="user not found") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.put("/users/{user_id}/data-scope", response_model=UserContext)
-def update_user_data_scope(
-    user_id: str,
-    request: DataScopeUpdateRequest,
-    container: AppContainer = Depends(get_container),
-) -> UserContext:
-    try:
-        return container.auth_service.update_data_scope(user_id, request)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="user not found") from exc
-
-
-@router.put("/users/{user_id}/field-visibility", response_model=UserContext)
-def update_user_field_visibility(
-    user_id: str,
-    request: FieldVisibilityUpdateRequest,
-    container: AppContainer = Depends(get_container),
-) -> UserContext:
-    try:
-        return container.auth_service.update_field_visibility(user_id, request)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="user not found") from exc
 
 
 @router.get("/roles", response_model=list[RoleRecord])

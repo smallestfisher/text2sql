@@ -1,25 +1,7 @@
-export interface DataScope {
-  factories: string[];
-  sbus: string[];
-  bus: string[];
-  customers: string[];
-  products: string[];
-}
-
-export interface FieldVisibilityPolicy {
-  field_name: string;
-  mode: "visible" | "masked" | "hidden";
-}
-
 export interface UserContext {
   user_id: string;
   username?: string | null;
   roles: string[];
-  data_scope: DataScope;
-  field_visibility: FieldVisibilityPolicy[];
-  can_view_sql: boolean;
-  can_execute_sql: boolean;
-  can_download_results: boolean;
   is_active: boolean;
 }
 
@@ -412,10 +394,5 @@ export interface UserUpsertPayload {
   username: string;
   password?: string;
   roles: string[];
-  data_scope: DataScope;
-  field_visibility: FieldVisibilityPolicy[];
-  can_view_sql: boolean;
-  can_execute_sql: boolean;
-  can_download_results: boolean;
   is_active: boolean;
 }

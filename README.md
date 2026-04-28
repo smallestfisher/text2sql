@@ -48,7 +48,7 @@ npm run dev
 Unknown column '...'
 ```
 
-说明运行时表结构没升级到最新版本。优先用有 `ALTER TABLE` 权限的账号重启服务；如果运行账号没有变更表结构权限，就手动执行 [sql/runtime_store.sql](sql/runtime_store.sql) 并补齐 `RuntimeStoreInitializer` 里定义的增量列。常见缺失列包括 `query_logs.plan_risk_level`、`sql_audit_logs.sql_risk_level`，以及历史兼容字段 `users.can_download_results`。
+说明运行时表结构没升级到最新版本。优先用有 `ALTER TABLE` 权限的账号重启服务；如果运行账号没有变更表结构权限，就手动执行 [sql/runtime_store.sql](sql/runtime_store.sql) 并补齐 `RuntimeStoreInitializer` 里定义的增量列。常见缺失列包括 `query_logs.plan_risk_level`、`query_logs.sql_risk_level`、`sql_audit_logs.plan_risk_level`、`sql_audit_logs.sql_risk_level`。
 
 ## 文档导航
 

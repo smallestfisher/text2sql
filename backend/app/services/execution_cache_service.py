@@ -58,8 +58,6 @@ class ExecutionCacheService:
         payload = {
             "sql": sql,
             "user_id": user_context.user_id if user_context else None,
-            "scope": user_context.data_scope.model_dump() if user_context else None,
-            "visibility": [item.model_dump() for item in user_context.field_visibility] if user_context else [],
         }
         normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

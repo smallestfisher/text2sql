@@ -27,12 +27,6 @@ class RuntimeStoreInitializer:
 
         migration_errors: list[str] = []
         self._ensure_column(
-            "users",
-            "can_download_results",
-            "BOOLEAN NOT NULL DEFAULT TRUE",
-            migration_errors,
-        )
-        self._ensure_column(
             "query_logs",
             "plan_risk_level",
             "VARCHAR(16) NULL",

@@ -109,17 +109,6 @@ const emptyUserForm: UserUpsertPayload = {
   username: "",
   password: "",
   roles: ["viewer"],
-  data_scope: {
-    factories: [],
-    sbus: [],
-    bus: [],
-    customers: [],
-    products: [],
-  },
-  field_visibility: [],
-  can_view_sql: true,
-  can_execute_sql: true,
-  can_download_results: true,
   is_active: true,
 };
 
@@ -578,11 +567,6 @@ function App() {
       await api.adminUpsertUser(token, user.user_id, {
         username: user.username || user.user_id,
         roles: user.roles,
-        data_scope: user.data_scope,
-        field_visibility: user.field_visibility,
-        can_view_sql: user.can_view_sql,
-        can_execute_sql: user.can_execute_sql,
-        can_download_results: user.can_download_results,
         is_active: !user.is_active,
       });
       await loadAdminData(token);

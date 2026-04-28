@@ -13,11 +13,8 @@ from backend.app.models.auth import (
     AdminPasswordResetRequest,
     AuthUserRecord,
     BootstrapAdminRequest,
-    DataScopeUpdateRequest,
-    FieldVisibilityUpdateRequest,
     LoginRequest,
     LoginResponse,
-    FieldVisibilityPolicy,
     PasswordChangeRequest,
     RoleRecord,
     RoleUpsertRequest,
@@ -61,9 +58,6 @@ class AuthService:
                 username=request.username,
                 password=request.password,
                 roles=["admin"],
-                can_view_sql=True,
-                can_execute_sql=True,
-                can_download_results=True,
                 is_active=True,
             ),
             existing=None,
@@ -158,32 +152,6 @@ class AuthService:
         if not deleted:
             raise KeyError(user_id)
 
-    def update_data_scope(self, user_id: str, request: DataScopeUpdateRequest) -> UserContext:
-        existing = self.repository.get_by_user_id(user_id)
-        if existing is None:
-            raise KeyError(user_id)
-        record = existing.model_copy(update={"data_scope": request.data_scope, "updated_at": datetime.utcnow()})
-        self.repository.upsert(record)
-        return self._to_user_context(record)
-
-    def update_field_visibility(
-        self,
-        user_id: str,
-        request: FieldVisibilityUpdateRequest,
-    ) -> UserContext:
-        existing = self.repository.get_by_user_id(user_id)
-        if existing is None:
-            raise KeyError(user_id)
-        normalized = self._normalize_field_visibility(request.field_visibility)
-        record = existing.model_copy(
-            update={
-                "field_visibility": normalized,
-                "updated_at": datetime.utcnow(),
-            }
-        )
-        self.repository.upsert(record)
-        return self._to_user_context(record)
-
     def change_password(
         self,
         current_user: UserContext,
@@ -208,33 +176,17 @@ class AuthService:
         request: UserUpsertRequest,
         existing: AuthUserRecord | None,
     ) -> AuthUserRecord:
-        provided_fields = request.model_fields_set
         password_hash = (
             self._hash_password(request.password)
             if request.password
             else (existing.password_hash if existing is not None else self._hash_password("change_me"))
         )
         created_at = existing.created_at if existing is not None else datetime.utcnow()
-        data_scope = (
-            request.data_scope
-            if "data_scope" in provided_fields or existing is None
-            else existing.data_scope
-        )
-        field_visibility = (
-            self._normalize_field_visibility(request.field_visibility)
-            if "field_visibility" in provided_fields or existing is None
-            else existing.field_visibility
-        )
         return AuthUserRecord(
             user_id=user_id,
             username=request.username,
             password_hash=password_hash,
             roles=request.roles or (existing.roles if existing is not None else ["viewer"]),
-            data_scope=data_scope,
-            field_visibility=field_visibility,
-            can_view_sql=request.can_view_sql,
-            can_execute_sql=request.can_execute_sql,
-            can_download_results=request.can_download_results,
             is_active=request.is_active,
             created_at=created_at,
             updated_at=datetime.utcnow(),
@@ -245,27 +197,8 @@ class AuthService:
             user_id=user.user_id,
             username=user.username,
             roles=user.roles,
-            data_scope=user.data_scope,
-            field_visibility=user.field_visibility,
-            can_view_sql=user.can_view_sql,
-            can_execute_sql=user.can_execute_sql,
-            can_download_results=user.can_download_results,
             is_active=user.is_active,
         )
-
-    def _normalize_field_visibility(
-        self,
-        policies: list[FieldVisibilityPolicy],
-    ) -> list[FieldVisibilityPolicy]:
-        deduplicated: dict[str, FieldVisibilityPolicy] = {}
-        for item in policies:
-            if not item.field_name.strip():
-                continue
-            deduplicated[item.field_name.strip()] = FieldVisibilityPolicy(
-                field_name=item.field_name.strip(),
-                mode=item.mode,
-            )
-        return [deduplicated[key] for key in sorted(deduplicated)]
 
     def _ensure_not_last_active_admin(
         self,

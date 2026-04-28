@@ -257,11 +257,6 @@ export const api = {
         username: payload.username,
         password: payload.password || null,
         roles: payload.roles,
-        data_scope: payload.data_scope,
-        field_visibility: payload.field_visibility,
-        can_view_sql: payload.can_view_sql,
-        can_execute_sql: payload.can_execute_sql,
-        can_download_results: payload.can_download_results,
         is_active: payload.is_active,
       },
     });

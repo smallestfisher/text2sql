@@ -87,7 +87,6 @@ Unknown column '...'
    - `sql_audit_logs.plan_risk_level`
    - `sql_audit_logs.plan_risk_flags_json`
    - `sql_audit_logs.sql_risk_level`
-   - `users.can_download_results`（历史兼容字段，当前不再参与查询主链路治理）
    - `sql_audit_logs.sql_risk_flags_json`
 
 ## API
@@ -158,8 +157,6 @@ Unknown column '...'
 - `PUT /api/admin/users/{user_id}`
 - `POST /api/admin/users/{user_id}/reset-password`
 - `DELETE /api/admin/users/{user_id}`
-- `PUT /api/admin/users/{user_id}/data-scope`
-- `PUT /api/admin/users/{user_id}/field-visibility`
 - `GET /api/admin/roles`
 - `PUT /api/admin/roles/{role_name}`
 
