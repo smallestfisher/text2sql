@@ -433,6 +433,14 @@ button {
   text-align: left;
 }
 
+.session-item-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-item.is-active {
   border-color: rgba(122, 171, 255, 0.36);
   background:
