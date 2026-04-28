@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import re
 
 from backend.app.models.query_plan import QueryPlan
@@ -23,6 +24,9 @@ class SqlValidationResult:
     warnings: list[str]
     risk_level: str = "low"
     risk_flags: list[str] = field(default_factory=list)
+
+
+logger = logging.getLogger(__name__)
 
 
 class SqlValidator:
@@ -77,6 +81,15 @@ class SqlValidator:
         warnings: list[str] = []
         normalized_sql = f" {sql.lower()} "
         inspection = self.ast_validator.inspect(sql)
+        logger.info(
+            "sql validator inspect parser=%s statements=%s sources=%s select_fields=%s group_by_fields=%s functions=%s",
+            inspection.parser_backend,
+            inspection.statement_count,
+            inspection.sources,
+            inspection.select_fields,
+            inspection.group_by_fields,
+            inspection.functions,
+        )
 
         stripped_sql = normalized_sql.strip()
         if not (stripped_sql.startswith("select") or stripped_sql.startswith("with")):
@@ -229,6 +242,14 @@ class SqlValidator:
         warnings.extend(ast_warnings)
 
         risk_flags = self._collect_risk_flags(errors, warnings)
+        logger.info(
+            "sql validator result valid=%s errors=%s warnings=%s risk_level=%s risk_flags=%s",
+            not errors,
+            errors,
+            warnings,
+            self._risk_level_for_flags(risk_flags),
+            risk_flags,
+        )
         return SqlValidationResult(
             errors=errors,
             warnings=warnings,
@@ -493,8 +514,24 @@ class SqlValidator:
         for field in ('FGCODE', 'customer', 'PM_VERSION'):
             forbidden_dimension_candidates.update(item.lower() for item in self._field_candidates(query_plan, field))
         if forbidden_dimension_candidates.intersection(select_fields):
+            logger.warning(
+                "monthly demand outer select rejected forbidden=%s select_fields=%s group_by_fields=%s dimensions=%s metrics=%s",
+                sorted(forbidden_dimension_candidates.intersection(select_fields)),
+                inspection.select_fields,
+                inspection.group_by_fields,
+                query_plan.dimensions,
+                query_plan.metrics,
+            )
             errors.append('monthly demand sql must not project FGCODE, customer, or PM_VERSION in outer select')
         if forbidden_dimension_candidates.intersection(group_by_fields):
+            logger.warning(
+                "monthly demand group by rejected forbidden=%s select_fields=%s group_by_fields=%s dimensions=%s metrics=%s",
+                sorted(forbidden_dimension_candidates.intersection(group_by_fields)),
+                inspection.select_fields,
+                inspection.group_by_fields,
+                query_plan.dimensions,
+                query_plan.metrics,
+            )
             errors.append('monthly demand sql must not group by FGCODE, customer, or PM_VERSION')
         return errors
 

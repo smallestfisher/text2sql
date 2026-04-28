@@ -344,6 +344,15 @@ class ConversationOrchestrator:
                 query_plan=query_plan,
                 user_context=request.user_context,
             )
+            logger.info(
+                "sql validation input trace_id=%s sql_present=%s sql_preview=%s query_plan_tables=%s query_plan_dimensions=%s query_plan_metrics=%s",
+                trace.trace_id,
+                bool(sql),
+                (sql[:800] if sql else None),
+                query_plan.tables,
+                query_plan.dimensions,
+                query_plan.metrics,
+            )
             sql_result = (
                 self.sql_validator.validate_detailed(
                     sql,
@@ -366,6 +375,12 @@ class ConversationOrchestrator:
                     warnings=sql_warnings,
                 )
                 if repaired_sql:
+                    logger.info(
+                        "sql repair candidate trace_id=%s sql_preview=%s errors=%s",
+                        trace.trace_id,
+                        repaired_sql[:800],
+                        sql_errors,
+                    )
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
                         self.domain_config,
