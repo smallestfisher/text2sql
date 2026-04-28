@@ -212,6 +212,60 @@ class PromptBuilder:
             },
         }
 
+    def build_intent_prompt(
+        self,
+        question: str,
+        query_intent: QueryIntent,
+        session_state: SessionState | None,
+    ) -> dict:
+        subject_domain = query_intent.subject_domain
+        domain_tables = self._domain_tables(subject_domain) if subject_domain != "unknown" else []
+        domain_fields: list[str] = []
+        for table_name in domain_tables:
+            table_meta = self._tables_metadata.get(table_name, {})
+            columns = table_meta.get("columns", []) if isinstance(table_meta, dict) else []
+            for column in columns:
+                column_name = column.get("name") if isinstance(column, dict) else None
+                if isinstance(column_name, str) and column_name:
+                    domain_fields.append(column_name)
+        business_notes = self._business_notes(subject_domain)
+        return {
+            "task": "intent_understanding",
+            "question": question,
+            "shallow_parse": query_intent.model_dump(),
+            "session_state": session_state.model_dump() if session_state is not None else None,
+            "domain_hints": {
+                "subject_domain": subject_domain,
+                "domain_tables": domain_tables,
+                "domain_fields": sorted(set(domain_fields))[:120],
+                "supported_domains": self._supported_domains(),
+            },
+            "business_knowledge": business_notes,
+            "instructions": {
+                "return_format": "json",
+                "fields": [
+                    "subject_domain",
+                    "metrics",
+                    "entities",
+                    "dimensions",
+                    "filters",
+                    "time_context",
+                    "version_context",
+                    "analysis_mode",
+                    "question_type",
+                    "inherit_context",
+                    "confidence",
+                    "reason",
+                ],
+                "constraints": [
+                    "优先尊重 shallow_parse 中已确定的高置信时间、版本、topN 和筛选信号。",
+                    "只能使用系统已支持的业务域，不要发明新的 subject_domain。",
+                    "不要输出 SQL，不要输出 schema 解释，只返回结构化 intent。",
+                    "如果无法确定字段或指标，可以留空，不要虚构。",
+                ],
+            },
+        }
+
     def build_sql_prompt(self, query_plan: QueryPlan) -> dict:
         selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
         source_schemas = {
@@ -582,6 +636,31 @@ class PromptBuilder:
         if self.semantic_runtime is None or subject_domain == "unknown":
             return None
         return self.semantic_runtime.domain_tables(subject_domain)
+
+    def _business_notes(self, subject_domain: str) -> str:
+        if not self._business_knowledge or subject_domain == "unknown":
+            return ""
+        sections: list[str] = []
+        total_chars = 0
+        for entry in self._business_knowledge:
+            domains = {str(item).lower() for item in entry.get("domains", []) if item}
+            if subject_domain.lower() not in domains:
+                continue
+            notes = entry.get("notes", [])
+            if not isinstance(notes, list) or not notes:
+                continue
+            block = "\n".join(f"- {note}" for note in notes if isinstance(note, str) and note.strip())
+            if not block:
+                continue
+            separator_chars = 2 if sections else 0
+            projected = total_chars + separator_chars + len(block)
+            if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
+                continue
+            sections.append(block)
+            total_chars = projected
+            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+                break
+        return "\n\n".join(sections)[: self.BUSINESS_NOTES_MAX_CHARS]
 
     def _supported_domains(self) -> list[str]:
         if self.semantic_runtime is None:

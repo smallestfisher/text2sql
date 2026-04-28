@@ -16,6 +16,8 @@ from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.evaluation_service import EvaluationService
 from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.feedback_service import FeedbackService
+from backend.app.services.intent_service import IntentService
+from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
 from backend.app.services.orchestrator import ConversationOrchestrator
@@ -76,12 +78,22 @@ class AppContainer:
             timeout_seconds=self.settings.llm_timeout_seconds,
             max_retries=self.settings.llm_max_retries,
         )
+        self.intent_service = IntentService(
+            llm_client=self.llm_client,
+            prompt_builder=self.prompt_builder,
+        )
+        self.intent_normalizer = IntentNormalizer(self.semantic_runtime)
         self.query_planner = QueryPlanner(
             domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
             llm_client=self.llm_client,
             prompt_builder=self.prompt_builder,
+            intent_service=self.intent_service,
+            intent_normalizer=self.intent_normalizer,
             classification_llm_enabled=self.settings.classification_llm_enabled,
+            intent_shadow_enabled=self.settings.intent_shadow_enabled,
+            intent_primary_enabled=self.settings.intent_primary_enabled,
+            intent_fallback_enabled=self.settings.intent_fallback_enabled,
         )
         self.query_plan_validator = QueryPlanValidator(semantic_runtime=self.semantic_runtime)
         self.query_plan_compiler = QueryPlanCompiler(

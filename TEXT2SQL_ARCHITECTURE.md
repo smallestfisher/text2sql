@@ -25,6 +25,14 @@
 - **本地代码负责理解问题、约束范围、控制风险、恢复状态、记录运行时信息**
 - **少量配置规则只用于“理解问题”或“治理风险”，不再承担“主 SQL 生成器”的职责**
 
+同时，问题理解层已经不再是纯 `parser/classifier/planner-first`：
+
+- `QueryIntentParser` 负责 shallow parse
+- `LLMIntentService` 负责 shadow intent
+- `IntentNormalizer` 负责本地收口
+- `QuestionClassifier` 已切到 `LLM-primary + local fallback/hard guard`
+- `QueryPlanner` 已回归 deterministic planner/compiler
+
 换句话说，这个系统不是：
 
 - 规则引擎主导 + LLM 辅助润色
@@ -210,7 +218,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
    - runtime log
    - evaluation run
 7. 初始化 `ProgressService`
-8. 初始化 Prompt / LLM / Planner / Validator / Permission / Executor / Retrieval 等核心 service
+8. 初始化 Prompt / LLM / Intent / Planner / Validator / Executor / Retrieval 等核心 service
 9. 初始化 SessionWorkspace / ChatResponseRestore / Evaluation 等高层 service
 10. 初始化 `ConversationOrchestrator`
 
@@ -219,6 +227,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 系统明确区分**业务查询库**和**运行时库**
 - 会话、trace、query log、feedback、eval 都是 runtime 数据
 - 主聊天流程不直接散落在路由里，而是统一走 orchestrator
+- intent shadow、intent primary、classifier LLM primary 都通过 settings 开关注入
 
 ---
 
@@ -329,11 +338,27 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 ---
 
-## 6. 问题理解层：QueryIntent + Classification + QueryPlan
+## 6. 问题理解层：Shallow Parse + Intent + Classification + QueryPlan
+
+当前理解链路已经演进为：
+
+1. `QueryIntentParser` 产出 shallow parse
+2. `LLMIntentService` 产出 shadow intent
+3. `IntentNormalizer` 收口 LLM intent
+4. `QueryPlanner` 选择 effective intent：`normalized` 或 `parser fallback`
+5. `QuestionClassifier` 基于 effective intent 做分类
+6. `QueryPlanner` 基于 effective intent + classification 生成 deterministic `QueryPlan`
+
+对应的核心开关有：
+
+- `INTENT_SHADOW_ENABLED`
+- `INTENT_PRIMARY_ENABLED`
+- `INTENT_FALLBACK_ENABLED`
+- `CLASSIFICATION_LLM_ENABLED`
 
 ### 6.1 QueryIntentParser
 
-`QueryIntentParser` 负责把自然语言问题先解析成结构化意图，通常包括：
+`QueryIntentParser` 现在不再承担“最终理解器”职责，而是一个 shallow extractor。它负责先解析出高确定性信号，通常包括：
 
 - 命中的指标 `matched_metrics`
 - 命中的实体 `matched_entities`
@@ -348,11 +373,79 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 这一步解决的是：
 
-**用户这句话里显式说了什么，暗示了什么。**
+**用户这句话里显式说了什么。**
 
-### 6.2 QuestionClassifier
+它的输出会保留为：
 
-`QuestionClassifier` 在 QueryIntent 之上做问题分类。它不是直接产 SQL，而是决定：
+- `parser_query_intent`
+- `parser_intent`
+- `parser_signals`
+
+这些信息会直接进入 trace，作为后续 intent 对比的基线。
+
+### 6.2 LLMIntentService + IntentNormalizer
+
+`LLMIntentService` 不直接接管主链路，而是先生成 shadow intent。当前输出结构已经统一为 `StructuredIntent`，核心字段包括：
+
+- `subject_domain`
+- `metrics`
+- `entities`
+- `dimensions`
+- `filters`
+- `time_context`
+- `version_context`
+- `analysis_mode`
+- `question_type`
+- `inherit_context`
+- `confidence`
+- `reason`
+
+`IntentNormalizer` 再做本地收口，当前重点是：
+
+- domain 合法性检查
+- metric 合法性检查
+- dimension / filter 字段白名单过滤
+- analysis_mode / question_type / confidence 规范化
+
+当前系统会同时保留三份意图：
+
+- `parser_intent`
+- `shadow_intent`
+- `normalized_intent`
+
+并记录两组差异：
+
+- `diff_vs_parser`
+- `diff_vs_shadow`
+
+这使得单题调试时可以直接看出：
+
+- LLM 比 parser 多理解了什么
+- normalizer 又删掉了什么
+
+### 6.3 Intent 选择
+
+主链路是否采用 normalized intent，不再由 orchestrator 临时判断，而是统一由 `QueryPlanner` 决定。
+
+当前规则是：
+
+- 如果 `INTENT_PRIMARY_ENABLED=false`，固定使用 parser intent
+- 如果 normalized intent 不可用，且 `INTENT_FALLBACK_ENABLED=true`，回退到 parser intent
+- 如果 normalized intent 置信度过低，回退到 parser intent
+- 如果 normalized intent 没有任何可执行槽位，回退到 parser intent
+- 否则使用 normalized intent 进入主链路
+
+当前 trace 中会显式记录：
+
+- `intent_selection.selected_source`
+- `intent_selection.fallback_used`
+- `intent_selection.fallback_reason`
+
+### 6.4 QuestionClassifier
+
+`QuestionClassifier` 现在已经切成 `LLM-primary + local fallback/hard guard`。
+
+它仍然负责决定：
 
 - 这是首轮问题还是追问
 - 是否需要继承上一轮上下文
@@ -366,15 +459,49 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - `context_delta` 怎么生成
 - 是否提前终止 SQL 生成
 
-### 6.3 QueryPlanner
+当前分类链路分三层：
 
-`QueryPlanner` 是把 `QueryIntent + Classification + SessionState` 合成为 `QueryPlan` 的组件。
+1. 本地 hard guard
+2. LLM primary classification
+3. 本地 scoring fallback
+
+其中本地 hard guard 仍保留：
+
+- invalid/smalltalk
+- relevance out-of-scope
+- `unknown_request`
+- `missing_metric`
+- 无 session 时的直接 `new`
+
+在进入会话分类后：
+
+- 本地 scoring 仍会计算，但现在主要作为 `fallback_classification`
+- 只要 `CLASSIFICATION_LLM_ENABLED=true` 且有 session，就优先尝试 LLM classification
+- LLM 输出仍需通过本地 accept/reject 校验
+- 不可接受时回退到 scoring fallback
+
+当前 trace / debug 中会显式记录：
+
+- `decision_source`
+- `fallback_classification`
+- `score_details`
+- `score_gap`
+- `llm_hint`
+
+### 6.5 QueryPlanner
+
+`QueryPlanner` 现在已经回归 deterministic planner/compiler。它不再依赖 orchestrator 内部拼 plan，而是统一通过自己的 API 完成：
+
+- `build_planning_trace()`
+- `build_plan_from_intent()`
+- `create_plan()`
 
 主要逻辑：
 
-1. 先做 classify
-2. 提取 metrics / entities / filters / time / version / sort / limit / dimensions
-3. 如果是 follow-up，并且需要继承，则从 `session_state` 合并：
+1. 先拿到 effective intent
+2. 再做 classify
+3. 提取 metrics / entities / filters / time / version / sort / limit / dimensions
+4. 如果是 follow-up，并且需要继承，则从 `session_state` 合并：
    - entities
    - metrics
    - filters
@@ -383,14 +510,20 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
    - dimensions
    - sort
    - limit
-4. 推导 dimensions
-5. 选择候选表 `tables`
-6. 生成基础 `QueryPlan`
-7. 交给 `SemanticRuntime.sanitize_query_plan()` 做结构修正
-8. 处理特殊场景，例如：
+5. 推导 dimensions
+6. 选择候选表 `tables`
+7. 生成基础 `QueryPlan`
+8. 交给 `SemanticRuntime.sanitize_query_plan()` 做结构修正
+9. 处理特殊场景，例如：
    - topN 聚合时去掉不必要时间维度
    - compare 模式 sort 清理
    - demand 月度趋势默认排序
+
+当前的关键变化是：
+
+- orchestrator 不再自己拼 query plan
+- planner 的 deterministic 逻辑重新收回到 `QueryPlanner.build_plan_from_intent()`
+- planner 的职责已经更接近编排器，而不是语义猜测器
 
 可以把 QueryPlan 理解为：
 
@@ -444,6 +577,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 它至少负责三类 prompt：
 
+- intent prompt
 - classification prompt
 - relevance guard prompt
 - query plan prompt
@@ -465,6 +599,24 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - validator 的结构校验
 
 共同逼近正确 SQL。
+
+### 7.3 当前 Trace 里的理解层观测点
+
+当前 trace 中，理解链路已经明确拆出这些步骤：
+
+- `parse_intent`
+- `shadow_intent`
+- `normalized_intent`
+- `classify_question`
+- `plan`
+
+因此单题调试时，可以直接看清：
+
+- parser 看到了什么
+- LLM intent 补了什么
+- normalizer 去掉了什么
+- 最终选了哪份 intent 进入主链路
+- classifier 是走了 `llm_primary` 还是 `scoring_fallback`
 
 ---
 

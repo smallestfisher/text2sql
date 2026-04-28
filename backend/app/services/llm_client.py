@@ -140,6 +140,59 @@ class LLMClient:
             "task": prompt_payload.get("task"),
         }
 
+    def generate_intent(self, prompt_payload: dict) -> dict:
+        if not self.enabled:
+            return {
+                "mode": "stub",
+                "model": self.model_name,
+                "note": "LLM is not connected; intent shadow is disabled.",
+                "task": prompt_payload.get("task"),
+            }
+
+        system_prompt = (
+            "你是一个 Text2SQL 意图理解器。"
+            "基于给定问题、浅层解析结果、会话上下文和 schema 摘要，输出结构化 intent。"
+            "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
+        )
+        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                content = self._complete(messages)
+                parsed = self._extract_json(content)
+                if parsed:
+                    parsed["mode"] = "live"
+                    parsed["model"] = self.model_name
+                    parsed["attempt"] = attempt
+                    return parsed
+                if attempt < self.max_retries:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "只返回合法 JSON，并且只保留 prompt 要求的字段。",
+                        }
+                    )
+            except Exception as exc:
+                if attempt >= self.max_retries:
+                    return {
+                        "mode": "stub",
+                        "model": self.model_name,
+                        "note": f"LLM call failed, intent shadow skipped: {exc}",
+                        "task": prompt_payload.get("task"),
+                    }
+                time.sleep(min(0.4 * attempt, 1.0))
+
+        return {
+            "mode": "stub",
+            "model": self.model_name,
+            "note": "LLM returned non-JSON content, intent shadow skipped.",
+            "task": prompt_payload.get("task"),
+        }
+
     def check_question_relevance(self, prompt_payload: dict) -> dict:
         if not self.enabled:
             return {

@@ -87,18 +87,92 @@ class ConversationOrchestrator:
             self._publish_progress(trace.trace_id, event_type="stage", stage="load_session", status="completed", detail="session state resolved")
 
             self._publish_progress(trace.trace_id, event_type="stage", stage="planning", status="running", detail="building query plan")
-            query_intent, classification, query_plan, planning_warnings = self.query_planner.create_plan(
+            planning_trace = self.query_planner.build_planning_trace(
                 question=request.question,
+                session_state=session_state,
+            )
+            query_intent = planning_trace["query_intent"]
+            classification = planning_trace["classification"]
+            planning_warnings = planning_trace["warnings"]
+            parser_intent = planning_trace["parser_intent"]
+            shadow_intent = planning_trace["shadow_intent"]
+            normalized_shadow_intent = planning_trace["normalized_shadow_intent"]
+            intent_selection = planning_trace["intent_selection"]
+            shadow_diff = planning_trace["shadow_diff"]
+            normalized_diff = planning_trace["normalized_diff"]
+            semantic_diff = planning_trace["semantic_diff"]
+            logger.info(
+                "parser trace trace_id=%s domain=%s metrics=%s entities=%s dimensions=%s filters=%s time_grain=%s version=%s follow_up_cue=%s explicit_slots=%s",
+                trace.trace_id,
+                query_intent.subject_domain,
+                query_intent.matched_metrics,
+                query_intent.matched_entities,
+                query_intent.requested_dimensions,
+                [item.field for item in query_intent.filters],
+                query_intent.time_context.grain,
+                bool(query_intent.version_context),
+                query_intent.has_follow_up_cue,
+                query_intent.has_explicit_slots,
+            )
+            self.audit_service.append_step(
+                trace,
+                "parse_intent",
+                "completed",
+                "parser intent built",
+                metadata={
+                    "parser_intent": parser_intent.model_dump(mode="json"),
+                    "parser_signals": planning_trace["parser_signals"],
+                },
+            )
+            self.audit_service.append_step(
+                trace,
+                "shadow_intent",
+                shadow_intent["status"],
+                shadow_intent.get("reason") or shadow_intent["status"],
+                metadata={
+                    "intent": shadow_intent["intent"].model_dump(mode="json") if shadow_intent.get("intent") is not None else None,
+                    "raw": shadow_intent.get("raw"),
+                    "diff_vs_parser": shadow_diff,
+                },
+            )
+            self.audit_service.append_step(
+                trace,
+                "normalized_intent",
+                normalized_shadow_intent["status"],
+                ", ".join(normalized_shadow_intent.get("warnings", [])) or normalized_shadow_intent["status"],
+                metadata={
+                    "intent": normalized_shadow_intent["intent"].model_dump(mode="json") if normalized_shadow_intent.get("intent") is not None else None,
+                    "warnings": normalized_shadow_intent.get("warnings", []),
+                    "diff_vs_shadow": normalized_diff,
+                    "intent_selection": intent_selection,
+                },
+            )
+
+            query_plan = self.query_planner.build_plan_from_intent(
+                query_intent=query_intent,
+                classification=classification,
                 session_state=session_state,
             )
             warnings.extend(planning_warnings)
             logger.info(
-                "classification trace_id=%s type=%s domain=%s inherit=%s need_clarification=%s",
+                "classification trace_id=%s type=%s domain=%s inherit=%s need_clarification=%s semantic_diff=%s",
                 trace.trace_id,
                 classification.question_type,
                 classification.subject_domain,
                 classification.inherit_context,
                 classification.need_clarification,
+                semantic_diff,
+            )
+            self.audit_service.append_step(
+                trace,
+                "classify_question",
+                "completed",
+                classification.question_type,
+                metadata={
+                    "classification": classification.model_dump(mode="json"),
+                    "classifier_debug": planning_trace.get("classifier_debug", {}),
+                    "session_semantic_diff": semantic_diff,
+                },
             )
             self.audit_service.append_step(
                 trace,
@@ -108,10 +182,7 @@ class ConversationOrchestrator:
                 metadata={
                     "classification": classification.model_dump(),
                     "query_intent": query_intent.model_dump(),
-                    "session_semantic_diff": self.query_planner.semantic_runtime.session_semantic_diff(
-                        query_intent,
-                        session_state,
-                    ),
+                    "session_semantic_diff": semantic_diff,
                     "query_plan_summary": {
                         "subject_domain": query_plan.subject_domain,
                         "tables": query_plan.tables,

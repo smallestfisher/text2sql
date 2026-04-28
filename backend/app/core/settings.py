@@ -72,6 +72,9 @@ class Settings(BaseModel):
     llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))
     classification_llm_enabled: bool = os.getenv("CLASSIFICATION_LLM_ENABLED", "true").lower() == "true"
+    intent_shadow_enabled: bool = os.getenv("INTENT_SHADOW_ENABLED", "true").lower() == "true"
+    intent_primary_enabled: bool = os.getenv("INTENT_PRIMARY_ENABLED", "true").lower() == "true"
+    intent_fallback_enabled: bool = os.getenv("INTENT_FALLBACK_ENABLED", "true").lower() == "true"
     vector_retrieval_provider: str = os.getenv("VECTOR_RETRIEVAL_PROVIDER", "local")
     vector_api_key: str | None = os.getenv("VECTOR_API_KEY") or os.getenv("OPENAI_API_KEY")
     vector_api_base: str | None = os.getenv("VECTOR_API_BASE") or os.getenv("OPENAI_API_BASE")

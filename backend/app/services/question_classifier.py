@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
+
 from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.query_plan import ContextDelta
 from backend.app.models.session_state import SessionState
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.semantic_runtime import SemanticRuntime
+
+
+logger = logging.getLogger(__name__)
 
 
 class QuestionClassifier:
@@ -20,6 +25,10 @@ class QuestionClassifier:
         self.llm_client = llm_client
         self.prompt_builder = prompt_builder
         self.classification_llm_enabled = classification_llm_enabled
+        self._last_debug_info: dict = {}
+
+    def last_debug_info(self) -> dict:
+        return dict(self._last_debug_info)
 
     def classify(
         self,
@@ -29,8 +38,16 @@ class QuestionClassifier:
     ) -> tuple[QuestionClassification, list[str]]:
         warnings: list[str] = []
         normalized_question = query_intent.normalized_question
+        self._last_debug_info = {
+            "normalized_question": normalized_question,
+            "subject_domain": query_intent.subject_domain,
+            "matched_metrics": list(query_intent.matched_metrics),
+            "matched_entities": list(query_intent.matched_entities),
+            "filter_fields": [item.field for item in query_intent.filters],
+            "requested_dimensions": list(query_intent.requested_dimensions),
+        }
         if self._is_invalid_smalltalk(normalized_question):
-            return QuestionClassification(
+            classification = QuestionClassification(
                 question_type="invalid",
                 subject_domain="unknown",
                 inherit_context=False,
@@ -38,7 +55,15 @@ class QuestionClassifier:
                 reason="问题不属于数据查询请求。",
                 reason_code="invalid_smalltalk",
                 need_clarification=False,
-            ), warnings
+            )
+            self._last_debug_info.update(
+                {
+                    "decision_source": "hard_guard",
+                    "decision": classification.question_type,
+                    "reason_code": classification.reason_code,
+                }
+            )
+            return classification, warnings
 
         relevance_hint = self._check_relevance_with_llm(
             original_question=question,
@@ -49,7 +74,7 @@ class QuestionClassifier:
             reason = relevance_hint.get("reason")
             if not isinstance(reason, str) or not reason.strip():
                 reason = "当前输入不属于当前系统支持的业务数据查询范围。"
-            return QuestionClassification(
+            classification = QuestionClassification(
                 question_type="invalid",
                 subject_domain="unknown",
                 inherit_context=False,
@@ -57,10 +82,19 @@ class QuestionClassifier:
                 reason=reason,
                 reason_code="llm_out_of_scope",
                 need_clarification=False,
-            ), warnings
+            )
+            self._last_debug_info.update(
+                {
+                    "decision_source": "relevance_guard",
+                    "relevance_hint": relevance_hint,
+                    "decision": classification.question_type,
+                    "reason_code": classification.reason_code,
+                }
+            )
+            return classification, warnings
 
         if not query_intent.matched_metrics and query_intent.subject_domain == "unknown":
-            return QuestionClassification(
+            classification = QuestionClassification(
                 question_type="clarification_needed",
                 subject_domain="unknown",
                 inherit_context=False,
@@ -72,10 +106,18 @@ class QuestionClassifier:
                     "unknown_request",
                     "请补充你要查询的主题、指标和时间范围，例如库存、计划投入或实际产出。",
                 ),
-            ), warnings
+            )
+            self._last_debug_info.update(
+                {
+                    "decision_source": "hard_guard",
+                    "decision": classification.question_type,
+                    "reason_code": classification.reason_code,
+                }
+            )
+            return classification, warnings
 
         if not query_intent.matched_metrics and session_state is None:
-            return QuestionClassification(
+            classification = QuestionClassification(
                 question_type="clarification_needed",
                 subject_domain=query_intent.subject_domain,
                 inherit_context=False,
@@ -87,10 +129,18 @@ class QuestionClassifier:
                     "missing_metric",
                     "请补充要查询的指标，例如库存量、计划投入量、实际产出或销售业绩。",
                 ),
-            ), warnings
+            )
+            self._last_debug_info.update(
+                {
+                    "decision_source": "hard_guard",
+                    "decision": classification.question_type,
+                    "reason_code": classification.reason_code,
+                }
+            )
+            return classification, warnings
 
         if session_state is None:
-            return QuestionClassification(
+            classification = QuestionClassification(
                 question_type="new",
                 subject_domain=query_intent.subject_domain,
                 inherit_context=False,
@@ -98,26 +148,41 @@ class QuestionClassifier:
                 reason="当前没有可继承会话，按新问题处理。",
                 reason_code="no_session_context",
                 context_delta=ContextDelta(),
-            ), warnings
+            )
+            self._last_debug_info.update(
+                {
+                    "decision_source": "hard_guard",
+                    "decision": classification.question_type,
+                    "reason_code": classification.reason_code,
+                }
+            )
+            return classification, warnings
 
         semantic_diff = self._semantic_diff(query_intent, session_state)
-        classification, score_gap, score_details = self._classify_from_scores(
+        fallback_classification, score_gap, score_details = self._classify_from_scores(
             query_intent=query_intent,
             session_state=session_state,
             semantic_diff=semantic_diff,
         )
+        classification = fallback_classification
         if score_gap < 0.08:
             warnings.append(
                 "classification is near boundary: "
                 + ", ".join(f"{key}={value:.3f}" for key, value in score_details.items())
             )
+            logger.info(
+                "classification near boundary question=%s score_gap=%.3f scores=%s",
+                question,
+                score_gap,
+                score_details,
+            )
 
-        llm_hint = self._classify_with_llm(
+        llm_hint = self._classify_with_llm_primary(
             original_question=question,
             query_intent=query_intent,
             session_state=session_state,
             semantic_diff=semantic_diff,
-            base_classification=classification,
+            base_classification=fallback_classification,
             candidate_scores=score_details,
             ambiguous=score_gap < 0.12,
         )
@@ -126,7 +191,7 @@ class QuestionClassifier:
                 hint=llm_hint,
                 query_intent=query_intent,
                 session_state=session_state,
-                base_classification=classification,
+                base_classification=fallback_classification,
             )
             acceptable, rejection_reasons = self._llm_classification_is_acceptable(
                 candidate=candidate,
@@ -139,6 +204,20 @@ class QuestionClassifier:
                 warnings.append(
                     "llm classification hint rejected: " + "; ".join(rejection_reasons)
                 )
+
+        self._last_debug_info.update(
+            {
+                "decision_source": self._decision_source(classification, fallback_classification, llm_hint),
+                "semantic_diff": semantic_diff,
+                "score_gap": score_gap,
+                "score_details": score_details,
+                "llm_hint": llm_hint,
+                "fallback_classification": fallback_classification.model_dump(mode="json"),
+                "decision": classification.question_type,
+                "reason_code": classification.reason_code,
+                "warnings": list(warnings),
+            }
+        )
 
         return classification, warnings
 
@@ -351,7 +430,7 @@ class QuestionClassifier:
         session_state: SessionState,
         semantic_diff: dict,
     ) -> None:
-        if self.semantic_runtime is None:
+        if self.semantic_runtime is None or self.classification_llm_enabled:
             return
         for rule in self.semantic_runtime.classification_rules():
             question_type = rule.get("question_type")
@@ -489,7 +568,7 @@ class QuestionClassifier:
         confidence = self._sanitize_confidence(hint.get("confidence"), 0.0)
         return confidence >= 0.7
 
-    def _classify_with_llm(
+    def _classify_with_llm_primary(
         self,
         original_question: str,
         query_intent: QueryIntent,
@@ -500,8 +579,7 @@ class QuestionClassifier:
         ambiguous: bool,
     ) -> dict | None:
         if (
-            not ambiguous
-            or not self.classification_llm_enabled
+            not self.classification_llm_enabled
             or self.llm_client is None
             or self.prompt_builder is None
             or session_state is None
@@ -516,6 +594,8 @@ class QuestionClassifier:
             semantic_diff=semantic_diff,
             ambiguous=ambiguous,
         )
+        arbitration_context["llm_role"] = "primary_classifier"
+        arbitration_context["fallback_classification"] = base_classification.model_dump(mode="json")
         prompt_payload = self.prompt_builder.build_classification_prompt(
             question=original_question,
             query_intent=query_intent,
@@ -527,6 +607,18 @@ class QuestionClassifier:
             arbitration_context=arbitration_context,
         )
         return self.llm_client.generate_classification_hint(prompt_payload)
+
+    def _decision_source(
+        self,
+        final_classification: QuestionClassification,
+        fallback_classification: QuestionClassification,
+        llm_hint: dict | None,
+    ) -> str:
+        if llm_hint is None or llm_hint.get("mode") != "live":
+            return "scoring_fallback"
+        if final_classification.model_dump(mode="json") == fallback_classification.model_dump(mode="json"):
+            return "scoring_fallback"
+        return "llm_primary"
 
     def _classification_arbitration_context(
         self,
