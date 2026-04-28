@@ -84,17 +84,13 @@ def create_query_plan(
         question=request.question,
         session_state=request.session_state,
     )
-    query_plan, permission_warnings = container.permission_service.apply_to_query_plan(
-        query_plan=query_plan,
-        user_context=request.user_context,
-    )
     _sync_classification_with_query_plan(classification, query_plan)
     return PlanResponse(
         classification=classification,
         query_intent=query_intent,
         query_plan=query_plan,
         domain_summary=container.domain_config_loader.summary(),
-        warnings=warnings + permission_warnings,
+        warnings=warnings,
     )
 
 
@@ -127,10 +123,7 @@ def generate_sql(
         container,
         fallback=request.user_context,
     )
-    query_plan, permission_warnings = container.permission_service.apply_to_query_plan(
-        query_plan=request.query_plan,
-        user_context=request.user_context,
-    )
+    query_plan = request.query_plan
     plan_result = container.query_plan_validator.validate_detailed(
         query_plan=query_plan,
         domain_config=container.domain_config,
@@ -143,10 +136,7 @@ def generate_sql(
     if not plan_errors and skip_warning is None:
         sql_prompt = container.prompt_builder.build_sql_prompt(query_plan)
         generated_sql = container.llm_client.generate_sql_hint(sql_prompt)
-    required_filter_fields = container.permission_service.required_filter_fields(
-        query_plan=query_plan,
-        user_context=request.user_context,
-    )
+    required_filter_fields: list[str] = []
     sql_errors: list[str] = []
     sql_warnings: list[str] = []
     sql_risk_level = "low"
@@ -187,17 +177,14 @@ def generate_sql(
                     sql_risk_level = repaired_result.risk_level
                     sql_risk_flags = repaired_result.risk_flags
                     sql_warnings.append("llm sql repaired after validation failure")
-    visible_sql = (
-        generated_sql if container.permission_service.can_view_sql(request.user_context) else None
-    )
     validation = ValidationResponse(
         valid=not (plan_errors or sql_errors),
         errors=plan_errors + sql_errors,
-        warnings=permission_warnings + plan_warnings + ([skip_warning] if skip_warning else []) + sql_warnings,
+        warnings=plan_warnings + ([skip_warning] if skip_warning else []) + sql_warnings,
         risk_level=sql_risk_level,
         risk_flags=sql_risk_flags,
     )
-    return SqlResponse(query_plan=query_plan, sql=visible_sql, validation=validation)
+    return SqlResponse(query_plan=query_plan, sql=generated_sql, validation=validation)
 
 
 @router.post("/execute", response_model=ExecutionResponse)
@@ -219,7 +206,7 @@ def execute_sql(
         return ExecutionResponse(
             executed=False,
             status="db_error",
-            sql=request.sql if container.permission_service.can_view_sql(request.user_context) else None,
+            sql=request.sql,
             row_count=0,
             columns=[],
             rows=[],
@@ -230,11 +217,5 @@ def execute_sql(
             truncated=False,
         )
     execution = container.sql_executor.execute(sql=request.sql, user_context=request.user_context)
-    execution = container.permission_service.apply_to_execution(
-        execution=execution,
-        user_context=request.user_context,
-    )
     execution.warnings.extend(sql_result.warnings)
-    if not container.permission_service.can_view_sql(request.user_context):
-        execution.sql = None
     return execution

@@ -258,6 +258,35 @@ class PromptBuilder:
                         "SELECT FGCODE, SUM(demand_qty) AS demand_qty FROM demand_unpivot WHERE demand_month='YYYYMM' AND PM_VERSION IN (...) GROUP BY FGCODE ORDER BY demand_qty DESC LIMIT 1",
                     ],
                 }
+        elif self._is_plan_actual_input_compare(query_plan, selected_sources):
+            uses_panel_metrics = self._uses_panel_input_compare(query_plan)
+            approved_metric = "approved_input_panel_qty" if uses_panel_metrics else "approved_input_qty"
+            actual_metric = "actual_input_panel_qty" if uses_panel_metrics else "actual_input_qty"
+            gap_metric = "input_panel_gap_qty" if uses_panel_metrics else "input_gap_qty"
+            rate_metric = "input_panel_achievement_rate" if uses_panel_metrics else "input_achievement_rate"
+            approved_column = "target_in_panel_qty" if uses_panel_metrics else "target_IN_glass_qty"
+            actual_column = "Panel_qty" if uses_panel_metrics else "GLS_qty"
+            sql_preferences = [
+                "审批版投入与实际投入对比时，审批侧使用 monthly_plan_approved，实际侧使用 production_actuals。",
+                "如果 query_plan.filters 包含 act_type='投入'，实际侧必须保留 act_type='投入' 过滤。",
+                "审批侧工厂字段使用 monthly_plan_approved.factory_code，并统一别名成 factory；实际侧工厂字段使用 production_actuals.FACTORY，并统一别名成 factory。",
+                "月粒度对比时，不要直接把逻辑字段 biz_month 写成物理列。审批侧应使用 plan_month 或从 PLAN_date 映射月份；实际侧应使用 DATE_FORMAT(work_date, '%Y-%m') 或等价方式映射月份。",
+                "如果 monthly_plan_approved.plan_month 的真实格式是 YYYY-MM，单月查询应优先过滤 plan_month='YYYY-MM'；多月窗口应比较 YYYY-MM 形式，不要用 YYYY-MM-DD 去比较 plan_month。",
+                f"{approved_metric} 应基于 monthly_plan_approved 的 SUM({approved_column}) 聚合。",
+                f"{actual_metric} 应基于 production_actuals 的 SUM({actual_column}) 聚合。",
+                f"{gap_metric} 默认定义为 {actual_metric} - {approved_metric}。",
+                f"{rate_metric} 默认定义为 {actual_metric} / {approved_metric}；如果 {approved_metric}=0，返回 NULL。",
+                "优先先分别按月份、工厂聚合审批侧和实际侧，再做 JOIN 计算派生指标。",
+                *sql_preferences,
+            ]
+            few_shot = {
+                "question_pattern": "2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+                "sql_shape": [
+                    "WITH approved_input AS (SELECT plan_month AS biz_month, factory_code AS factory, SUM(target_IN_glass_qty) AS approved_input_qty FROM monthly_plan_approved WHERE plan_month = 'YYYY-MM' AND factory_code = 'ARRAY' GROUP BY plan_month, factory_code)",
+                    "actual_input AS (SELECT DATE_FORMAT(work_date, '%Y-%m') AS biz_month, FACTORY AS factory, SUM(GLS_qty) AS actual_input_qty FROM production_actuals WHERE work_date BETWEEN 'YYYY-MM-01' AND 'YYYY-MM-31' AND FACTORY = 'ARRAY' AND act_type = '投入' GROUP BY DATE_FORMAT(work_date, '%Y-%m'), FACTORY)",
+                    "SELECT approved_input.biz_month AS biz_month, approved_input.factory AS factory, approved_input.approved_input_qty, COALESCE(actual_input.actual_input_qty, 0) AS actual_input_qty, COALESCE(actual_input.actual_input_qty, 0) - approved_input.approved_input_qty AS input_gap_qty, CASE WHEN approved_input.approved_input_qty = 0 THEN NULL ELSE COALESCE(actual_input.actual_input_qty, 0) / approved_input.approved_input_qty END AS input_achievement_rate FROM approved_input LEFT JOIN actual_input ON approved_input.biz_month = actual_input.biz_month AND approved_input.factory = actual_input.factory ORDER BY approved_input.biz_month LIMIT 200",
+                ],
+            }
         business_notes = self._business_notes_for_plan(query_plan, selected_sources)
         business_notes_source = self._business_notes_source_for_plan(query_plan, selected_sources)
         context_budget = {
@@ -431,6 +460,36 @@ class PromptBuilder:
             query_plan.subject_domain == "demand"
             or bool({"p_demand", "v_demand"}.intersection(sources))
             or any(metric.startswith("demand") for metric in query_plan.metrics)
+        )
+
+    def _is_plan_actual_input_compare(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> bool:
+        sources = set(selected_sources or []) | set(query_plan.tables)
+        metrics = set(query_plan.metrics)
+        compare_metrics = {
+            "approved_input_qty",
+            "approved_input_panel_qty",
+            "actual_input_qty",
+            "actual_input_panel_qty",
+            "input_gap_qty",
+            "input_panel_gap_qty",
+            "input_achievement_rate",
+            "input_panel_achievement_rate",
+        }
+        return (
+            query_plan.subject_domain == "plan_actual"
+            and {"monthly_plan_approved", "production_actuals"}.issubset(sources)
+            and len(metrics.intersection(compare_metrics)) >= 3
+        )
+
+    def _uses_panel_input_compare(self, query_plan: QueryPlan) -> bool:
+        metrics = set(query_plan.metrics)
+        return bool(
+            {
+                "approved_input_panel_qty",
+                "actual_input_panel_qty",
+                "input_panel_gap_qty",
+                "input_panel_achievement_rate",
+            }.intersection(metrics)
         )
 
     def _query_profile(self, subject_domain: str) -> dict | None:

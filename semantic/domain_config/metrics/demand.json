@@ -1,0 +1,27 @@
+{
+  "metrics": [
+    {
+      "name": "demand_qty",
+      "aliases": [
+        "需求",
+        "需求量",
+        "V版需求",
+        "P版需求"
+      ],
+      "semantic_column": "demand_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "v_demand",
+          "expression": "normalized_from_horizontal_month_columns",
+          "grain": "month"
+        },
+        {
+          "table": "p_demand",
+          "expression": "normalized_from_horizontal_month_columns",
+          "grain": "month"
+        }
+      ]
+    }
+  ]
+}

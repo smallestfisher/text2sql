@@ -36,10 +36,9 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 生成 Query Plan 作为 LLM SQL 生成约束
 - 由 LLM 直接基于真实表和业务知识生成 MySQL SQL
 - PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和场景 few-shot，避免 prompt 膨胀
-- SQL 校验器做只读、安全、表字段范围、权限、时间/版本、LIMIT 和风险治理
+- SQL 校验器做只读、安全、表字段范围、时间/版本、LIMIT 和风险治理
 - SQL 校验或执行失败时，触发一次 LLM SQL repair
 - 生成下一轮 `session_state`
-- 注入基础数据权限过滤
 - 提供会话仓库、workspace 聚合接口、trace 恢复和 response snapshot
 - 提供查询日志、SQL 审计、反馈、replay、eval case 和管理接口
 
@@ -55,7 +54,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 运行时数据默认落到运行时数据库，包括：
 
-- 用户、角色和权限
+- 用户和角色
 - 会话、消息和状态快照
 - query log、trace、SQL audit、feedback
 - evaluation runs
@@ -71,17 +70,16 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 ### 老 runtime 库升级提示
 
-如果你复用的是旧 runtime 库，且运行账号没有 `ALTER TABLE` 权限，启动后可能不会自动补齐新列。常见症状是登录时报：
+如果你复用的是旧 runtime 库，且运行账号没有 `ALTER TABLE` 权限，启动后可能不会自动补齐新列。常见症状是启动或登录时报：
 
 ```text
-Unknown column 'can_download_results' in 'field list'
+Unknown column '...'
 ```
 
-这说明 `users` 表还是旧结构。处理方式：
+这说明 runtime 表结构还是旧版本。处理方式：
 
 1. 优先用有 `CREATE/ALTER` 权限的账号重启服务，让 `RuntimeStoreInitializer` 自动补表结构。
 2. 如果运行账号不允许改表，就手动执行 [sql/runtime_store.sql](../sql/runtime_store.sql)，并补齐当前增量列：
-   - `users.can_download_results`
    - `query_logs.plan_risk_level`
    - `query_logs.plan_risk_flags_json`
    - `query_logs.sql_risk_level`
@@ -89,6 +87,7 @@ Unknown column 'can_download_results' in 'field list'
    - `sql_audit_logs.plan_risk_level`
    - `sql_audit_logs.plan_risk_flags_json`
    - `sql_audit_logs.sql_risk_level`
+   - `users.can_download_results`（历史兼容字段，当前不再参与查询主链路治理）
    - `sql_audit_logs.sql_risk_flags_json`
 
 ## API
@@ -223,7 +222,7 @@ curl -X POST http://127.0.0.1:8000/api/query/classify \
 
 ## Offline Regression
 
-在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，当前主要覆盖 `classification / query_plan / permission_filter` 这几层：
+在没有运行时 MySQL、业务库、真实 LLM 或真实执行环境的情况下，可以直接跑离线回归，当前主要覆盖 `classification / query_plan` 这几层：
 
 ```bash
 python3 backend/offline_regression.py --failures-only
@@ -265,7 +264,7 @@ python3 backend/offline_regression.py --report-dir tmp/offline-regression
 
 - 离线回归不会连接数据库，也不会写 runtime 审计表
 - 当前会复用 `eval/evaluation_cases.json`
-- 当前主要用于收敛分类、规划和权限注入；LLM-first SQL 生成与 SQL 校验需要在 live 或 replay 链路验证
+- 当前主要用于收敛分类和规划；LLM-first SQL 生成与 SQL 校验需要在 live 或 replay 链路验证
 - 控制台输出会包含 `question_type / scenario / failure_types` 的聚合统计
 - `--report-dir` 会输出 `summary.json` 和 `failures.json`
 - `.github/workflows/offline-regression.yml` 会执行 JSON 校验、semantic lint、`compileall` 和离线回归
@@ -282,4 +281,4 @@ python3 backend/offline_regression.py --report-dir tmp/offline-regression
 - `app/core`：应用装配、settings、异常处理
 - `app/models`：请求、响应、会话、检索、追踪、workspace 模型
 - `app/repositories`：运行时数据库仓库、metadata 仓库
-- `app/services`：语义解析、分类、规划、权限、执行、会话、审计、prompt、LLM、answer、evaluation、auth
+- `app/services`：语义解析、分类、规划、执行、会话、审计、prompt、LLM、answer、evaluation、auth

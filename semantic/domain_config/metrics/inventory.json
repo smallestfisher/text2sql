@@ -1,0 +1,26 @@
+{
+  "metrics": [
+    {
+      "name": "inventory_qty",
+      "aliases": [
+        "库存",
+        "库存量",
+        "库存数量"
+      ],
+      "semantic_column": "inventory_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "daily_inventory",
+          "expression": "sum(TTL_Qty)",
+          "grain": "day"
+        },
+        {
+          "table": "oms_inventory",
+          "expression": "sum(panel_qty)",
+          "grain": "month"
+        }
+      ]
+    }
+  ]
+}

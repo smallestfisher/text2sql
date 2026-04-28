@@ -1,0 +1,149 @@
+{
+  "query_profiles": {
+    "plan_actual": {
+      "allowed_fields": [
+        "source_table",
+        "biz_date",
+        "biz_month",
+        "version_code",
+        "factory",
+        "stage_product_id",
+        "fg_product_id",
+        "plan_input_qty",
+        "approved_input_qty",
+        "approved_input_panel_qty",
+        "actual_input_qty",
+        "actual_input_panel_qty",
+        "actual_output_qty",
+        "actual_output_panel_qty",
+        "input_gap_qty",
+        "input_panel_gap_qty",
+        "input_achievement_rate",
+        "input_panel_achievement_rate",
+        "defect_qty"
+      ],
+      "field_aliases": {
+        "biz_date": [
+          "PLAN_date",
+          "work_date",
+          "plan_date"
+        ],
+        "biz_month": [
+          "plan_month"
+        ],
+        "version_code": [
+          "PM_VERSION"
+        ],
+        "factory": [
+          "factory_code",
+          "FACTORY",
+          "factory"
+        ],
+        "stage_product_id": [
+          "product_ID"
+        ],
+        "fg_product_id": [
+          "FGCODE"
+        ],
+        "plan_input_qty": [
+          "target_qty",
+          "target_IN_glass_qty"
+        ],
+        "approved_input_qty": [
+          "target_IN_glass_qty"
+        ],
+        "approved_input_panel_qty": [
+          "target_in_panel_qty"
+        ],
+        "actual_input_qty": [
+          "GLS_qty"
+        ],
+        "actual_input_panel_qty": [
+          "Panel_qty"
+        ],
+        "actual_output_qty": [
+          "GLS_qty"
+        ],
+        "actual_output_panel_qty": [
+          "Panel_qty"
+        ],
+        "input_gap_qty": [
+          "target_IN_glass_qty",
+          "GLS_qty"
+        ],
+        "input_panel_gap_qty": [
+          "target_in_panel_qty",
+          "Panel_qty"
+        ],
+        "input_achievement_rate": [
+          "target_IN_glass_qty",
+          "GLS_qty"
+        ],
+        "input_panel_achievement_rate": [
+          "target_in_panel_qty",
+          "Panel_qty"
+        ],
+        "defect_qty": [
+          "defect_qty"
+        ]
+      },
+      "default_limit": 200,
+      "max_limit": 200,
+      "time_filter_fields": [
+        "biz_date",
+        "biz_month"
+      ],
+      "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
+      "default_sort": [
+        {
+          "field": "biz_date",
+          "order": "desc"
+        }
+      ],
+      "permission_scope_fields": {
+        "factories": "factory",
+        "products": "stage_product_id"
+      },
+      "dimension_preferences": [
+        {
+          "time_grain": "day",
+          "add_dimensions": [
+            "biz_date"
+          ]
+        },
+        {
+          "time_grain": "month",
+          "add_dimensions": [
+            "biz_month"
+          ]
+        },
+        {
+          "entities": [
+            "factory"
+          ],
+          "exclude_filter_fields": [
+            "factory"
+          ],
+          "add_dimensions": [
+            "factory"
+          ]
+        },
+        {
+          "entities": [
+            "stage_product"
+          ],
+          "exclude_filter_fields": [
+            "stage_product_id"
+          ],
+          "add_dimensions": [
+            "stage_product_id"
+          ]
+        }
+      ]
+    }
+  }
+}

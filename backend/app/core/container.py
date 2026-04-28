@@ -19,9 +19,7 @@ from backend.app.services.feedback_service import FeedbackService
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
 from backend.app.services.orchestrator import ConversationOrchestrator
-from backend.app.services.permission_service import PermissionService
 from backend.app.services.progress_service import ProgressService
-from backend.app.services.policy_engine import PolicyEngine
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.query_plan_compiler import QueryPlanCompiler
 from backend.app.services.query_plan_validator import QueryPlanValidator
@@ -86,8 +84,6 @@ class AppContainer:
             classification_llm_enabled=self.settings.classification_llm_enabled,
         )
         self.query_plan_validator = QueryPlanValidator(semantic_runtime=self.semantic_runtime)
-        self.policy_engine = PolicyEngine(semantic_runtime=self.semantic_runtime)
-        self.permission_service = PermissionService(policy_engine=self.policy_engine)
         self.query_plan_compiler = QueryPlanCompiler(
             semantic_runtime=self.semantic_runtime,
             default_limit=self.settings.default_sql_limit,
@@ -134,14 +130,12 @@ class AppContainer:
         self.chat_response_restore_service = ChatResponseRestoreService(
             audit_service=self.audit_service,
             runtime_log_repository=self.runtime_log_repository,
-            permission_service=self.permission_service,
         )
         self.session_workspace_service = SessionWorkspaceService(
             session_service=self.session_service,
             runtime_log_repository=self.runtime_log_repository,
             audit_service=self.audit_service,
             response_restore_service=self.chat_response_restore_service,
-            permission_service=self.permission_service,
         )
         self.feedback_service = FeedbackService(self.feedback_repository)
         self.metadata_service = MetadataService(
@@ -157,7 +151,6 @@ class AppContainer:
         self.orchestrator = ConversationOrchestrator(
             query_planner=self.query_planner,
             query_plan_validator=self.query_plan_validator,
-            permission_service=self.permission_service,
             query_plan_compiler=self.query_plan_compiler,
             session_state_service=self.session_state_service,
             sql_validator=self.sql_validator,

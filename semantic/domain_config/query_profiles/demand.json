@@ -1,0 +1,123 @@
+{
+  "query_profiles": {
+    "demand": {
+      "allowed_fields": [
+        "source_table",
+        "demand_source",
+        "PM_VERSION",
+        "FGCODE",
+        "sbu_desc",
+        "bu_desc",
+        "customer",
+        "demand_month",
+        "biz_month",
+        "demand_qty",
+        "sales_qty",
+        "financial_qty",
+        "month_offset"
+      ],
+      "field_aliases": {
+        "sbu_desc": [
+          "SBU_DESC"
+        ],
+        "bu_desc": [
+          "BU_DESC"
+        ],
+        "customer": [
+          "CUSTOMER"
+        ],
+        "biz_month": [
+          "MONTH",
+          "report_month"
+        ],
+        "demand_qty": [
+          "REQUIREMENT_QTY",
+          "NEXT_REQUIREMENT",
+          "LAST_REQUIREMENT",
+          "MONTH4",
+          "MONTH5",
+          "MONTH6",
+          "MONTH7"
+        ],
+        "financial_qty": [
+          "FINANCIAL_qty"
+        ]
+      },
+      "default_limit": 200,
+      "max_limit": 200,
+      "version_field": "PM_VERSION",
+      "time_filter_fields": [
+        "demand_month",
+        "biz_month"
+      ],
+      "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
+      "default_sort": [
+        {
+          "field": "biz_month",
+          "order": "desc"
+        }
+      ],
+      "permission_scope_fields": {
+        "customers": "customer",
+        "products": "FGCODE"
+      },
+      "dimension_preferences": [
+        {
+          "time_grain": "month",
+          "exclude_filter_fields": [
+            "biz_month"
+          ],
+          "add_dimensions": [
+            "biz_month"
+          ]
+        },
+        {
+          "entities": [
+            "fg_product"
+          ],
+          "exclude_filter_fields": [
+            "FGCODE"
+          ],
+          "add_dimensions": [
+            "FGCODE"
+          ]
+        },
+        {
+          "entities": [
+            "customer"
+          ],
+          "exclude_filter_fields": [
+            "customer"
+          ],
+          "add_dimensions": [
+            "customer"
+          ]
+        },
+        {
+          "exclude_filter_fields": [
+            "PM_VERSION"
+          ],
+          "add_dimensions": [
+            "PM_VERSION"
+          ]
+        }
+      ],
+      "clarification_rules": [
+        {
+          "metrics": [
+            "demand_qty"
+          ],
+          "missing_version_context": true,
+          "reason_code": "missing_version",
+          "question_type": "clarification_needed",
+          "reason": "需求查询缺少稳定版本上下文。",
+          "clarification_question": "请明确需求版本，例如 V1、V2 或 P10。"
+        }
+      ]
+    }
+  }
+}

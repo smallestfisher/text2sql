@@ -90,6 +90,7 @@ class SqlValidator:
             inspection.group_by_fields,
             inspection.functions,
         )
+        filter_scope = inspection.all_where_clause or inspection.where_clause
 
         stripped_sql = normalized_sql.strip()
         if not (stripped_sql.startswith("select") or stripped_sql.startswith("with")):
@@ -119,9 +120,10 @@ class SqlValidator:
                 filter_item.field
                 for filter_item in query_plan.filters
                 if filter_item.field
-                and not self._contains_any_field_reference(
-                    inspection.where_clause,
-                    self._field_candidates(query_plan, filter_item.field),
+                and not self._filter_is_covered(
+                    query_plan,
+                    filter_item.field,
+                    filter_scope,
                 )
             ]
             if missing_plan_filters:
@@ -137,7 +139,10 @@ class SqlValidator:
                     for field in expected_dimension_fields
                     if not self._field_candidates(query_plan, field).intersection(actual_group_by_fields)
                 ]
-                if missing_group_by_fields and inspection.functions:
+                if missing_group_by_fields and any(
+                    function in self.ast_validator.AGGREGATE_FUNCTIONS
+                    for function in inspection.outer_functions
+                ):
                     errors.append(
                         "sql does not group by required dimensions from query plan: "
                         + ", ".join(sorted(set(missing_group_by_fields)))
@@ -156,10 +161,10 @@ class SqlValidator:
                         "sql does not preserve query plan sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
                     )
 
-            time_filter_errors = self._validate_time_context(query_plan, inspection.where_clause)
+            time_filter_errors = self._validate_time_context(query_plan, filter_scope)
             errors.extend(time_filter_errors)
 
-            version_errors = self._validate_version_context(query_plan, inspection.where_clause)
+            version_errors = self._validate_version_context(query_plan, filter_scope)
             errors.extend(version_errors)
 
             demand_version_projection_errors = self._validate_demand_version_projection(
@@ -194,9 +199,10 @@ class SqlValidator:
                 missing_filter_fields = [
                     field
                     for field in required_filter_fields
-                    if not self._contains_any_field_reference(
-                        inspection.where_clause,
-                        self._field_candidates(query_plan, field),
+                    if not self._filter_is_covered(
+                        query_plan,
+                        field,
+                        filter_scope,
                     )
                 ]
             if missing_filter_fields:
@@ -217,10 +223,7 @@ class SqlValidator:
             if self.semantic_runtime.warn_if_missing_time_filter(query_plan.subject_domain):
                 time_fields = self.semantic_runtime.time_filter_fields(query_plan.subject_domain)
                 if time_fields and not any(
-                    self._contains_any_field_reference(
-                        inspection.where_clause,
-                        self._field_candidates(query_plan, field),
-                    )
+                    self._filter_is_covered(query_plan, field, filter_scope)
                     for field in time_fields
                 ):
                     warning_message = "sql does not include a time filter; this may cause wide scans"
@@ -276,9 +279,24 @@ class SqlValidator:
         )
         physical_candidates = self._physical_field_candidates(query_plan, resolved)
         if physical_candidates:
-            return physical_candidates
+            return physical_candidates | candidates
         candidates.update(item.lower() for item in resolved if item)
         return candidates
+
+    def _filter_is_covered(
+        self,
+        query_plan: QueryPlan,
+        logical_field: str,
+        sql_fragment: str,
+    ) -> bool:
+        if self._contains_any_field_reference(sql_fragment, self._field_candidates(query_plan, logical_field)):
+            return True
+        if logical_field == "biz_month":
+            return self._contains_any_field_reference(
+                sql_fragment,
+                self._field_candidates(query_plan, "biz_date"),
+            )
+        return False
 
     def _sort_field_candidates(self, query_plan: QueryPlan, logical_field: str) -> set[str]:
         candidates = self._field_candidates(query_plan, logical_field)

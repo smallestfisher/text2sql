@@ -202,7 +202,8 @@
 
 优先修：
 
-- `domain_config.json`
+- `semantic/domain_config.json` 清单入口
+- `semantic/domain_config/` 分片配置
 - Query Planner
 - sanitize / validator 边界
 
@@ -384,7 +385,7 @@ python3 backend/domain_config_lint.py
 
 - 离线回归不会连接数据库
 - 不会写 runtime 审计表
-- 当前主要覆盖 `classification / query_plan / permission_filter`
+- 当前主要覆盖 `classification / query_plan`
 - LLM-first SQL 生成与 SQL 校验仍要在 live 或 replay 链路验证
 
 ---

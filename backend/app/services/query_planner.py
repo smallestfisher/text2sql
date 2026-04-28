@@ -128,8 +128,13 @@ class QueryPlanner:
                 plan.dimensions = [
                     item for item in plan.dimensions if item not in {"biz_date", "biz_month"}
                 ]
-        if analysis_mode == "compare" and not plan.dimensions and not query_intent.requested_sort:
-            plan.sort = []
+        if analysis_mode == "compare" and not query_intent.requested_sort:
+            if "biz_month" in plan.dimensions:
+                plan.sort = [SortItem(field="biz_month", order="asc")]
+            elif "biz_date" in plan.dimensions:
+                plan.sort = [SortItem(field="biz_date", order="asc")]
+            elif not plan.dimensions:
+                plan.sort = []
 
         if (
             plan.subject_domain == "demand"

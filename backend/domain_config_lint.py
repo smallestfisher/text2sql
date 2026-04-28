@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DOMAIN_CONFIG_PATH = REPO_ROOT / "semantic" / "domain_config.json"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from backend.app.services.domain_config_loader import DomainConfigLoader
+
 TABLES_METADATA_PATH = REPO_ROOT / "tables.json"
 
 
@@ -176,7 +181,7 @@ def lint_domain_config(data: dict, tables_metadata: dict) -> list[str]:
 
 
 def main() -> int:
-    domain_config = load_json(DOMAIN_CONFIG_PATH)
+    domain_config = DomainConfigLoader().load()
     tables_metadata = load_json(TABLES_METADATA_PATH)
     issues = lint_domain_config(domain_config, tables_metadata)
     if not issues:

@@ -35,7 +35,7 @@
 
 - 基于真实 `tables.json`、`business_knowledge.json`、Query Plan、检索结果和少量真实 few-shot
 - 让 LLM 直接生成 MySQL 只读 SQL
-- 再由 Query Plan validator、SQL validator、权限服务、执行器和 runtime 体系做闭环治理
+- 再由 Query Plan validator、SQL validator、执行器和 runtime 体系做闭环治理
 
 这意味着系统的主链路可以概括为：
 
@@ -51,8 +51,7 @@ LLM 是主生成器，但不是裸奔：
 
 - Query Planner 先把问题收敛成结构化 Query Plan
 - PromptBuilder 只给当前问题真正相关的 schema、知识和 example
-- PermissionService 先把权限过滤注入 Query Plan
-- SqlValidator 再校验只读、安全、来源范围、时间/版本、权限字段、LIMIT、风险级别
+- SqlValidator 再校验只读、安全、来源范围、时间/版本、LIMIT、风险级别
 - 失败时允许一次 repair，而不是无限次自我修复
 
 ### 2.2 优先真实表结构，不优先预建分析对象
@@ -135,7 +134,8 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 - 辅助语义解析
 - 辅助领域识别、别名、实体、指标映射
-- 给 SemanticRuntime / QueryPlanValidator / PolicyEngine 提供基础结构化语义支撑
+- 给 SemanticRuntime / QueryPlanValidator 提供基础结构化语义支撑
+- 当前 `semantic/domain_config.json` 是清单入口，具体内容按职责拆在 `semantic/domain_config/` 目录下
 
 边界：
 
@@ -468,46 +468,24 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 ---
 
-## 8. 权限与治理层
+## 8. 治理层
 
-### 8.1 PermissionService
+当前主链路已经移除了查询权限裁剪服务，运行时默认行为是：
 
-`PermissionService` 负责三类事情：
+1. **所有登录用户都可执行查询**
+2. **SQL / 结果 / SQL audit 默认可见**
+3. **结果下载只保留会话 / Trace 归属校验**
 
-1. **执行权限治理**
-   - 当前用户是否允许执行 SQL
-2. **数据范围过滤注入**
-   - 把工厂、BU、客户等 scope 过滤注入 QueryPlan
-3. **结果脱敏**
-   - SQL 是否可见
-   - 下载是否允许
-   - 结果列是否 hidden / masked
+当前治理重点收敛为两层：
 
-具体表现为：
+- 查询前：`QueryPlanValidator`
+- 查询后：`SqlValidator` + `SqlExecutor` + runtime 审计
 
-- 没有执行权限时，直接把 QueryPlan 转成 `clarification_needed` / `permission_denied`
-- 有数据范围限制时，把 permission filters 注入 QueryPlan
-- 没有 SQL 查看权限时，把：
-  - `response.sql`
-  - `execution.sql`
-  - `session_state.last_sql`
-  - `sql_audit.sql_text`
- 统一清空
-- 对结果集按列级策略做 hidden / masked
+也就是说，这里的“治理”不再负责：
 
-### 8.2 PolicyEngine
-
-`PolicyEngine` 是 PermissionService 的底层决策器。它负责产出：
-
-- allow_execute
-- allow_view_sql
-- allow_download_results
-- filters
-
-所以权限体系不是“前端按钮隐藏”而已，而是：
-
-- 查询前先治理 QueryPlan
-- 查询后再治理 SQL/Execution/State/Workspace
+- 往 Query Plan 注入数据权限过滤
+- 按用户裁掉 SQL 可见性
+- 按列做结果 hidden / masked
 
 ---
 
@@ -577,11 +555,10 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 6. 检查 group by 是否覆盖了必需 dimensions
 7. 检查 sort 是否保留
 8. 检查 time_context / version_context 一致性
-9. 检查 permission required filter fields
-10. 检查 LIMIT 是否缺失或超过配置上限
-11. 检查 join 是否存在笛卡尔风险
-12. 检查 demand 横表的专项结构约束
-13. 调 `SqlAstValidator` 做 AST 级只读和结构检查
+9. 检查 LIMIT 是否缺失或超过配置上限
+10. 检查 join 是否存在笛卡尔风险
+11. 检查 demand 横表的专项结构约束
+12. 调 `SqlAstValidator` 做 AST 级只读和结构检查
 
 这层是系统“防止 LLM 生成表面能跑但实际上不可信 SQL”的关键屏障。
 
@@ -605,7 +582,7 @@ repair 只允许一次，而且分两类：
 - 最大返回行数控制
 - 慢查询阈值记录
 
-执行完成后结果还会再过 PermissionService 的字段脱敏。
+执行完成后结果会直接进入回答构建、Trace 落库和前端展示。
 
 ---
 
@@ -988,7 +965,6 @@ demand 是当前架构里最容易被误解的区域，所以单列说明。
 - 时间解析：`26年 -> 2026`
 - 枚举映射：`投入 / 产出 / 报废 -> act_type`
 - 稳定字段别名
-- 权限字段
 - 被多个真实问题验证过的稳定 metric 消歧
 
 ### 17.2 不可以进配置的内容
@@ -1073,7 +1049,7 @@ runtime 库负责：
 - `workspace` 仍应保持前端主恢复入口
 - orchestrator 仍应是主链路唯一总控
 - QueryPlan 和 SQL validator 必须保留前后双重治理
-- 权限服务必须同时治理“查询前”和“结果后”
+- 会话 / Trace 归属校验必须保留
 - response snapshot 必须保留，否则历史恢复会退化
 
 ### 19.3 可以继续增强的方向

@@ -1,0 +1,78 @@
+{
+  "semantic_graph": {
+    "edges": [
+      {
+        "from": "v_demand",
+        "to": "product_mapping",
+        "type": "fg_to_mapping",
+        "on": "v_demand.FGCODE = product_mapping.FGCODE"
+      },
+      {
+        "from": "p_demand",
+        "to": "product_mapping",
+        "type": "fg_to_mapping",
+        "on": "p_demand.FGCODE = product_mapping.FGCODE"
+      },
+      {
+        "from": "sales_financial_perf",
+        "to": "product_mapping",
+        "type": "fg_to_mapping",
+        "on": "sales_financial_perf.FGCODE = product_mapping.FGCODE"
+      },
+      {
+        "from": "daily_inventory",
+        "to": "product_attributes",
+        "type": "stage_product_dimension",
+        "on": "daily_inventory.product_ID = product_attributes.product_ID"
+      },
+      {
+        "from": "oms_inventory",
+        "to": "product_attributes",
+        "type": "stage_product_dimension",
+        "on": "oms_inventory.product_ID = product_attributes.product_ID"
+      },
+      {
+        "from": "daily_PLAN",
+        "to": "product_attributes",
+        "type": "stage_product_dimension",
+        "on": "daily_PLAN.product_ID = product_attributes.product_ID"
+      },
+      {
+        "from": "monthly_plan_approved",
+        "to": "product_attributes",
+        "type": "stage_product_dimension",
+        "on": "monthly_plan_approved.product_ID = product_attributes.product_ID"
+      },
+      {
+        "from": "weekly_rolling_plan",
+        "to": "product_attributes",
+        "type": "stage_product_dimension",
+        "on": "weekly_rolling_plan.product_ID = product_attributes.product_ID"
+      },
+      {
+        "from": "production_actuals",
+        "to": "product_attributes",
+        "type": "stage_product_dimension",
+        "on": "production_actuals.product_ID = product_attributes.product_ID"
+      },
+      {
+        "from": "daily_PLAN",
+        "to": "product_mapping",
+        "type": "stage_mapping",
+        "on": "daily_PLAN.product_ID = product_mapping.`Cell No` | `Array No` | `CF No`"
+      },
+      {
+        "from": "monthly_plan_approved",
+        "to": "product_mapping",
+        "type": "stage_mapping",
+        "on": "monthly_plan_approved.product_ID = product_mapping.`Cell No` | `Array No` | `CF No`"
+      },
+      {
+        "from": "production_actuals",
+        "to": "product_mapping",
+        "type": "stage_mapping",
+        "on": "production_actuals.product_ID = product_mapping.`Cell No` | `Array No` | `CF No`"
+      }
+    ]
+  }
+}

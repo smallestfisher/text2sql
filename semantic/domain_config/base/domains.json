@@ -1,0 +1,61 @@
+{
+  "domains": [
+    {
+      "name": "demand",
+      "tables": [
+        "v_demand",
+        "p_demand",
+        "sales_financial_perf"
+      ],
+      "primary_entities": [
+        "fg_product",
+        "customer"
+      ]
+    },
+    {
+      "name": "sales_financial",
+      "tables": [
+        "sales_financial_perf"
+      ],
+      "primary_entities": [
+        "fg_product",
+        "customer"
+      ]
+    },
+    {
+      "name": "inventory",
+      "tables": [
+        "daily_inventory",
+        "oms_inventory"
+      ],
+      "primary_entities": [
+        "stage_product"
+      ]
+    },
+    {
+      "name": "plan_actual",
+      "tables": [
+        "daily_PLAN",
+        "monthly_plan_approved",
+        "weekly_rolling_plan",
+        "production_actuals"
+      ],
+      "primary_entities": [
+        "stage_product",
+        "factory",
+        "plan_time"
+      ]
+    },
+    {
+      "name": "dimension",
+      "tables": [
+        "product_attributes",
+        "product_mapping"
+      ],
+      "primary_entities": [
+        "stage_product",
+        "fg_product"
+      ]
+    }
+  ]
+}

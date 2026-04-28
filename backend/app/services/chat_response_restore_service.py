@@ -18,11 +18,9 @@ class ChatResponseRestoreService:
         *,
         audit_service,
         runtime_log_repository,
-        permission_service,
     ) -> None:
         self.audit_service = audit_service
         self.runtime_log_repository = runtime_log_repository
-        self.permission_service = permission_service
 
     def build_from_trace_id(
         self,
@@ -49,7 +47,7 @@ class ChatResponseRestoreService:
                 session_state=session_state,
                 sql_audit=sql_audit,
             )
-            return self.permission_service.apply_to_chat_response(response, user_context)
+            return response
 
         response = self._restore_from_artifacts(
             trace=trace,
@@ -58,7 +56,7 @@ class ChatResponseRestoreService:
             session_state=session_state,
             messages=messages or [],
         )
-        return self.permission_service.apply_to_chat_response(response, user_context)
+        return response
 
     def _restore_from_snapshot(
         self,

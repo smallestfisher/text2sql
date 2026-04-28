@@ -17,13 +17,11 @@ class SessionWorkspaceService:
         runtime_log_repository,
         audit_service,
         response_restore_service,
-        permission_service,
     ) -> None:
         self.session_service = session_service
         self.runtime_log_repository = runtime_log_repository
         self.audit_service = audit_service
         self.response_restore_service = response_restore_service
-        self.permission_service = permission_service
 
     def get_workspace(
         self,
@@ -36,10 +34,7 @@ class SessionWorkspaceService:
             return None
 
         messages = self.session_service.history(session_id)
-        state = self.permission_service.apply_to_session_state(
-            self.session_service.resolve_state(session_id),
-            user_context,
-        )
+        state = self.session_service.resolve_state(session_id)
         trace_ids = self._message_trace_ids(messages)
         query_logs = self._safe_list_query_logs(session_id, limit=max(len(trace_ids), 5))
         query_log_by_trace = {record.trace_id: record for record in query_logs}
@@ -56,7 +51,7 @@ class SessionWorkspaceService:
         latest_artifact = self._find_trace_artifact(trace_artifacts, latest_trace_id)
 
         return SessionWorkspaceResponse(
-            session=self.permission_service.apply_to_chat_session(session, user_context),
+            session=session,
             messages=messages,
             state=state,
             latest_response=latest_artifact.response if latest_artifact is not None else None,
@@ -80,10 +75,7 @@ class SessionWorkspaceService:
         for trace_id in trace_ids:
             query_log = query_log_by_trace.get(trace_id) or self._safe_get_query_log(trace_id)
             trace = self._safe_get_trace(trace_id)
-            sql_audit = self.permission_service.apply_to_sql_audit(
-                self._safe_get_sql_audit(trace_id),
-                user_context,
-            )
+            sql_audit = self._safe_get_sql_audit(trace_id)
             response = self._safe_restore_response(
                 trace_id=trace_id,
                 state=state if trace_id == latest_trace_id else None,

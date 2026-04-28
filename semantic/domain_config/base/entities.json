@@ -1,0 +1,71 @@
+{
+  "entities": [
+    {
+      "name": "fg_product",
+      "aliases": [
+        "FGCODE",
+        "成品型号",
+        "成品编码",
+        "需求型号",
+        "销售型号"
+      ],
+      "description": "成品阶段产品实体，主要用于需求和销售财务分析。"
+    },
+    {
+      "name": "stage_product",
+      "aliases": [
+        "product_ID",
+        "型号",
+        "产品型号",
+        "产品编码"
+      ],
+      "description": "生产阶段产品实体，存在 Cell/Array/CF 等阶段编码。"
+    },
+    {
+      "name": "factory",
+      "aliases": [
+        "factory",
+        "FACTORY",
+        "工厂"
+      ],
+      "description": "计划/实际等生产域中的工厂概念。"
+    },
+    {
+      "name": "factory_code",
+      "aliases": [
+        "factory_code",
+        "工厂代码"
+      ],
+      "description": "库存域中的工厂代码字段。"
+    },
+    {
+      "name": "erp_factory",
+      "aliases": [
+        "ERP_FACTORY",
+        "erp_factory",
+        "ERP工厂"
+      ],
+      "description": "ERP 体系下的工厂字段。"
+    },
+    {
+      "name": "customer",
+      "aliases": [
+        "CUSTOMER",
+        "客户"
+      ],
+      "description": "客户实体。"
+    },
+    {
+      "name": "plan_time",
+      "aliases": [
+        "日期",
+        "月份",
+        "周版本",
+        "计划日期",
+        "结算月份",
+        "版本"
+      ],
+      "description": "时间和版本相关实体，用于承载日、月、周版本和计划版本语义。"
+    }
+  ]
+}

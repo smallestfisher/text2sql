@@ -1,0 +1,149 @@
+{
+  "query_profiles": {
+    "inventory": {
+      "allowed_fields": [
+        "source_table",
+        "biz_date",
+        "biz_month",
+        "factory_code",
+        "ERP_FACTORY",
+        "ERP_LOCATION",
+        "product_ID",
+        "application",
+        "common_categories",
+        "GRADE",
+        "inventory_qty",
+        "hold_qty",
+        "customer",
+        "sbu_desc",
+        "bu_desc"
+      ],
+      "field_aliases": {
+        "biz_date": [
+          "report_date"
+        ],
+        "biz_month": [
+          "report_month"
+        ],
+        "customer": [
+          "CUSTOMER"
+        ],
+        "sbu_desc": [
+          "SBU_DESC"
+        ],
+        "bu_desc": [
+          "BU_DESC"
+        ],
+        "inventory_qty": [
+          "TTL_Qty",
+          "panel_qty"
+        ],
+        "hold_qty": [
+          "HOLD_Qty"
+        ]
+      },
+      "default_limit": 200,
+      "max_limit": 200,
+      "time_filter_fields": [
+        "biz_date",
+        "biz_month"
+      ],
+      "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
+      "default_sort": [
+        {
+          "field": "biz_date",
+          "order": "desc"
+        }
+      ],
+      "permission_scope_fields": {
+        "factories": "factory_code",
+        "customers": "customer",
+        "products": "product_ID"
+      },
+      "dimension_preferences": [
+        {
+          "entities": [
+            "factory_code"
+          ],
+          "exclude_filter_fields": [
+            "factory_code"
+          ],
+          "add_dimensions": [
+            "factory_code"
+          ]
+        },
+        {
+          "entities": [
+            "erp_factory"
+          ],
+          "exclude_filter_fields": [
+            "ERP_FACTORY"
+          ],
+          "add_dimensions": [
+            "ERP_FACTORY"
+          ]
+        },
+        {
+          "entities": [
+            "stage_product"
+          ],
+          "exclude_filter_fields": [
+            "product_ID"
+          ],
+          "add_dimensions": [
+            "product_ID"
+          ]
+        },
+        {
+          "entities": [
+            "customer"
+          ],
+          "exclude_filter_fields": [
+            "customer"
+          ],
+          "add_dimensions": [
+            "customer"
+          ]
+        },
+        {
+          "time_grain": "day",
+          "exclude_filter_fields": [
+            "biz_date"
+          ],
+          "add_dimensions": [
+            "biz_date"
+          ]
+        }
+      ],
+      "clarification_rules": [
+        {
+          "entities": [
+            "factory"
+          ],
+          "exclude_entities": [
+            "factory_code",
+            "erp_factory"
+          ],
+          "exclude_filter_fields": [
+            "factory_code",
+            "ERP_FACTORY"
+          ],
+          "reason_code": "inventory_factory_ambiguous",
+          "question_type": "clarification_needed",
+          "reason": "库存域中的工厂语义不明确。",
+          "clarification_question": "库存查询请明确使用 factory_code 还是 ERP_FACTORY。"
+        }
+      ],
+      "drop_dimensions": [
+        "factory"
+      ],
+      "drop_filters": [
+        "factory"
+      ]
+    }
+  }
+}

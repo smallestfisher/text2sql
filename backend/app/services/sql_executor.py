@@ -34,20 +34,6 @@ class SqlExecutor:
                 error_category="planner",
             )
 
-        if user_context is not None and not user_context.can_execute_sql:
-            return ExecutionResponse(
-                executed=False,
-                status="permission_denied",
-                sql=sql,
-                row_count=0,
-                columns=[],
-                rows=[],
-                errors=["user is not allowed to execute SQL"],
-                warnings=[],
-                elapsed_ms=None,
-                error_category="permission",
-            )
-
         blocked_reason = self._preflight_block_reason(sql)
         if blocked_reason is not None:
             return ExecutionResponse(

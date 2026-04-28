@@ -80,8 +80,6 @@ class SemanticRuntime:
             for metric in self._unique_strings(matched_metrics)
             if self.is_known_metric(metric)
         ]
-        if metrics:
-            return metrics
 
         normalized_question = question.strip().lower()
         for rule in self.metric_resolution_rules():
@@ -906,6 +904,18 @@ class SemanticRuntime:
             op = expected.get("op", "=")
             value = expected.get("value")
             if not any(
+                item.field == field and item.op == op and item.value == value
+                for item in filters
+            ):
+                return False
+        forbidden_filters = rule.get("forbidden_filters", [])
+        for forbidden in forbidden_filters:
+            if not isinstance(forbidden, dict):
+                return False
+            field = forbidden.get("field")
+            op = forbidden.get("op", "=")
+            value = forbidden.get("value")
+            if any(
                 item.field == field and item.op == op and item.value == value
                 for item in filters
             ):

@@ -27,6 +27,7 @@ class SqlInspection:
     cte_names: list[str] = field(default_factory=list)
     joins: list[JoinInspection] = field(default_factory=list)
     functions: list[str] = field(default_factory=list)
+    outer_functions: list[str] = field(default_factory=list)
     referenced_fields: list[str] = field(default_factory=list)
     select_fields: list[str] = field(default_factory=list)
     group_by_fields: list[str] = field(default_factory=list)
@@ -34,6 +35,7 @@ class SqlInspection:
     has_select: bool = False
     has_where: bool = False
     where_clause: str = ""
+    all_where_clause: str = ""
     has_limit: bool = False
     limit_value: int | None = None
     has_subquery: bool = False
@@ -113,7 +115,7 @@ class SqlAstValidator:
         if inspection.statement_count > 1:
             errors.append("multiple SQL statements are not allowed")
         if re.search(r"\bGROUP\s+BY\b", normalized, re.IGNORECASE) and not any(
-            function in self.AGGREGATE_FUNCTIONS for function in inspection.functions
+            function in self.AGGREGATE_FUNCTIONS for function in inspection.outer_functions
         ):
             warnings.append("GROUP BY exists without recognized aggregate function")
         for join in inspection.joins:
@@ -138,6 +140,7 @@ class SqlAstValidator:
         statements = [item.strip() for item in re.split(r";\s*", normalized) if item.strip()]
         lowered = normalized.lower()
         where_clause = self._extract_where_clause(normalized)
+        all_where_clause = self._extract_all_where_clauses(normalized)
         limit_match = re.search(r"\bLIMIT\s+(\d+)", normalized, re.IGNORECASE)
         sources = re.findall(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", normalized, re.IGNORECASE)
         cte_names = self._extract_cte_names(normalized)
@@ -150,6 +153,7 @@ class SqlAstValidator:
             cte_names=cte_names,
             joins=self._extract_joins(normalized),
             functions=functions,
+            outer_functions=self._extract_outer_functions(normalized),
             referenced_fields=self._extract_referenced_fields(normalized, sources, aliases, functions),
             select_fields=self._extract_select_fields(normalized),
             group_by_fields=self._extract_group_by_fields(normalized),
@@ -157,6 +161,7 @@ class SqlAstValidator:
             has_select=re.search(r"\bSELECT\b", normalized, re.IGNORECASE) is not None,
             has_where=bool(where_clause),
             where_clause=where_clause,
+            all_where_clause=all_where_clause,
             has_limit=limit_match is not None,
             limit_value=int(limit_match.group(1)) if limit_match else None,
             has_subquery=re.search(r"\(\s*SELECT\b", normalized, re.IGNORECASE) is not None,
@@ -216,6 +221,11 @@ class SqlAstValidator:
         where_node = root.find(exp.Where)
         if where_node is not None:
             where_clause = where_node.this.sql(dialect="mysql")
+        all_where_clause = " ".join(
+            node.this.sql(dialect="mysql")
+            for node in root.find_all(exp.Where)
+            if getattr(node, "this", None) is not None
+        )
         limit_node = root.find(exp.Limit)
 
         return SqlInspection(
@@ -224,6 +234,7 @@ class SqlAstValidator:
             cte_names=cte_names,
             joins=self._extract_sqlglot_joins(root),
             functions=functions,
+            outer_functions=self._extract_sqlglot_outer_functions(root),
             referenced_fields=referenced_fields,
             select_fields=self._extract_sqlglot_select_fields(root),
             group_by_fields=self._extract_sqlglot_group_by_fields(root),
@@ -231,6 +242,7 @@ class SqlAstValidator:
             has_select=root.find(exp.Select) is not None or isinstance(root, exp.Select),
             has_where=bool(where_clause),
             where_clause=where_clause,
+            all_where_clause=all_where_clause,
             has_limit=limit_node is not None,
             limit_value=self._extract_limit_value(limit_node),
             has_subquery=any(True for _ in root.find_all(exp.Subquery)),
@@ -262,6 +274,14 @@ class SqlAstValidator:
         if not match:
             return ""
         return match.group(1)
+
+    def _extract_all_where_clauses(self, sql: str) -> str:
+        matches = re.findall(
+            r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|\)|$)",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        return " ".join(matches)
 
     def _extract_joins(self, sql: str) -> list[JoinInspection]:
         joins: list[JoinInspection] = []
@@ -302,6 +322,17 @@ class SqlAstValidator:
         if not match:
             return []
         return self._extract_fields_from_clause(match.group(1))
+
+    def _extract_outer_functions(self, sql: str) -> list[str]:
+        outer_sql = self._outer_query_sql(sql)
+        match = re.search(
+            r"\bSELECT\b(.*?)(?:\bFROM\b|$)",
+            outer_sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return []
+        return sorted(set(re.findall(r"\b([A-Z_]+)\s*\(", match.group(1).upper())))
 
     def _extract_fields_from_clause(self, clause: str) -> list[str]:
         fields = re.findall(r"\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)\b", clause)
@@ -426,6 +457,18 @@ class SqlAstValidator:
         for expression in getattr(select, "expressions", []) or []:
             fields.extend(self._expression_column_names(expression))
         return self._unique_strings(fields)
+
+    def _extract_sqlglot_outer_functions(self, root: Any) -> list[str]:
+        select = self._outer_select_node(root)
+        if select is None:
+            return []
+        return self._unique_strings(
+            [
+                self._function_name(node)
+                for node in select.find_all(exp.Func)
+                if self._function_name(node)
+            ]
+        )
 
     def _outer_select_node(self, root: Any) -> Any:
         if exp is None or root is None:

@@ -16,8 +16,6 @@ from backend.app.models.api import ValidationResponse
 from backend.app.models.evaluation import EvaluationCase
 from backend.app.models.session_state import SessionState
 from backend.app.services.answer_builder import AnswerBuilder
-from backend.app.services.permission_service import PermissionService
-from backend.app.services.policy_engine import PolicyEngine
 from backend.app.services.query_plan_compiler import QueryPlanCompiler
 from backend.app.services.query_plan_validator import QueryPlanValidator
 from backend.app.services.query_planner import QueryPlanner
@@ -49,7 +47,6 @@ def build_components() -> dict[str, Any]:
         ),
         "query_plan_compiler": QueryPlanCompiler(semantic_runtime=semantic_runtime),
         "query_plan_validator": QueryPlanValidator(semantic_runtime=semantic_runtime),
-        "permission_service": PermissionService(policy_engine=PolicyEngine(semantic_runtime=semantic_runtime)),
         "session_state_service": SessionStateService(),
         "answer_builder": AnswerBuilder(),
     }
@@ -65,17 +62,12 @@ def run_question(
     query_planner = components["query_planner"]
     query_plan_compiler = components["query_plan_compiler"]
     query_plan_validator = components["query_plan_validator"]
-    permission_service = components["permission_service"]
     session_state_service = components["session_state_service"]
     answer_builder = components["answer_builder"]
 
     query_intent, classification, query_plan, planner_warnings = query_planner.create_plan(
         question=question,
         session_state=session_state,
-    )
-    query_plan, permission_warnings = permission_service.apply_to_query_plan(
-        query_plan=query_plan,
-        user_context=user_context,
     )
     query_plan = query_plan_compiler.compile(query_plan=query_plan, retrieval=None)
 
@@ -88,7 +80,7 @@ def run_question(
     plan_validation = ValidationResponse(
         valid=not plan_errors,
         errors=plan_errors,
-        warnings=planner_warnings + permission_warnings + plan_warnings,
+        warnings=planner_warnings + plan_warnings,
         risk_level=plan_result.risk_level,
         risk_flags=plan_result.risk_flags,
     )

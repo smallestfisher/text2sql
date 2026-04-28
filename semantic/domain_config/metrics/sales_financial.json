@@ -1,0 +1,36 @@
+{
+  "metrics": [
+    {
+      "name": "sales_qty",
+      "aliases": [
+        "销售业绩",
+        "销售量"
+      ],
+      "semantic_column": "sales_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "sales_financial_perf",
+          "expression": "sum(sales_qty)",
+          "grain": "month"
+        }
+      ]
+    },
+    {
+      "name": "financial_qty",
+      "aliases": [
+        "财务业绩",
+        "财务量"
+      ],
+      "semantic_column": "financial_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "sales_financial_perf",
+          "expression": "sum(FINANCIAL_qty)",
+          "grain": "month"
+        }
+      ]
+    }
+  ]
+}

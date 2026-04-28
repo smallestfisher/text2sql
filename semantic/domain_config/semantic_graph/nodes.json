@@ -1,0 +1,17 @@
+{
+  "semantic_graph": {
+    "nodes": [
+      "v_demand",
+      "p_demand",
+      "sales_financial_perf",
+      "daily_inventory",
+      "oms_inventory",
+      "daily_PLAN",
+      "monthly_plan_approved",
+      "weekly_rolling_plan",
+      "production_actuals",
+      "product_attributes",
+      "product_mapping"
+    ]
+  }
+}

@@ -1020,7 +1020,6 @@ function App() {
                   {activeTab === "result" && <ResultPanel latestResponse={inspectorResponse} workspaceError={workspaceError} token={token} latestTrace={inspectorTrace} currentUser={currentUser} />}
                   {activeTab === "sql" && (
                     <SqlPanel
-                      canViewSql={currentUser.can_view_sql}
                       latestResponse={inspectorResponse}
                       latestSqlAudit={inspectorSqlAudit}
                       sessionState={sessionState}
@@ -1604,7 +1603,6 @@ function ConversationResultCard(props: {
   const canDownload = Boolean(
     previewRows.length
     && props.token
-    && props.currentUser?.can_download_results
     && props.artifact.trace?.trace_id,
   );
 
@@ -1702,7 +1700,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       <div className="detail-card accent-card">
         <div className="panel-row">
           <div className="detail-title">回答</div>
-          {execution?.rows?.length && props.token && props.latestTrace && props.currentUser?.can_download_results ? (
+          {execution?.rows?.length && props.token && props.latestTrace ? (
             <button
               className="secondary-button"
               type="button"
@@ -1792,19 +1790,10 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
 }
 
 function SqlPanel(props: {
-  canViewSql: boolean;
   latestResponse: ChatResponse | null;
   latestSqlAudit: RuntimeSqlAuditRecord | null;
   sessionState: SessionState | null;
 }) {
-  if (!props.canViewSql) {
-    return (
-      <section className="tab-panel">
-        <div className="empty-card subtle-card">当前账号没有 SQL 查看权限。</div>
-      </section>
-    );
-  }
-
   const sql = props.latestResponse?.sql || props.latestSqlAudit?.sql_text || "";
   const queryPlan = props.latestResponse?.query_plan || props.sessionState?.last_query_plan;
 

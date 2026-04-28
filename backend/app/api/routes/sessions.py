@@ -48,13 +48,7 @@ def list_sessions(
         user_id=user_context.user_id if user_context else None,
         limit=limit,
     )
-    return SessionCollectionResponse(
-        sessions=[
-            container.permission_service.apply_to_chat_session(session, user_context)
-            for session in sessions
-        ],
-        count=len(sessions),
-    )
+    return SessionCollectionResponse(sessions=sessions, count=len(sessions))
 
 
 @router.get("/sessions/{session_id}", response_model=SessionCreateResponse)
@@ -68,9 +62,7 @@ def get_session(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     container.session_service.ensure_access(session, user_context)
-    return SessionCreateResponse(
-        session=container.permission_service.apply_to_chat_session(session, user_context),
-    )
+    return SessionCreateResponse(session=session)
 
 
 @router.put("/sessions/{session_id}/status", response_model=SessionCreateResponse)
@@ -87,9 +79,7 @@ def update_session_status(
     container.session_service.ensure_access(session, user_context)
     container.session_service.update_status(session_id, request.status)
     updated = container.session_service.get_session(session_id)
-    return SessionCreateResponse(
-        session=container.permission_service.apply_to_chat_session(updated, user_context),
-    )
+    return SessionCreateResponse(session=updated)
 
 
 @router.delete("/sessions/{session_id}")
@@ -121,7 +111,7 @@ def get_history(
         raise HTTPException(status_code=404, detail="session not found")
     container.session_service.ensure_access(session, user_context)
     return SessionHistoryResponse(
-        session=container.permission_service.apply_to_chat_session(session, user_context),
+        session=session,
         messages=container.session_service.history(session_id),
     )
 
@@ -138,11 +128,8 @@ def get_state(
         raise HTTPException(status_code=404, detail="session not found")
     container.session_service.ensure_access(session, user_context)
     return SessionStateResponse(
-        session=container.permission_service.apply_to_chat_session(session, user_context),
-        state=container.permission_service.apply_to_session_state(
-            container.session_service.resolve_state(session_id),
-            user_context,
-        ),
+        session=session,
+        state=container.session_service.resolve_state(session_id),
     )
 
 
@@ -179,11 +166,4 @@ def list_session_snapshots(
         raise HTTPException(status_code=404, detail="session not found")
     container.session_service.ensure_access(session, user_context)
     snapshots = container.session_repository.list_state_snapshots(session_id=session_id, limit=limit)
-    return [
-        snapshot.model_copy(
-            update={
-                "state": container.permission_service.apply_to_session_state(snapshot.state, user_context),
-            }
-        )
-        for snapshot in snapshots
-    ]
+    return snapshots

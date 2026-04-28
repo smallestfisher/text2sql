@@ -1,0 +1,430 @@
+{
+  "extractors": {
+    "time": [
+      {
+        "name": "cn_day",
+        "type": "calendar_day",
+        "field": "biz_date",
+        "pattern": "(\\d{4})年(\\d{1,2})月(\\d{1,2})日"
+      },
+      {
+        "name": "iso_day",
+        "type": "iso_day",
+        "field": "biz_date",
+        "pattern": "(\\d{4}-\\d{2}-\\d{2})"
+      },
+      {
+        "name": "cn_month",
+        "type": "calendar_month",
+        "field": "biz_month",
+        "pattern": "(\\d{4})年(\\d{1,2})月(?!\\d)"
+      },
+      {
+        "name": "compact_month",
+        "type": "compact_month",
+        "field": "biz_month",
+        "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b"
+      },
+      {
+        "name": "recent_n_months",
+        "type": "relative_recent_months",
+        "field": "biz_month",
+        "pattern": "(?:最近|近|过去)\\s*(\\d{1,2})\\s*个?月"
+      },
+      {
+        "name": "cn_year",
+        "type": "calendar_year",
+        "field": "biz_date",
+        "pattern": "(20\\d{2})年(?!\\d)"
+      },
+      {
+        "name": "cn_year_short",
+        "type": "short_calendar_year",
+        "field": "biz_date",
+        "pattern": "(?<!\\d)(\\d{2})年(?!\\d)"
+      }
+    ],
+    "filters": [
+      {
+        "name": "factory_keyword",
+        "type": "keyword_enum",
+        "field": "factory",
+        "op": "=",
+        "candidates": [
+          "CELL",
+          "ARRAY",
+          "CF"
+        ],
+        "flags": [
+          "uppercase"
+        ]
+      },
+      {
+        "name": "plan_actual_factory_named",
+        "type": "regex",
+        "field": "factory",
+        "op": "=",
+        "pattern": "(?<![A-Z0-9_])((?!ERP\\b)[A-Z0-9._-]+)工厂",
+        "flags": [
+          "uppercase"
+        ]
+      },
+      {
+        "name": "production_actual_act_type",
+        "type": "keyword_enum",
+        "field": "act_type",
+        "op": "=",
+        "candidates": [
+          "投入",
+          "产出",
+          "报废"
+        ]
+      },
+      {
+        "name": "factory_code_pattern",
+        "type": "regex",
+        "field": "factory_code",
+        "op": "=",
+        "pattern": "\\b([A-Z]\\d+_[A-Z]+)\\b",
+        "flags": [
+          "uppercase"
+        ]
+      },
+      {
+        "name": "erp_factory_explicit",
+        "type": "regex",
+        "field": "ERP_FACTORY",
+        "op": "=",
+        "pattern": "(?:ERP_FACTORY|ERP工厂)\\s*[:：]?\\s*([A-Za-z0-9._-]+)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "erp_location_explicit",
+        "type": "regex",
+        "field": "ERP_LOCATION",
+        "op": "=",
+        "pattern": "(?:ERP_LOCATION|ERP库位|库位)\\s*[:：]?\\s*([A-Za-z0-9._-]+)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "stage_product_explicit",
+        "type": "regex",
+        "field": "product_ID",
+        "op": "=",
+        "pattern": "(?:product_ID|型号|产品型号|产品编码)\\s*[:：]?\\s*([A-Za-z0-9._/-]+)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "fgcode_explicit",
+        "type": "regex",
+        "field": "FGCODE",
+        "op": "=",
+        "pattern": "(?:FGCODE|成品型号|成品编码|需求型号|销售型号)\\s*[:：]?\\s*([A-Za-z0-9._/-]+)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "customer_explicit",
+        "type": "regex",
+        "field": "customer",
+        "op": "=",
+        "pattern": "(?:CUSTOMER|customer|客户)\\s*(?:[:：=]|为|是)\\s*([A-Za-z0-9._\\-\\u4e00-\\u9fa5]+)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "demand_month_compact",
+        "type": "regex",
+        "field": "demand_month",
+        "op": "=",
+        "pattern": "\\b(20\\d{2}(?:0[1-9]|1[0-2]))\\b(?=\\s*需求)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "demand_source_p",
+        "type": "regex",
+        "field": "source_table",
+        "op": "=",
+        "pattern": "(?:^|[^A-Za-z0-9])P版(?:[^A-Za-z0-9]|$)",
+        "value": "p_demand",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "demand_source_v",
+        "type": "regex",
+        "field": "source_table",
+        "op": "=",
+        "pattern": "(?:^|[^A-Za-z0-9])V版(?:[^A-Za-z0-9]|$)",
+        "value": "v_demand",
+        "flags": [
+          "ignorecase"
+        ]
+      }
+    ],
+    "dimensions": [
+      {
+        "name": "group_by_customer",
+        "type": "regex",
+        "field": "customer",
+        "pattern": "(?:按|按照|只看)\\s*(?:CUSTOMER|customer|客户)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_factory_code",
+        "type": "regex",
+        "field": "factory_code",
+        "pattern": "(?:按|按照|只看)\\s*factory_code(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_factory",
+        "type": "regex",
+        "field": "factory",
+        "pattern": "(?:按|按照|只看)\\s*(?:FACTORY|factory|工厂)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_erp_factory",
+        "type": "regex",
+        "field": "ERP_FACTORY",
+        "pattern": "(?:按|按照|只看)\\s*(?:ERP_FACTORY|ERP工厂)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_stage_product",
+        "type": "regex",
+        "field": "product_ID",
+        "pattern": "(?:按|按照|只看)\\s*(?:product_ID|型号|产品型号|产品编码)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_fgcode",
+        "type": "regex",
+        "field": "FGCODE",
+        "pattern": "(?:按|按照|只看)\\s*(?:FGCODE|成品型号|成品编码|需求型号|销售型号)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_date",
+        "type": "regex",
+        "field": "biz_date",
+        "pattern": "(?:按|按照|只看)\\s*(?:日|天|日期)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_month",
+        "type": "regex",
+        "field": "biz_month",
+        "pattern": "(?:按|按照|只看)\\s*(?:月|月份)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_version",
+        "type": "regex",
+        "field": "PM_VERSION",
+        "pattern": "(?:按|按照|只看)\\s*(?:版本|PM_VERSION)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "group_by_demand_month_ttl_recent_window",
+        "type": "regex",
+        "field": "demand_month",
+        "pattern": "(?:(?:最近|近|过去)\\s*\\d{1,2}\\s*个?月.*(?:ttl|total)|(?:ttl|total).*?(?:最近|近|过去)\\s*\\d{1,2}\\s*个?月)",
+        "flags": [
+          "ignorecase"
+        ]
+      }
+    ],
+    "version": [
+      {
+        "field": "PM_VERSION",
+        "pattern": "(?:版本|version|PM_VERSION)\\s*[:：]?\\s*([A-Za-z0-9._-]+)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "([A-Za-z0-9._-]+)\\s*(?:版本|version)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "最新\\s*(\\d{1,2})\\s*版",
+        "value_template": "LATEST_N:{match}",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "最新\\s*p\\s*(?:版|版本)",
+        "value": "LATEST_N:1",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "PM_VERSION",
+        "pattern": "最新\\s*v\\s*(?:版|版本)",
+        "value": "LATEST_N:1",
+        "flags": [
+          "ignorecase"
+        ]
+      }
+    ],
+    "analysis": [
+      {
+        "mode": "trend",
+        "pattern": "趋势|走势|变化趋势",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "mode": "compare",
+        "pattern": "对比|比较|对照|gap|达成率|差异|差额",
+        "flags": [
+          "ignorecase"
+        ]
+      }
+    ],
+    "sort": [
+      {
+        "field": "sales_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?销售(?:业绩|量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "financial_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?财务(?:业绩|量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "inventory_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?库存(?:量|数量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "demand_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?需求(?:量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "demand_qty",
+        "order": "desc",
+        "pattern": "(?:需求最多|最多的(?:fgcode|成品型号)|需求最高|最高需求)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "actual_output_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?实际产出(?:量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "plan_input_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?计划投入(?:量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "__matched_metric__",
+        "order": "desc",
+        "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "customer",
+        "order": "desc",
+        "pattern": "(?:按|依)?客户(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "biz_month",
+        "order": "desc",
+        "pattern": "(?:按|依)?月份?(?:从新到旧|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "biz_date",
+        "order": "desc",
+        "pattern": "(?:按|依)?日期(?:从新到旧|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      }
+    ],
+    "limit": [
+      {
+        "pattern": "(?:前|top\\s*)(\\d{1,3})(?:条|个|名)?",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "pattern": "(?:哪一个|哪个)",
+        "value": 1,
+        "flags": [
+          "ignorecase"
+        ]
+      }
+    ]
+  }
+}

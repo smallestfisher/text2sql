@@ -1,0 +1,49 @@
+{
+  "time_semantics": [
+    {
+      "name": "day_level",
+      "tables": [
+        "daily_inventory",
+        "daily_PLAN",
+        "production_actuals",
+        "weekly_rolling_plan",
+        "monthly_plan_approved"
+      ],
+      "fields": [
+        "report_date",
+        "PLAN_date",
+        "work_date",
+        "plan_date"
+      ],
+      "description": "日粒度查询。"
+    },
+    {
+      "name": "month_level",
+      "tables": [
+        "v_demand",
+        "p_demand",
+        "oms_inventory",
+        "sales_financial_perf",
+        "monthly_plan_approved"
+      ],
+      "fields": [
+        "MONTH",
+        "report_month",
+        "plan_month"
+      ],
+      "description": "月粒度查询。"
+    },
+    {
+      "name": "versioned",
+      "tables": [
+        "v_demand",
+        "p_demand",
+        "weekly_rolling_plan"
+      ],
+      "fields": [
+        "PM_VERSION"
+      ],
+      "description": "带版本语义的查询对象。"
+    }
+  ]
+}

@@ -64,13 +64,27 @@
       ]
     },
     {
+      "id": "plan_actual_approved_actual_gap_rate",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["审批版", "实际", "投入", "Gap", "达成率", "monthly_plan_approved", "production_actuals", "target_IN_glass_qty", "GLS_qty", "target_in_panel_qty", "Panel_qty"],
+      "notes": [
+        "问句同时出现审批版、实际、Gap、达成率，且语义是投入时，应同时查询审批投入和实际投入，再计算差异与达成率，不能只返回单侧事实值。",
+        "审批侧来源是 monthly_plan_approved；实际侧来源是 production_actuals，且实际投入必须过滤 act_type=投入。",
+        "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或从 PLAN_date 映射月份；实际侧应使用 DATE_FORMAT(work_date, '%Y-%m') 或等价方式映射月份。",
+        "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 或显式 panel 口径时，审批侧改用 target_in_panel_qty，对应实际侧 Panel_qty。",
+        "Gap 默认定义为 实际投入 - 审批投入；达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
+      ]
+    },
+    {
       "id": "production_actuals_act_type_panel_volume",
       "domains": ["plan_actual"],
       "tables": ["production_actuals"],
       "keywords": ["production_actuals", "act_type", "投入", "产出", "报废", "物量", "panel", "Panel_qty", "型号", "top"],
       "notes": [
         "production_actuals.act_type 的中文枚举是 投入、产出、报废，问句里出现这些词时应优先落为 act_type 过滤条件。",
-        "在工厂语境下，物量默认指 panel 数量；如果问题问投入型号及其物量，应使用 Panel_qty 而不是 GLS_qty。",
+        "在工厂语境下，物量口径不是统一的：当 FACTORY=MDL 时默认指 panel 数量；其他工厂默认指 GLS 数量。",
+        "如果问句显式提到 panel量 或 panel数量，应优先使用 Panel_qty；如果没有显式写 panel，且工厂不是 MDL，则优先使用 GLS_qty。",
         "像“26年MDL工厂top10投入型号及其物量”这类问题，应基于 production_actuals，按 product_ID 分组，过滤 FACTORY=MDL 且 act_type=投入，并按 SUM(Panel_qty) 降序取前 10。"
       ]
     }

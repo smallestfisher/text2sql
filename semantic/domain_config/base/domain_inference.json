@@ -1,0 +1,71 @@
+{
+  "domain_inference": {
+    "metric_to_domain": {
+      "inventory_qty": "inventory",
+      "plan_input_qty": "plan_actual",
+      "approved_input_qty": "plan_actual",
+      "approved_input_panel_qty": "plan_actual",
+      "actual_output_qty": "plan_actual",
+      "actual_input_qty": "plan_actual",
+      "actual_input_panel_qty": "plan_actual",
+      "input_gap_qty": "plan_actual",
+      "input_panel_gap_qty": "plan_actual",
+      "input_achievement_rate": "plan_actual",
+      "input_panel_achievement_rate": "plan_actual",
+      "demand_qty": "demand",
+      "sales_qty": "sales_financial",
+      "financial_qty": "sales_financial"
+    },
+    "hints": [
+      {
+        "domain": "inventory",
+        "entities": [
+          "factory_code",
+          "erp_factory"
+        ],
+        "filter_fields": [
+          "factory_code",
+          "ERP_FACTORY",
+          "ERP_LOCATION",
+          "product_ID"
+        ]
+      },
+      {
+        "domain": "plan_actual",
+        "entities": [
+          "factory"
+        ],
+        "filter_fields": [
+          "factory",
+          "stage_product_id"
+        ],
+        "keywords": [
+          "计划",
+          "实际",
+          "产出",
+          "投入"
+        ]
+      },
+      {
+        "domain": "demand",
+        "entities": [
+          "fg_product",
+          "customer"
+        ],
+        "filter_fields": [
+          "FGCODE",
+          "customer",
+          "PM_VERSION"
+        ]
+      },
+      {
+        "domain": "sales_financial",
+        "filter_fields": [
+          "sales_qty",
+          "financial_qty"
+        ]
+      }
+    ],
+    "fallback_to_session": true
+  }
+}

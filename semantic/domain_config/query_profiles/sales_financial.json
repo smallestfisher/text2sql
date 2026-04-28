@@ -1,0 +1,90 @@
+{
+  "query_profiles": {
+    "sales_financial": {
+      "allowed_fields": [
+        "demand_source",
+        "PM_VERSION",
+        "FGCODE",
+        "sbu_desc",
+        "bu_desc",
+        "customer",
+        "demand_month",
+        "biz_month",
+        "demand_qty",
+        "sales_qty",
+        "financial_qty"
+      ],
+      "field_aliases": {
+        "sbu_desc": [
+          "SBU_DESC"
+        ],
+        "bu_desc": [
+          "BU_DESC"
+        ],
+        "customer": [
+          "CUSTOMER"
+        ],
+        "biz_month": [
+          "report_month"
+        ],
+        "financial_qty": [
+          "FINANCIAL_qty"
+        ]
+      },
+      "default_limit": 200,
+      "max_limit": 200,
+      "version_field": "PM_VERSION",
+      "time_filter_fields": [
+        "biz_month"
+      ],
+      "warn_if_missing_time_filter": true,
+      "table_selection": {
+        "prefer_metric_tables": true,
+        "fallback_to_domain_tables": true
+      },
+      "default_sort": [
+        {
+          "field": "biz_month",
+          "order": "desc"
+        }
+      ],
+      "permission_scope_fields": {
+        "customers": "customer",
+        "products": "FGCODE"
+      },
+      "dimension_preferences": [
+        {
+          "time_grain": "month",
+          "exclude_filter_fields": [
+            "biz_month"
+          ],
+          "add_dimensions": [
+            "biz_month"
+          ]
+        },
+        {
+          "entities": [
+            "fg_product"
+          ],
+          "exclude_filter_fields": [
+            "FGCODE"
+          ],
+          "add_dimensions": [
+            "FGCODE"
+          ]
+        },
+        {
+          "entities": [
+            "customer"
+          ],
+          "exclude_filter_fields": [
+            "customer"
+          ],
+          "add_dimensions": [
+            "customer"
+          ]
+        }
+      ]
+    }
+  }
+}

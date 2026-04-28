@@ -175,7 +175,7 @@ def get_my_trace_sql_audit(
     record = container.runtime_log_repository.get_sql_audit(trace_id)
     if record is None:
         raise HTTPException(status_code=404, detail="sql audit not found")
-    return container.permission_service.apply_to_sql_audit(record, current_user)
+    return record
 
 
 @router.get("/traces/{trace_id}/export")
@@ -185,8 +185,6 @@ def export_my_trace_result(
     container: AppContainer = Depends(get_container),
 ) -> PlainTextResponse:
     _ensure_trace_access(trace_id, current_user, container)
-    if not container.permission_service.can_download_results(current_user):
-        raise HTTPException(status_code=403, detail="current user cannot download results")
     record = container.runtime_log_repository.get_sql_audit(trace_id)
     if record is None:
         raise HTTPException(status_code=404, detail="sql audit not found")
@@ -197,7 +195,6 @@ def export_my_trace_result(
     if query_log is None or not record.sql_text:
         raise HTTPException(status_code=404, detail="query result export is not available")
     execution = container.sql_executor.execute(record.sql_text, user_context=current_user)
-    execution = container.permission_service.apply_to_execution(execution=execution, user_context=current_user)
     if execution is None or not execution.executed:
         raise HTTPException(status_code=400, detail="query result export is not available")
     columns = execution.columns

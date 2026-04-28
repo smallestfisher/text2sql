@@ -1,0 +1,210 @@
+{
+  "metrics": [
+    {
+      "name": "plan_input_qty",
+      "aliases": [
+        "计划投入",
+        "投入量",
+        "计划投入量"
+      ],
+      "semantic_column": "plan_input_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "daily_PLAN",
+          "expression": "sum(target_qty)",
+          "grain": "day"
+        },
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_IN_glass_qty)",
+          "grain": "month_or_day"
+        }
+      ]
+    },
+    {
+      "name": "approved_input_qty",
+      "aliases": [
+        "审批版投入量",
+        "审批投入量"
+      ],
+      "semantic_column": "approved_input_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_IN_glass_qty)",
+          "grain": "month_or_day"
+        }
+      ]
+    },
+    {
+      "name": "approved_input_panel_qty",
+      "aliases": [
+        "审批版投入panel量",
+        "审批版投入panel数量",
+        "审批投入panel量",
+        "审批投入panel数量"
+      ],
+      "semantic_column": "approved_input_panel_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_in_panel_qty)",
+          "grain": "month_or_day"
+        }
+      ]
+    },
+    {
+      "name": "actual_output_qty",
+      "aliases": [
+        "实际产出",
+        "产出量"
+      ],
+      "semantic_column": "actual_output_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "production_actuals",
+          "expression": "sum(GLS_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "actual_output_panel_qty",
+      "aliases": [
+        "产出panel量",
+        "产出panel数量"
+      ],
+      "semantic_column": "actual_output_panel_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "production_actuals",
+          "expression": "sum(Panel_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "actual_input_qty",
+      "aliases": [
+        "实际投入",
+        "实际投产"
+      ],
+      "semantic_column": "actual_input_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "production_actuals",
+          "expression": "sum(GLS_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "actual_input_panel_qty",
+      "aliases": [
+        "投入panel量",
+        "投入panel数量"
+      ],
+      "semantic_column": "actual_input_panel_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "production_actuals",
+          "expression": "sum(Panel_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "input_gap_qty",
+      "aliases": [
+        "投入Gap",
+        "投入差异",
+        "投入差额"
+      ],
+      "semantic_column": "input_gap_qty",
+      "aggregate_function": "DERIVED",
+      "definitions": [
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_IN_glass_qty)",
+          "grain": "month_or_day"
+        },
+        {
+          "table": "production_actuals",
+          "expression": "sum(GLS_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "input_panel_gap_qty",
+      "aliases": [
+        "投入panel Gap",
+        "投入panel差异",
+        "投入panel差额"
+      ],
+      "semantic_column": "input_panel_gap_qty",
+      "aggregate_function": "DERIVED",
+      "definitions": [
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_in_panel_qty)",
+          "grain": "month_or_day"
+        },
+        {
+          "table": "production_actuals",
+          "expression": "sum(Panel_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "input_achievement_rate",
+      "aliases": [
+        "投入达成率",
+        "审批投入达成率"
+      ],
+      "semantic_column": "input_achievement_rate",
+      "aggregate_function": "DERIVED",
+      "definitions": [
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_IN_glass_qty)",
+          "grain": "month_or_day"
+        },
+        {
+          "table": "production_actuals",
+          "expression": "sum(GLS_qty)",
+          "grain": "day"
+        }
+      ]
+    },
+    {
+      "name": "input_panel_achievement_rate",
+      "aliases": [
+        "投入panel达成率",
+        "审批投入panel达成率"
+      ],
+      "semantic_column": "input_panel_achievement_rate",
+      "aggregate_function": "DERIVED",
+      "definitions": [
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_in_panel_qty)",
+          "grain": "month_or_day"
+        },
+        {
+          "table": "production_actuals",
+          "expression": "sum(Panel_qty)",
+          "grain": "day"
+        }
+      ]
+    }
+  ]
+}

@@ -9,7 +9,6 @@ from backend.app.models.session_state import SessionState
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
 from backend.app.services.llm_client import LLMClient
-from backend.app.services.permission_service import PermissionService
 from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.query_plan_compiler import QueryPlanCompiler
@@ -31,7 +30,6 @@ class ConversationOrchestrator:
         self,
         query_planner: QueryPlanner,
         query_plan_validator: QueryPlanValidator,
-        permission_service: PermissionService,
         query_plan_compiler: QueryPlanCompiler,
         session_state_service: SessionStateService,
         sql_validator: SqlValidator,
@@ -48,7 +46,6 @@ class ConversationOrchestrator:
     ) -> None:
         self.query_planner = query_planner
         self.query_plan_validator = query_plan_validator
-        self.permission_service = permission_service
         self.query_plan_compiler = query_plan_compiler
         self.session_state_service = session_state_service
         self.sql_validator = sql_validator
@@ -197,13 +194,6 @@ class ConversationOrchestrator:
                 metadata=plan_hint_metadata,
             )
 
-            query_plan, permission_warnings = self.permission_service.apply_to_query_plan(
-                query_plan=query_plan,
-                user_context=request.user_context,
-            )
-            warnings.extend(permission_warnings)
-            self.audit_service.append_step(trace, "authorize", "completed", "permission filters applied")
-
             query_plan = self.query_plan_compiler.compile(query_plan=query_plan, retrieval=retrieval)
             logger.info(
                 "plan trace_id=%s tables=%s metrics=%s dimensions=%s",
@@ -229,10 +219,7 @@ class ConversationOrchestrator:
             plan_errors = plan_result.errors
             plan_warnings = plan_result.warnings
             if plan_errors and llm_plan_hint.get("mode") == "live":
-                fallback_plan, fallback_permission_warnings = self.permission_service.apply_to_query_plan(
-                    query_plan=base_query_plan.model_copy(deep=True),
-                    user_context=request.user_context,
-                )
+                fallback_plan = base_query_plan.model_copy(deep=True)
                 fallback_plan = self.query_plan_compiler.compile(query_plan=fallback_plan, retrieval=retrieval)
                 fallback_result = self.query_plan_validator.validate_detailed(
                     query_plan=fallback_plan,
@@ -243,7 +230,6 @@ class ConversationOrchestrator:
                 if not fallback_errors:
                     warnings.append("llm query plan hint rejected; fallback to local planner result")
                     query_plan = fallback_plan
-                    permission_warnings = fallback_permission_warnings
                     plan_errors = []
                     plan_warnings = fallback_warnings
                     plan_result = fallback_result
@@ -327,23 +313,19 @@ class ConversationOrchestrator:
                 bool(sql),
                 bool(llm_sql),
             )
-            visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
             self.audit_service.append_step(
                 trace,
                 "generate_sql",
                 "completed" if sql else "skipped",
                 metadata={
                     "used_sources": query_plan.tables,
-                    "sql_visible": bool(visible_sql),
+                    "sql_visible": bool(sql),
                 },
             )
             self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status=("completed" if sql else "skipped"), detail=("sql generated" if sql else "sql unavailable"))
 
             self._publish_progress(trace.trace_id, event_type="stage", stage="sql_validation", status="running", detail="validating sql")
-            required_filter_fields = self.permission_service.required_filter_fields(
-                query_plan=query_plan,
-                user_context=request.user_context,
-            )
+            required_filter_fields: list[str] = []
             logger.info(
                 "sql validation input trace_id=%s sql_present=%s sql_preview=%s query_plan_tables=%s query_plan_dimensions=%s query_plan_metrics=%s",
                 trace.trace_id,
@@ -391,7 +373,6 @@ class ConversationOrchestrator:
                         warnings.append("llm sql repaired after validation failure")
                         sql_hint_metadata["repair_used"] = True
                         sql = repaired_sql
-                        visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
                         sql_errors = []
                         sql_warnings = repaired_sql_result.warnings
                         sql_risk_level = repaired_sql_result.risk_level
@@ -458,18 +439,11 @@ class ConversationOrchestrator:
                             warnings.append("llm sql repaired after execution failure")
                             sql_hint_metadata["repair_used"] = True
                             sql = repaired_sql
-                            visible_sql = sql if self.permission_service.can_view_sql(request.user_context) else None
                             sql_errors = []
                             sql_warnings = repaired_sql_result.warnings
                             sql_risk_level = repaired_sql_result.risk_level
                             sql_risk_flags = repaired_sql_result.risk_flags
                             execution = repaired_execution
-            execution = self.permission_service.apply_to_execution(
-                execution=execution,
-                user_context=request.user_context,
-            )
-            if execution is not None and not self.permission_service.can_view_sql(request.user_context):
-                execution.sql = None
             self.audit_service.append_step(
                 trace,
                 "execute",
@@ -521,8 +495,6 @@ class ConversationOrchestrator:
                 previous_state=session_state,
                 sql=sql,
             )
-            if not self.permission_service.can_view_sql(request.user_context):
-                next_session_state.last_sql = None
 
             if request.session_id:
                 self.session_service.append_user_message(request.session_id, request.question, trace.trace_id)
@@ -537,7 +509,7 @@ class ConversationOrchestrator:
                 trace=trace,
                 answer=answer,
                 query_plan=query_plan,
-                sql=visible_sql,
+                sql=sql,
                 plan_validation=plan_validation,
                 sql_validation=sql_validation,
                 execution=execution,
