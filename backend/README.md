@@ -59,11 +59,19 @@ uvicorn backend.app.main:app --reload --app-dir .
 - `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
 - `POST /api/chat/query/stream` 是前端默认提问入口；通过 SSE 推送 `accepted`、`planning`、`sql_generation`、`execution`、`completed` 等阶段事件
 
+当前权限模型也需要单独说明：
+
+- 当前没有独立的 permission bitset 或 ACL 表
+- 权限本质上是 `users -> user_roles -> roles` 这层角色名集合
+- 当前内置且有明确语义的角色主要是 `admin`、`viewer`、`chitchat`
+- `chitchat` 不是数据权限，只控制用户在 `ENABLE_CHITCHAT_MODE=true` 时能否收到闲聊回复
+- 运行时访问控制主要落在 `admin` 角色校验，以及 session / trace 归属校验
+
 ## Runtime 存储与升级
 
 运行时数据默认落到运行时数据库，包括：
 
-- 用户和角色
+- 用户、角色和 `user_roles`
 - 会话、消息和状态快照
 - query log、trace、SQL audit、feedback
 - evaluation runs
@@ -169,6 +177,12 @@ Unknown column '...'
 - `DELETE /api/admin/users/{user_id}`
 - `GET /api/admin/roles`
 - `PUT /api/admin/roles/{role_name}`
+
+说明：
+
+- `GET /api/admin/roles` 返回值会把内置角色说明和数据库里的自定义角色合并起来
+- 管理员可以直接通过用户编辑接口授予或移除 `chitchat` 角色
+- `viewer` 是基础查询角色，`admin` 控制管理台访问，`chitchat` 只控制闲聊回复能力
 
 ### Admin Eval
 

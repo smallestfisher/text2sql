@@ -36,16 +36,14 @@
 
 1. 读取当前 `session_state`
 2. 提取指标、实体、时间、版本和 follow-up 信号
-3. 判断是首轮新问、追问、跨域新问、澄清还是无效问题
-4. 对低信号问题触发 relevance guard
-5. 生成基础 `Query Plan`
-6. 检索 example / knowledge / metric 辅助上下文
-7. 注入权限过滤
-8. 构造 SQL prompt
-9. LLM 生成 SQL
-10. validator 校验，必要时触发 repair
-11. 执行 SQL
-12. 组织回答并落 trace / query log / response snapshot
+3. 先走 hard guard，再按需要触发 relevance guard，并在有 session 时进入 `LLM-primary + baseline accept/reject` 分类
+4. 生成基础 `Query Plan`，并在 SQL 前做 compile / validate
+5. 检索 example / knowledge / metric 辅助上下文
+6. 构造 SQL prompt，把 `retrieved_examples`、`business_notes`、`join_patterns` 等证据带入
+7. LLM 生成 SQL
+8. validator 校验，必要时触发 repair
+9. 执行 SQL
+10. 组织回答，并落 trace / query log / sql audit / response snapshot
 
 所以“答错了”通常属于下面几类之一：
 
@@ -55,7 +53,7 @@
 - Query Plan 错
 - SQL 生成错
 - validator 误拦或漏拦
-- 权限影响结果
+- workspace / 历史恢复错位
 - 执行环境或数据问题
 
 ---
@@ -100,12 +98,13 @@
 
 ### 5.1 常见分流方式
 
-- `invalid`：先看 relevance guard 是否误判为非业务查询
+- `invalid`：先看 `classification.reason_code` 是 `invalid_smalltalk` 还是 `llm_out_of_scope`
+- `chat`：先确认 `ENABLE_CHITCHAT_MODE=true`，并且当前用户带有 `chitchat` 角色；再回头看 `reason_code`
 - `clarification_needed`：先看是否缺指标、时间、版本或主体
 - `plan_validation.valid = false`：先看 Query Plan
 - `sql_validation.valid = false`：先看 SQL 生成和 validator
 - `execution.status = db_error`：先看 SQL、字段大小写、真实库对象
-- `execution.status = empty_result`：先看过滤条件、时间、版本、权限和底层数据
+- `execution.status = empty_result`：先看过滤条件、时间、版本、继承上下文和底层数据
 
 ---
 
@@ -143,6 +142,8 @@
 - `classification.inherit_context`
 - `classification.context_delta`
 - `classification.reason_code`
+- trace 里的 `classify_question.metadata.classifier_debug`
+  重点看 `decision_source`、`score_gap`、`llm_hint`、`baseline_classification`
 
 典型症状：
 
@@ -152,7 +153,8 @@
 
 优先修：
 
-- `classification_rules`
+- `QuestionClassifier` 的 baseline 打分和 accept/reject 边界
+- `semantic_runtime` 里的 follow-up / semantic diff 信号
 - follow-up 线索
 - 澄清文案
 - relevance guard 的边界
@@ -250,7 +252,8 @@
 
 - 真实库字段/大小写
 - 真实数据情况
-- 权限过滤
+- SQL 自身过滤条件
+- session_state 继承是否把条件带偏
 - 业务口径说明
 
 ---
@@ -289,12 +292,19 @@
 
 建议观察顺序：
 
-1. `POST /api/query/plan`
-2. `POST /api/query/sql`
-3. `POST /api/query/execute`
-4. `POST /api/chat/query/stream`
-5. `GET /api/chat/sessions/{session_id}/workspace`
-6. `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+1. `POST /api/query/classify`
+2. `POST /api/query/plan`
+3. `POST /api/query/plan/validate`
+4. `POST /api/query/sql`
+5. `POST /api/query/execute`
+6. `POST /api/chat/query/stream`
+7. `GET /api/chat/sessions/{session_id}/workspace`
+8. `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+
+使用建议：
+
+- `/api/query/*` 更适合单步调试某一层，不是前端真实主链路
+- 工作台真实入口仍然是 `POST /api/chat/query/stream` + `workspace`
 
 重点看：
 
@@ -337,7 +347,7 @@
 - `examples/nl2sql_examples.template.json` 只收真实问题、真实 trace、且 SQL 与业务结果都人工确认后的样例
 - `eval/evaluation_cases.json` 也只保留真实问题、真实 trace 或真实 replay 沉淀出的 case
 - example 会参与检索、管理和调试证据，并在命中时以 `retrieved_examples` 形式进入 SQL prompt
-- SQL prompt 同时保留内置场景模板 few-shot，用于 demand 横表、plan_actual 对比等专项结构约束
+- 主 SQL prompt 不再依赖问题特定的内置场景模板；当前主要依赖 `retrieved_examples`、`business_notes`、`join_patterns` 和 validator 约束
 
 不要再维护假设样本。
 

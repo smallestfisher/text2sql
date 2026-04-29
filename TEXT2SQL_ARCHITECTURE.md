@@ -28,7 +28,7 @@
 同时，问题理解层已经不再是纯 `parser/classifier/planner-first`：
 
 - `QueryIntentParser` 负责 shallow parse
-- `LLMIntentService` 负责 LLM intent
+- `IntentService` 负责 LLM intent
 - `IntentNormalizer` 负责本地收口
 - `QuestionClassifier` 已切到 `LLM-primary + baseline arbitration + hard guard`
 - `QueryPlanner` 已回归 deterministic planner/compiler
@@ -341,7 +341,12 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 3. 进入 `chatPending=true`
 4. 实时消费后端进度事件
 5. 收到 `completed` 事件时直接拿 `metadata.response`
-6. 只有在 SSE 完全没有启动时，才回退到普通 `POST /api/chat/query`
+6. 只有在 stream 请求已经建立、但整个流期间一条事件都没收到时，才回退到普通 `POST /api/chat/query`
+
+这里要注意两个实际边界：
+
+- 如果 SSE 请求直接报错，前端不会自动回退到非流式接口，而是直接报错
+- 如果 SSE 已经收到过事件，但最后没有等到 `completed`，前端也不会再回退，而是按流式失败处理
 
 ### 5.2 `POST /api/chat/query/stream`
 
@@ -428,7 +433,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 当前理解链路已经演进为：
 
 1. `QueryIntentParser` 产出 shallow parse
-2. `LLMIntentService` 产出 LLM intent
+2. `IntentService` 产出 LLM intent
 3. `IntentNormalizer` 收口 LLM intent
 4. `QueryPlanner` 选择 effective intent：优先 `normalized`
 5. `QuestionClassifier` 基于 effective intent 做分类
@@ -467,9 +472,9 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 
 这些信息会直接进入 trace，作为后续 intent 对比的基线。
 
-### 6.2 LLMIntentService + IntentNormalizer
+### 6.2 IntentService + IntentNormalizer
 
-`LLMIntentService` 直接接管主链路的高层语义理解。当前输出结构已经统一为 `StructuredIntent`，核心字段包括：
+`IntentService` 直接接管主链路的高层语义理解。当前输出结构已经统一为 `StructuredIntent`，核心字段包括：
 
 - `subject_domain`
 - `metrics`
@@ -500,7 +505,7 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 并记录两组差异：
 
 - `diff_vs_parser`
-- `diff_vs_shadow`
+- `diff_vs_llm_intent`
 
 这使得单题调试时可以直接看出：
 
@@ -513,10 +518,10 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 
 当前规则是：
 
-- 如果 normalized intent 可用，使用 normalized intent 进入主链路
-- 如果 normalized intent 不可用，主链路不会继续沿用 parser 结果执行；parser 只保留为 trace 对照基线
+- 当前实现固定使用 normalized intent 进入主链路
+- parser intent 只保留为 trace 对照基线，不再作为 runtime 兜底执行入口
 - 在真实 runtime 中，LLM intent / normalized intent 被视为强依赖；如果这里失败，请求会直接显式失败
-- 只有在离线回归或显式缺省依赖的测试路径里，才会出现 `selected_source=none` 的降级痕迹
+- `intent_selection.selected_source` 当前稳定为 `normalized`
 
 当前 trace 中会显式记录：
 
@@ -559,7 +564,18 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 - 本地 baseline 启发式仍会计算，但只作为 `baseline_classification` 仲裁基线
 - 只要当前请求带有 session，并且通过了前置 hard guard，就会进入 LLM classification + 本地 accept/reject 校验链路
 - LLM 输出仍需通过本地 accept/reject 校验
-- 不可接受时保留本地分类结果
+- 不可接受时不会继续沿用 baseline classification 执行，而是转成 `llm_classification_rejected` 的澄清响应
+
+`relevance guard` 也不是每题都跑，它只会在这些场景触发：
+
+- `query_intent.subject_domain == "unknown"`
+- 或者当前没有识别出 `matched_metrics`，并且不满足“有 follow-up cue 且 session 已存在”的豁免条件
+
+真正进入会话分类后，LLM 允许输出的 `question_type` 也不是任意值，而是受当前域关系约束：
+
+- 当 parser/intent 仍是 `unknown` 域时，只允许 `follow_up` 或 `clarification_needed`
+- 当当前问题和 session state 已经跨域时，只允许 `new_unrelated` 或 `clarification_needed`
+- 当当前问题仍在同域内时，只允许 `follow_up`、`new_related` 或 `clarification_needed`
 
 补充一点：
 
@@ -569,6 +585,7 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 当前 trace / debug 中会显式记录：
 
 - `decision_source`
+  可能取值包括 `hard_guard`、`relevance_guard`、`llm_primary`、`llm_aligned_with_baseline`、`llm_rejected`
 - `baseline_classification`
 - `score_details`
 - `score_gap`
@@ -716,8 +733,8 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 当前主链路已经移除了查询权限裁剪服务，运行时默认行为是：
 
 1. **所有登录用户都可执行查询**
-2. **SQL / 结果 / SQL audit 默认可见**
-3. **结果下载只保留会话 / Trace 归属校验**
+2. **SQL / 结果 / SQL audit 对当前会话或 trace 的拥有者默认可见，`admin` 可跨用户查看**
+3. **当前没有 query-level 数据权限注入，访问控制主要落在会话 / Trace 归属校验和管理口角色校验**
 
 当前治理重点收敛为两层：
 
@@ -727,7 +744,7 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 也就是说，这里的“治理”不再负责：
 
 - 往 Query Plan 注入数据权限过滤
-- 按用户裁掉 SQL 可见性
+- 按查询内容做细粒度数据权限裁剪
 - 按列做结果 hidden / masked
 
 ---
@@ -848,6 +865,7 @@ repair 只允许一次，而且分两类：
 - execution
 - plan_validation
 - sql_validation
+- user_context
 
 来生成最终回答，输出的重点通常包括：
 
@@ -857,6 +875,12 @@ repair 只允许一次，而且分两类：
 - `follow_up_hint`
 
 所以 answer 不是简单地把 rows stringify，而是一个经过状态判断后的业务型回复对象。
+
+补充当前实现边界：
+
+- `chat` 响应不是单纯由 `ENABLE_CHITCHAT_MODE` 控制
+- 只有 `ENABLE_CHITCHAT_MODE=true` 且当前用户带有 `chitchat` 角色时，`invalid_smalltalk` / `llm_out_of_scope` 才会被转成 `chat`
+- 如果没有 `chitchat` 角色，这两类输入仍然会返回 `invalid`
 
 ### 11.2 SessionStateService
 
@@ -922,6 +946,11 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 - 清空 `execution.sql`
 - 清空 `next_session_state.last_sql`
 
+恢复时也有一个很具体的约束：
+
+- snapshot 本身不直接保留 SQL 文本
+- 历史恢复时，`trace` 来自 audit trace，`sql` 则由 `sql_audit.sql_text` 回填
+
 这个 `response_snapshot` 的意义很大：
 
 - 历史会话恢复时，不必重新执行 SQL
@@ -968,6 +997,14 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 7. 找出 latest trace 对应 artifact
 8. 返回一份聚合后的 `SessionWorkspaceResponse`
 
+这里有几个实现细节需要写清：
+
+- 路由层会先对 session 做 `ensure_access()`，然后才允许取 workspace
+- `latest_trace_id` 优先取 `latest_query_logs[0].trace_id`；只有拿不到 query log 时，才退回到最后一条 message 的 trace_id
+- 构建 `trace_artifacts` 时，只有 latest trace 在“无 snapshot、需要退化重建”的场景下会注入当前 `session_state`
+- 历史 trace 不会统一套用当前 state，避免把最新上下文错误覆盖到旧轮次
+- 如果某个 trace 同时拿不到 `query_log / trace / sql_audit / response`，这一轮 artifact 会被直接跳过
+
 `trace_artifacts` 每项包含：
 
 - `trace_id`
@@ -990,6 +1027,11 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
    - session_state
    - messages
    组合重建
+
+再补两点和代码一致的约束：
+
+- `build_from_trace_id()` 要求 `trace` 和 `query_log` 至少都存在，否则直接返回 `None`
+- snapshot 恢复并不是“整包直接反序列化”，而是会额外把 `trace` 填回去，并在存在 `sql_audit` 时把 `sql_audit.sql_text` 补回响应里的 `sql`
 
 这就是当前工作台能稳定重开历史详情的关键。
 
@@ -1043,8 +1085,10 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
    - 更新 `pendingProgress`
    - 更新 `pendingTraceId`
    - 在 `completed` 事件中取 `response`
-5. 成功后刷新 session workspace
+   - 立刻用 `primeImmediateTraceArtifact()` 把这轮结果先挂到本地 inspector 数据里
+5. 成功后刷新 session 列表和 session workspace
 6. 用 workspace 结果替换本地临时状态
+7. 如果最终响应已经拿到，但 workspace 刷新失败，前端仍保留本地结果，只额外提示“会话刷新失败”
 
 ### 13.4 结果卡与详情侧栏
 
@@ -1083,6 +1127,11 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 - 对阶段做了归一化
 - 对当前阶段做了更细文案说明
 - 对失败、跳过、完成、进行中做了可视化区分
+
+同时也要注意，阶段骨架虽然固定，但并不代表每轮都会完整走完：
+
+- `invalid` / `clarification_needed` 这类 terminal 响应会在 planning 后提前结束
+- SQL 校验失败或执行跳过时，后续阶段会以 `failed` 或 `skipped` 呈现
 
 ---
 
@@ -1261,7 +1310,7 @@ demand 是当前架构里最容易被误解的区域，所以单列说明。
 
 runtime 库负责：
 
-- users / roles / permissions
+- users / roles / user_roles
 - sessions / messages / session state snapshots
 - query_logs
 - sql_audit_logs
@@ -1275,6 +1324,15 @@ runtime 库负责：
 - 会话系统可独立演进
 - 调试资产可长期保留
 - 权限与审计能放在同一运行时域里统一治理
+
+当前权限模型的实现边界也需要说清：
+
+- 现在没有单独的 permission bitset 或 ACL 表
+- “权限”本质上就是 `users -> user_roles -> roles` 这一层角色名集合
+- 当前内置且有明确语义的角色主要是：`admin`、`viewer`、`chitchat`
+- 管理口权限主要由 `admin` 角色控制，普通运行时资产访问主要由 session / trace 归属控制
+- `list_roles()` 会把内置角色描述和数据库里的自定义角色合并返回，不要求 roles 表先手工预置完整描述
+- 其中 `chitchat` 不是数据权限，而是控制闲聊回复是否允许返回给该用户
 
 ---
 
@@ -1316,7 +1374,7 @@ runtime 库负责：
 
 当前工程的本质不是“聊天机器人”，也不是“规则模板 SQL 系统”，而是一个：
 
-**以 LLM 为 SQL 生成核心、以 Query Plan/Validator/Permission/Runtime 为治理闭环、以 Workspace/Trace 为恢复与调试入口的企业级 Text2SQL 工作台。**
+**以 LLM 为 SQL 生成核心、以 Query Plan/Validator/Runtime 为治理闭环、以角色与归属校验收口访问边界、以 Workspace/Trace 为恢复与调试入口的企业级 Text2SQL 工作台。**
 
 如果后续要继续演进，正确方向是：
 

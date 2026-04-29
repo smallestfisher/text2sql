@@ -9,7 +9,8 @@
 - 左侧：会话列表、登录用户信息、管理员视图切换
 - 中间：消息流、欢迎态快捷问题卡片、输入框
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
-- 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、反馈和 replay
+- 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、角色、反馈和 replay
+- 管理员可以直接在用户管理区域授予或移除 `chitchat` 角色；该角色只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会实际生效
 - 管理员通过 runtime trace 物化 example 后，新样例当前可立即参与后端 retrieval / SQL prompt；通常不需要重启服务
 
 ## 当前交互规则
@@ -33,6 +34,7 @@
 说明：
 
 - 前端结果卡和详情侧栏默认展示用户友好的中文状态文案，例如 `无结果`、`需澄清`
+- 当后端返回 `answer.status="chat"` 时，前端会显示为 `闲聊`
 - 原始后端状态枚举仍然保留在 trace / runtime log / SQL audit 等调试接口中
 
 点击 `查看详情` 后，会把右侧详情面板切换到该消息对应的 `trace_id`。
@@ -112,9 +114,12 @@ npm run build
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/export`
 - `GET /api/admin/runtime/status`
+- `GET /api/admin/runtime/sessions`
 - `GET /api/admin/runtime/query-logs`
 - `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+- `GET /api/admin/metadata/overview`
 - `GET /api/admin/users`
+- `GET /api/admin/roles`
 - `PUT /api/admin/users/{user_id}`
 
 ## 当前用户侧不再强调的内容
