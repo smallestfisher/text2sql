@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 class QuestionClassifier:
     def __init__(
         self,
+        llm_client: LLMClient,
+        prompt_builder: PromptBuilder,
         semantic_runtime: SemanticRuntime | None = None,
-        llm_client: LLMClient | None = None,
-        prompt_builder: PromptBuilder | None = None,
         enable_chitchat_mode: bool = False,
     ) -> None:
         self.semantic_runtime = semantic_runtime
@@ -189,35 +189,31 @@ class QuestionClassifier:
             ambiguous=score_gap < 0.12,
         )
 
-        classification: QuestionClassification
-        if llm_hint is None or llm_hint.get("mode") != "live":
-            classification = self._llm_classification_unavailable(baseline_classification)
+        candidate = self._apply_llm_hint(
+            hint=llm_hint,
+            query_intent=query_intent,
+            session_state=session_state,
+            base_classification=baseline_classification,
+        )
+        acceptable, rejection_reasons = self._llm_classification_is_acceptable(
+            candidate=candidate,
+            query_intent=query_intent,
+            session_state=session_state,
+        )
+        if acceptable:
+            classification = candidate
         else:
-            candidate = self._apply_llm_hint(
-                hint=llm_hint,
-                query_intent=query_intent,
-                session_state=session_state,
+            warnings.append(
+                "llm classification hint rejected: " + "; ".join(rejection_reasons)
+            )
+            classification = self._llm_classification_rejected(
                 base_classification=baseline_classification,
+                rejection_reasons=rejection_reasons,
             )
-            acceptable, rejection_reasons = self._llm_classification_is_acceptable(
-                candidate=candidate,
-                query_intent=query_intent,
-                session_state=session_state,
-            )
-            if acceptable:
-                classification = candidate
-            else:
-                warnings.append(
-                    "llm classification hint rejected: " + "; ".join(rejection_reasons)
-                )
-                classification = self._llm_classification_rejected(
-                    base_classification=baseline_classification,
-                    rejection_reasons=rejection_reasons,
-                )
 
         self._last_debug_info.update(
             {
-                "decision_source": self._decision_source(classification, baseline_classification, llm_hint),
+                "decision_source": self._decision_source(classification, baseline_classification),
                 "semantic_diff": semantic_diff,
                 "score_gap": score_gap,
                 "score_details": score_details,
@@ -378,11 +374,7 @@ class QuestionClassifier:
         query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict | None:
-        if (
-            self.llm_client is None
-            or self.prompt_builder is None
-            or not self._should_run_relevance_guard(query_intent, session_state)
-        ):
+        if not self._should_run_relevance_guard(query_intent, session_state):
             return None
         prompt_payload = self.prompt_builder.build_relevance_prompt(
             question=original_question,
@@ -432,21 +424,13 @@ class QuestionClassifier:
         self,
         original_question: str,
         query_intent: QueryIntent,
-        session_state: SessionState | None,
+        session_state: SessionState,
         semantic_diff: dict,
         base_classification: QuestionClassification,
         candidate_scores: dict[str, float],
         ambiguous: bool,
-    ) -> dict | None:
-        if (
-            self.llm_client is None
-            or self.prompt_builder is None
-            or session_state is None
-        ):
-            return None
+    ) -> dict:
         allowed_question_types = self._allowed_question_types(query_intent, session_state)
-        if len(allowed_question_types) <= 1:
-            return None
         arbitration_context = self._classification_arbitration_context(
             candidate_scores=candidate_scores,
             query_intent=query_intent,
@@ -471,31 +455,12 @@ class QuestionClassifier:
         self,
         final_classification: QuestionClassification,
         baseline_classification: QuestionClassification,
-        llm_hint: dict | None,
     ) -> str:
-        if llm_hint is None or llm_hint.get("mode") != "live":
-            return "llm_unavailable"
         if final_classification.reason_code == "llm_classification_rejected":
             return "llm_rejected"
         if final_classification.model_dump(mode="json") == baseline_classification.model_dump(mode="json"):
             return "llm_aligned_with_baseline"
         return "llm_primary"
-
-    def _llm_classification_unavailable(
-        self,
-        base_classification: QuestionClassification,
-    ) -> QuestionClassification:
-        return QuestionClassification(
-            question_type="clarification_needed",
-            subject_domain=base_classification.subject_domain,
-            inherit_context=False,
-            confidence=0.55,
-            reason="当前分类主链路不可用，暂不继续执行。",
-            reason_code="llm_classification_unavailable",
-            need_clarification=True,
-            clarification_question="请稍后重试，或补充更明确的查询目标、时间范围和统计口径。",
-            context_delta=ContextDelta(),
-        )
 
     def _llm_classification_rejected(
         self,

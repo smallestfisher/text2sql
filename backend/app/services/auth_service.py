@@ -10,6 +10,8 @@ import uuid
 
 from backend.app.core.exceptions import PermissionDeniedError
 from backend.app.models.auth import (
+    ADMIN_ROLE,
+    CHITCHAT_ROLE,
     AdminPasswordResetRequest,
     AuthUserRecord,
     BootstrapAdminRequest,
@@ -20,7 +22,15 @@ from backend.app.models.auth import (
     RoleUpsertRequest,
     UserContext,
     UserUpsertRequest,
+    VIEWER_ROLE,
+    normalize_role_names,
 )
+
+BUILTIN_ROLE_DESCRIPTIONS = {
+    ADMIN_ROLE: "管理员，可访问管理中心并管理用户、角色与运行时数据。",
+    VIEWER_ROLE: "基础查询用户，可使用标准 Text2SQL 数据查询能力。",
+    CHITCHAT_ROLE: "允许用户在 ENABLE_CHITCHAT_MODE=true 时收到闲聊回复。",
+}
 
 
 class AuthService:
@@ -34,7 +44,7 @@ class AuthService:
         self.token_secret = token_secret.encode("utf-8")
         self.token_ttl_seconds = token_ttl_seconds
 
-    def create_stub_user(
+    def build_virtual_user_context(
         self,
         user_id: str,
         username: str | None = None,
@@ -43,7 +53,7 @@ class AuthService:
         return UserContext(
             user_id=user_id,
             username=username or user_id,
-            roles=roles or ["viewer"],
+            roles=normalize_role_names(roles) or [VIEWER_ROLE],
         )
 
     def has_users(self) -> bool:
@@ -57,7 +67,7 @@ class AuthService:
             request=UserUpsertRequest(
                 username=request.username,
                 password=request.password,
-                roles=["admin"],
+                roles=[ADMIN_ROLE],
                 is_active=True,
             ),
             existing=None,
@@ -96,7 +106,18 @@ class AuthService:
         return None if user is None else self._to_user_context(user)
 
     def list_roles(self) -> list[RoleRecord]:
-        return self.repository.list_roles()
+        existing_roles = {item.role_name: item for item in self.repository.list_roles()}
+        merged_roles: list[RoleRecord] = []
+        for role_name, description in BUILTIN_ROLE_DESCRIPTIONS.items():
+            existing = existing_roles.pop(role_name, None)
+            if existing is None:
+                merged_roles.append(RoleRecord(role_name=role_name, description=description))
+                continue
+            if not existing.description and description:
+                existing = existing.model_copy(update={"description": description})
+            merged_roles.append(existing)
+        merged_roles.extend(sorted(existing_roles.values(), key=lambda item: item.role_name))
+        return merged_roles
 
     def upsert_role(self, role_name: str, request: RoleUpsertRequest) -> RoleRecord:
         existing = {item.role_name: item for item in self.repository.list_roles()}
@@ -107,14 +128,14 @@ class AuthService:
         )
         role = RoleRecord(
             role_name=role_name,
-            description=request.description,
+            description=request.description or BUILTIN_ROLE_DESCRIPTIONS.get(role_name),
             created_at=created_at,
         )
         return self.repository.upsert_role(role)
 
     def upsert_user(self, user_id: str, request: UserUpsertRequest) -> UserContext:
         existing = self.repository.get_by_user_id(user_id)
-        if existing is not None and "admin" in existing.roles:
+        if existing is not None and ADMIN_ROLE in existing.roles:
             self._ensure_not_last_active_admin(
                 existing.user_id,
                 replacing_roles=request.roles,
@@ -146,7 +167,7 @@ class AuthService:
         existing = self.repository.get_by_user_id(user_id)
         if existing is None:
             raise KeyError(user_id)
-        if "admin" in existing.roles:
+        if ADMIN_ROLE in existing.roles:
             self._ensure_not_last_active_admin(existing.user_id)
         deleted = self.repository.delete_user(user_id)
         if not deleted:
@@ -182,11 +203,13 @@ class AuthService:
             else (existing.password_hash if existing is not None else self._hash_password("change_me"))
         )
         created_at = existing.created_at if existing is not None else datetime.utcnow()
+        requested_roles = normalize_role_names(request.roles)
+        existing_roles = normalize_role_names(existing.roles if existing is not None else [VIEWER_ROLE])
         return AuthUserRecord(
             user_id=user_id,
             username=request.username,
             password_hash=password_hash,
-            roles=request.roles or (existing.roles if existing is not None else ["viewer"]),
+            roles=requested_roles or existing_roles or [VIEWER_ROLE],
             is_active=request.is_active,
             created_at=created_at,
             updated_at=datetime.utcnow(),
@@ -207,7 +230,7 @@ class AuthService:
         replacing_active: bool | None = None,
     ) -> None:
         users = self.repository.list_users()
-        active_admins = [item for item in users if item.is_active and "admin" in item.roles]
+        active_admins = [item for item in users if item.is_active and ADMIN_ROLE in item.roles]
         if len(active_admins) != 1:
             return
         last_admin = active_admins[0]
@@ -215,7 +238,7 @@ class AuthService:
             return
         next_roles = replacing_roles if replacing_roles is not None else last_admin.roles
         next_active = replacing_active if replacing_active is not None else last_admin.is_active
-        if not next_active or "admin" not in next_roles:
+        if not next_active or ADMIN_ROLE not in next_roles:
             raise PermissionDeniedError("cannot disable or remove the last active admin")
 
     def _hash_password(self, password: str) -> str:

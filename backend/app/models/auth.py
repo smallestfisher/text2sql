@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from pydantic import BaseModel, Field
 
+ADMIN_ROLE = "admin"
+VIEWER_ROLE = "viewer"
+CHITCHAT_ROLE = "chitchat"
+
 
 class UserContext(BaseModel):
     user_id: str
@@ -62,3 +66,20 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserContext
+
+
+def normalize_role_names(roles: list[str] | None) -> list[str]:
+    if not roles:
+        return []
+    normalized: list[str] = []
+    for role_name in roles:
+        cleaned = role_name.strip()
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
+
+
+def has_role(user_context: UserContext | None, role_name: str) -> bool:
+    if user_context is None:
+        return False
+    return role_name in normalize_role_names(user_context.roles)

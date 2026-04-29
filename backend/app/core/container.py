@@ -58,8 +58,6 @@ class AppContainer:
             max_result_rows=self.settings.execution_max_rows,
             slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
         )
-        # Backward-compatible alias for business-data operations.
-        self.database_connector = self.business_database_connector
         self.runtime_store_initializer = RuntimeStoreInitializer(self.runtime_database_connector)
         self.runtime_store_initializer.ensure_schema()
         self.auth_repository = DbAuthRepository(self.runtime_database_connector)
@@ -72,7 +70,7 @@ class AppContainer:
 
         self.prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
         self.llm_client = LLMClient(
-            model_name=self.settings.openai_model,
+            model_name=self.settings.llm_model,
             api_key=self.settings.openai_api_key,
             api_base=self.settings.openai_api_base,
             timeout_seconds=self.settings.llm_timeout_seconds,

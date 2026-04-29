@@ -481,7 +481,7 @@ class EvaluationService:
         user = self.auth_service.get_user(target_user_id)
         if user is not None:
             return user
-        return self.auth_service.create_stub_user(target_user_id)
+        return self.auth_service.build_virtual_user_context(target_user_id)
 
     def _load_prior_session_questions(self, session_id: str, trace_id: str) -> list[str]:
         if self.session_repository is None:
@@ -517,6 +517,7 @@ class EvaluationService:
         from backend.app.models.answer import AnswerPayload
         from backend.app.models.classification import QuestionClassification, QueryIntent
         from backend.app.models.query_plan import QueryPlan
+        from backend.app.models.answer import normalize_answer_status
         from backend.app.models.retrieval import RetrievalContext
         from backend.app.models.session_state import SessionState
 
@@ -582,7 +583,8 @@ class EvaluationService:
             risk_flags=sql_audit.sql_risk_flags if sql_audit is not None else [],
         )
         execution = None
-        answer = AnswerPayload(status=query_log.answer_status or "stub", summary=query_log.answer_status or "")
+        answer_status = normalize_answer_status(query_log.answer_status, executed=bool(query_log.executed))
+        answer = AnswerPayload(status=answer_status, summary=query_log.answer_status or answer_status)
         return ChatResponse(
             classification=classification,
             query_intent=query_intent,

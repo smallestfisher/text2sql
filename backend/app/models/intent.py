@@ -8,7 +8,7 @@ from .classification import QueryIntent
 from .query_plan import FilterItem, SortItem, SubjectDomain, TimeContext, VersionContext
 
 
-IntentSource = Literal["parser", "llm_shadow", "normalized"]
+IntentSource = Literal["parser", "llm", "normalized"]
 
 
 class StructuredIntent(BaseModel):
@@ -61,7 +61,7 @@ class StructuredIntent(BaseModel):
         time_context = cls._parse_time_context(payload.get("time_context"))
         version_context = cls._parse_version_context(payload.get("version_context"))
         return cls(
-            source="llm_shadow",
+            source="llm",
             normalized_question=normalized_question,
             subject_domain=cls._parse_subject_domain(payload.get("subject_domain")),
             metrics=cls._parse_string_list(payload.get("metrics")),

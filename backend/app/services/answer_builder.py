@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.app.models.answer import AnswerPayload
 from backend.app.models.api import ExecutionResponse, ValidationResponse
+from backend.app.models.auth import CHITCHAT_ROLE, UserContext, has_role
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.query_plan import QueryPlan
 
@@ -17,9 +18,14 @@ class AnswerBuilder:
         execution: ExecutionResponse | None,
         plan_validation: ValidationResponse,
         sql_validation: ValidationResponse,
+        user_context: UserContext | None = None,
     ) -> AnswerPayload:
         if classification.question_type == "invalid":
-            if self.enable_chitchat_mode and classification.reason_code in {"invalid_smalltalk", "llm_out_of_scope"}:
+            if (
+                self.enable_chitchat_mode
+                and has_role(user_context, CHITCHAT_ROLE)
+                and classification.reason_code in {"invalid_smalltalk", "llm_out_of_scope"}
+            ):
                 return AnswerPayload(
                     status="chat",
                     summary=classification.suggested_reply or self._default_chat_reply(),
@@ -82,9 +88,9 @@ class AnswerBuilder:
 
         metric_text = ", ".join(query_plan.metrics) if query_plan.metrics else "未识别指标"
         return AnswerPayload(
-            status="stub",
-            summary=f"已完成查询规划，当前输出围绕指标: {metric_text}。",
-            detail="当前结果来自骨架链路，尚未获得数据库执行结果。",
+            status="error",
+            summary="查询链路未返回执行结果。",
+            detail=f"当前已完成查询规划，但未形成可交付结果。指标: {metric_text}。",
         )
 
     def _default_chat_reply(self) -> str:

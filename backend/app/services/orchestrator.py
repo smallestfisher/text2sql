@@ -294,7 +294,7 @@ class ConversationOrchestrator:
                 )
 
             llm_sql = None
-            sql_hint_metadata = {"mode": "stub", "used": False}
+            sql_hint_metadata = {"mode": "not_started", "used": False}
             sql_prompt = None
             if not plan_errors:
                 self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status="running", detail="generating sql")
@@ -311,14 +311,6 @@ class ConversationOrchestrator:
                         "build_sql_prompt",
                         "completed",
                         "live sql hint returned",
-                        metadata={**sql_hint_metadata, **prompt_context_metadata},
-                    )
-                else:
-                    self.audit_service.append_step(
-                        trace,
-                        "build_sql_prompt",
-                        "completed",
-                        "llm sql unavailable",
                         metadata={**sql_hint_metadata, **prompt_context_metadata},
                     )
 
@@ -504,6 +496,7 @@ class ConversationOrchestrator:
                 execution=execution,
                 plan_validation=plan_validation,
                 sql_validation=sql_validation,
+                user_context=request.user_context,
             )
 
             self._publish_progress(trace.trace_id, event_type="stage", stage="answer_building", status="completed", detail=answer.status if answer else "unknown")
@@ -642,6 +635,7 @@ class ConversationOrchestrator:
             execution=None,
             plan_validation=plan_validation,
             sql_validation=sql_validation,
+            user_context=request.user_context,
         )
         next_session_state = self._preserved_session_state(session_state, request.session_id)
 

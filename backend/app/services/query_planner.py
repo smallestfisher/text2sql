@@ -20,11 +20,11 @@ class QueryPlanner:
     def __init__(
         self,
         domain_config: dict[str, Any],
+        llm_client: LLMClient,
+        prompt_builder: PromptBuilder,
+        intent_service: IntentService,
+        intent_normalizer: IntentNormalizer,
         semantic_runtime: SemanticRuntime | None = None,
-        llm_client: LLMClient | None = None,
-        prompt_builder: PromptBuilder | None = None,
-        intent_service: IntentService | None = None,
-        intent_normalizer: IntentNormalizer | None = None,
         enable_chitchat_mode: bool = False,
     ) -> None:
         self.domain_config = domain_config
@@ -117,13 +117,6 @@ class QueryPlanner:
         query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict[str, Any]:
-        if self.intent_service is None:
-            return {
-                "status": "skipped",
-                "reason": "intent service unavailable",
-                "intent": None,
-                "raw": None,
-            }
         return self.intent_service.generate_intent(
             question=question,
             query_intent=query_intent,
@@ -131,14 +124,7 @@ class QueryPlanner:
         )
 
     def _normalize_intent(self, llm_intent: dict[str, Any]) -> dict[str, Any]:
-        intent = llm_intent.get("intent")
-        if intent is None or self.intent_normalizer is None:
-            return {
-                "status": "skipped",
-                "intent": None,
-                "warnings": [llm_intent.get("reason") or "llm intent unavailable"],
-            }
-        return self.intent_normalizer.normalize(intent)
+        return self.intent_normalizer.normalize(llm_intent["intent"])
 
     def _select_effective_query_intent(
         self,
@@ -146,27 +132,7 @@ class QueryPlanner:
         parser_query_intent: QueryIntent,
         normalized_intent_payload: dict[str, Any],
     ) -> tuple[QueryIntent, dict[str, Any]]:
-        normalized_intent = normalized_intent_payload.get("intent")
-        if normalized_intent is None:
-            return QueryIntent(
-                normalized_question=parser_query_intent.normalized_question,
-                matched_metrics=[],
-                matched_entities=[],
-                requested_dimensions=[],
-                filters=[],
-                time_context=parser_query_intent.time_context.__class__(),
-                version_context=None,
-                requested_sort=[],
-                requested_limit=None,
-                analysis_mode=None,
-                subject_domain="unknown",
-                has_follow_up_cue=parser_query_intent.has_follow_up_cue,
-                has_explicit_slots=False,
-            ), {
-                "selected_source": "none",
-                "selection_reason": "llm intent unavailable; no execution baseline retained",
-            }
-
+        normalized_intent = normalized_intent_payload["intent"]
         effective_query_intent = normalized_intent.to_query_intent(base_query_intent=parser_query_intent)
         return effective_query_intent, {
             "selected_source": "normalized",

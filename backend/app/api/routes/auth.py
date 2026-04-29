@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 
 from backend.app.api.dependencies import get_container, get_current_user
 from backend.app.core.container import AppContainer
@@ -12,13 +11,6 @@ from backend.app.models.auth import (
     PasswordChangeRequest,
     UserContext,
 )
-
-
-class StubLoginRequest(BaseModel):
-    user_id: str
-    username: str | None = None
-    roles: list[str] = Field(default_factory=lambda: ["viewer"])
-
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -66,15 +58,3 @@ def change_password(
         return {"updated": True}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/stub-login", response_model=UserContext)
-def stub_login(
-    request: StubLoginRequest,
-    container: AppContainer = Depends(get_container),
-) -> UserContext:
-    return container.auth_service.create_stub_user(
-        user_id=request.user_id,
-        username=request.username,
-        roles=request.roles,
-    )

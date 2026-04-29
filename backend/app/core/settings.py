@@ -11,38 +11,28 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_env_file() -> None:
-    candidates = [REPO_ROOT / ".env", REPO_ROOT / "env"]
-    for env_path in candidates:
-        if not env_path.exists():
+    env_path = REPO_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
             continue
-        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            os.environ.setdefault(key, value)
-        break
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
 
 
 load_env_file()
 
 
 def _raw_business_database_url() -> str | None:
-    return (
-        os.getenv("BUSINESS_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("DB_URI")
-    )
+    return os.getenv("BUSINESS_DATABASE_URL")
 
 
 def _resolve_runtime_database_url() -> str | None:
-    explicit_runtime_url = (
-        os.getenv("RUNTIME_DATABASE_URL")
-        or os.getenv("AUTH_DATABASE_URL")
-        or os.getenv("RUNTIME_DB_URI")
-    )
+    explicit_runtime_url = os.getenv("RUNTIME_DATABASE_URL")
     if explicit_runtime_url:
         return explicit_runtime_url
 
@@ -91,7 +81,7 @@ class Settings(BaseModel):
     runtime_database_name: str = os.getenv("RUNTIME_DATABASE_NAME", "manager")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_api_base: str | None = os.getenv("OPENAI_API_BASE")
-    openai_model: str = os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL", "stub")
+    llm_model: str = os.getenv("LLM_MODEL", "Qwen/Qwen3-14B")
     llm_timeout_seconds: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
     llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))

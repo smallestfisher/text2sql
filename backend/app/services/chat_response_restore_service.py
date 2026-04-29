@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecord
-from backend.app.models.answer import AnswerPayload
+from backend.app.models.answer import AnswerPayload, normalize_answer_status
 from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
 from backend.app.models.auth import UserContext
 from backend.app.models.classification import QuestionClassification, QueryIntent
@@ -71,6 +71,7 @@ class ChatResponseRestoreService:
             payload["query_intent"] = payload.pop("semantic_parse")
         payload["trace"] = trace
         payload["sql"] = sql_audit.sql_text if sql_audit is not None else None
+        self._normalize_legacy_answer_payload(payload)
         return ChatResponse(**payload)
 
     def _restore_from_artifacts(
@@ -174,9 +175,14 @@ class ChatResponseRestoreService:
             risk_flags=sql_audit.sql_risk_flags if sql_audit is not None else [],
         )
 
+        answer_status = normalize_answer_status(query_log.answer_status, executed=bool(query_log.executed))
         answer = AnswerPayload(
-            status=query_log.answer_status or "stub",
-            summary=self._assistant_summary(messages, query_log.trace_id) or query_log.answer_status or "已恢复历史响应摘要。",
+            status=answer_status,
+            summary=(
+                self._assistant_summary(messages, query_log.trace_id)
+                or query_log.answer_status
+                or ("历史响应已恢复。" if answer_status == "ok" else "历史响应未记录完整答案状态。")
+            ),
         )
 
         execution = self._restore_execution(
@@ -224,6 +230,22 @@ class ChatResponseRestoreService:
             error_category=self._warning_value(query_log.warnings, "execution_error_category"),
             truncated=bool(status == "truncated"),
         )
+
+    def _normalize_legacy_answer_payload(self, payload: dict) -> None:
+        answer = payload.get("answer")
+        if not isinstance(answer, dict):
+            return
+        execution = payload.get("execution")
+        executed = isinstance(execution, dict) and bool(execution.get("executed"))
+        normalized_answer = dict(answer)
+        normalized_status = normalize_answer_status(normalized_answer.get("status"), executed=executed)
+        if normalized_answer.get("status") == normalized_status:
+            return
+        normalized_answer["status"] = normalized_status
+        normalized_answer["summary"] = normalized_answer.get("summary") or (
+            "历史响应已恢复。" if normalized_status == "ok" else "历史响应未记录完整答案状态。"
+        )
+        payload["answer"] = normalized_answer
 
     def _assistant_summary(self, messages: list[ChatMessage], trace_id: str) -> str | None:
         for message in reversed(messages):

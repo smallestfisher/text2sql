@@ -21,16 +21,15 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 日志级别通过 `LOG_LEVEL` 控制，默认 `INFO`
 - 每条日志会附带 `request_id` 和 `trace_id`
 - 优先读取仓库根目录 `.env`
-- 如果 `.env` 不存在，则回退读取仓库根目录 `env`
-- 业务查询库优先读取 `BUSINESS_DATABASE_URL`
-- 运行时库优先读取 `RUNTIME_DATABASE_URL`
+- 业务查询库读取 `BUSINESS_DATABASE_URL`
+- 运行时库读取 `RUNTIME_DATABASE_URL`
 - 未显式配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接自动派生并使用 `manager` 数据库
 - 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
-- 业务库兼容旧字段 `DATABASE_URL` / `DB_URI`
+- LLM 模型名通过 `LLM_MODEL` 配置
 - 向量检索默认使用 `VECTOR_RETRIEVAL_PROVIDER=siliconflow`
 - 默认向量模型为 `VECTOR_MODEL=Qwen/Qwen3-Embedding-8B`
 - 默认向量维度为 `VECTOR_DIMENSIONS=1024`
-- `ENABLE_CHITCHAT_MODE=true` 时，问候/闲聊/无关问题会返回闲聊回复而不是 `invalid`；默认 `false`
+- `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 角色时，问候/闲聊/无关问题会返回闲聊回复而不是 `invalid`；默认 `false`
 - LLM 不可用、调用失败或返回非法 JSON / SQL 时，请求会直接报错，不再静默降级
 
 ## 当前范围
@@ -117,7 +116,6 @@ Unknown column '...'
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 - `POST /api/auth/change-password`
-- `POST /api/auth/stub-login`
 
 ### Admin Metadata
 

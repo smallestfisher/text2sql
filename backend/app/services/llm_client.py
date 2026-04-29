@@ -12,7 +12,7 @@ from backend.app.core.exceptions import LLMServiceError
 class LLMClient:
     def __init__(
         self,
-        model_name: str = "stub",
+        model_name: str = "Qwen/Qwen3-14B",
         api_key: str | None = None,
         api_base: str | None = None,
         timeout_seconds: int = 20,
@@ -24,7 +24,7 @@ class LLMClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max(1, max_retries)
         self.client = None
-        if api_key and model_name != "stub":
+        if api_key:
             self.client = OpenAI(api_key=api_key, base_url=api_base)
 
     @property

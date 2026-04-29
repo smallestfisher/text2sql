@@ -151,7 +151,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 补充一点：
 
 - 默认模式下，非业务问题会被判为 terminal non-SQL 响应，不进入 SQL 链路
-- 只有显式设置 `ENABLE_CHITCHAT_MODE=true` 时，这类 terminal 响应才会以“闲聊回复”形式返回给前端
+- 只有显式设置 `ENABLE_CHITCHAT_MODE=true`，并且当前用户带有 `chitchat` 角色时，这类 terminal 响应才会以“闲聊回复”形式返回给前端
 
 ---
 
@@ -564,7 +564,7 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 补充一点：
 
 - 默认模式下，`invalid_smalltalk` / `llm_out_of_scope` 会直接成为 terminal non-SQL 响应
-- 当 `ENABLE_CHITCHAT_MODE=true` 时，这两类 terminal 响应会在 AnswerBuilder 中转成 `chat` 状态返回前端，但依然不会进入 SQL 链路
+- 当 `ENABLE_CHITCHAT_MODE=true` 且当前用户带有 `chitchat` 角色时，这两类 terminal 响应会在 AnswerBuilder 中转成 `chat` 状态返回前端，但依然不会进入 SQL 链路
 
 当前 trace / debug 中会显式记录：
 
@@ -707,7 +707,7 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 - LLM intent 补了什么
 - normalizer 去掉了什么
 - 最终选了哪份 intent 进入主链路
-- classifier 的最终 decision_source 是 `llm_primary`、`llm_aligned_with_baseline`、`llm_rejected`，还是 `llm_unavailable`
+- classifier 的最终 decision_source 是 `llm_primary`、`llm_aligned_with_baseline` 或 `llm_rejected`
 
 ---
 
