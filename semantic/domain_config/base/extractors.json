@@ -173,6 +173,28 @@
         ]
       },
       {
+        "name": "inventory_source_oms",
+        "type": "regex",
+        "field": "source_table",
+        "op": "=",
+        "pattern": "(?:^|[^A-Za-z0-9])OMS(?:[^A-Za-z0-9]|$)|OMS库存|oms库存",
+        "value": "oms_inventory",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "name": "inventory_source_daily",
+        "type": "regex",
+        "field": "source_table",
+        "op": "=",
+        "pattern": "日库存|每日库存|日报库存",
+        "value": "daily_inventory",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
         "name": "oxide_product_flag",
         "type": "regex",
         "field": "IS_OXIDE",

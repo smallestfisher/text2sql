@@ -252,6 +252,13 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - `产品分类`
 - `常用分类`
 
+另外，分类器使用的稳定 few-shot 也已经从代码里提到配置层：
+
+- 位置：`semantic/domain_config/base/prompt_assets.json`
+- 当前承载：`classification.context_delta_examples`、`classification.business_few_shots`
+- 作用：给会话分类和 `context_delta` 生成提供稳定任务样例
+- 边界：它是 prompt 资产，不是业务规则分支，也不是 SQL 模板
+
 ### 3.2 Backend 实现层
 
 主要目录在 `backend/app/`：
@@ -713,6 +720,10 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 3. 针对 demand 这类横表场景追加专项指令
 4. 在必要时注入少量 few-shot
 5. 记录 context_summary 和 context_budget，便于 trace 审计
+
+补充一个实现约束：
+
+- 分类 prompt 里的 `context_delta_examples` 和 `business_few_shots` 不再硬编码在 `PromptBuilder` 里，而是从 `semantic/domain_config/base/prompt_assets.json` 读取
 
 当前工程在 demand 场景里的很多“复杂口径”并不是用本地模板硬编码，而是通过：
 

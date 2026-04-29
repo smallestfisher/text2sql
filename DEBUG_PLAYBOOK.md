@@ -248,6 +248,10 @@
 - example / few-shot
 - PromptBuilder 的上下文选择规则
 
+如果问题出在会话分类或 `context_delta` 漂移，还要额外检查：
+
+- `semantic/domain_config/base/prompt_assets.json` 里的 classification few-shot 是否缺覆盖
+
 ### 6.4 Query Plan 层
 
 看：

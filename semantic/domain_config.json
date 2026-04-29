@@ -5,6 +5,7 @@
     "domain_config/base/entities.json",
     "domain_config/base/time_semantics.json",
     "domain_config/base/field_semantics.json",
+    "domain_config/base/prompt_assets.json",
     "domain_config/base/question_understanding.json",
     "domain_config/base/domain_inference.json",
     "domain_config/base/extractors.json",

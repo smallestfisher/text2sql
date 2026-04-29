@@ -803,11 +803,18 @@ class SemanticRuntime:
         if allowed_domain_tables and explicit_source not in allowed_domain_tables:
             return compiled
 
-        demand_tables = {"p_demand", "v_demand"}
+        exclusive_source_groups = (
+            {"p_demand", "v_demand"},
+            {"daily_inventory", "oms_inventory"},
+        )
+        competing_tables = next(
+            (group for group in exclusive_source_groups if explicit_source in group),
+            set(),
+        )
         other_tables = [
             table
             for table in compiled.tables
-            if table != explicit_source and table not in demand_tables
+            if table != explicit_source and table not in competing_tables
         ]
         compiled.tables = [explicit_source, *other_tables]
         return compiled

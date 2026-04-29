@@ -48,9 +48,11 @@
       "id": "inventory_oms_attributes",
       "domains": ["inventory"],
       "tables": ["oms_inventory", "product_attributes"],
-      "keywords": ["oms_inventory", "product_attributes", "inventory", "customer"],
+      "keywords": ["oms_inventory", "product_attributes", "inventory", "customer", "OMS库存", "glass_qty", "panel_qty", "库龄"],
       "notes": [
         "oms_inventory 也是库存口径来源之一。",
+        "当问题明确说 OMS 库存时，应优先使用 oms_inventory 作为主事实表，不要再把 daily_inventory 一起作为并列事实表引入。",
+        "oms_inventory 的常规库存字段优先看 panel_qty 或 glass_qty；只有用户明确提到库龄段时，才应考虑 ONE_AGE_panel_qty 到 EUGHT_AGE_panel_qty 这类库龄字段。",
         "当库存问题涉及产品属性或分类时，通常需要和 product_attributes 关联。"
       ]
     },
