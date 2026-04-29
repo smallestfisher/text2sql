@@ -17,6 +17,11 @@
         },
         {
           "table": "oms_inventory",
+          "expression": "sum(glass_qty)",
+          "grain": "month"
+        },
+        {
+          "table": "oms_inventory",
           "expression": "sum(panel_qty)",
           "grain": "month"
         }

@@ -420,6 +420,7 @@
 - example 会参与检索、管理和调试证据，并在命中时以 `retrieved_examples` 形式进入 SQL prompt
 - 主 SQL prompt 不再依赖问题特定的内置场景模板；当前主要依赖 `retrieved_examples`、`business_notes`、`join_patterns` 和 validator 约束
 - 像“202604，MDL工厂各个产品大类实际投入数量”这类高频真实问法，既适合沉淀为 example，也适合把稳定字段叫法收进 `field_semantics`
+- 像“oms库存，近6个月库存变化趋势”这类高频真实问法，也适合同时沉淀为 example 和 eval case；这类样例要把 `oms_inventory`、`biz_month` 趋势维度，以及常规库存默认同时返回 `glass_qty` / `panel_qty` 的口径写清楚
 
 不要再维护假设样本。
 

@@ -333,5 +333,54 @@
     "sql": "WITH latest_version AS (SELECT PM_VERSION FROM p_demand GROUP BY PM_VERSION ORDER BY PM_VERSION DESC LIMIT 1), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS CHAR) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 1 MONTH), '%Y%m') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 2 MONTH), '%Y%m') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 3 MONTH), '%Y%m') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 4 MONTH), '%Y%m') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 5 MONTH), '%Y%m') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, DATE_FORMAT(DATE_ADD(STR_TO_DATE(CONCAT(CAST(MONTH AS CHAR), '01'), '%Y%m%d'), INTERVAL 6 MONTH), '%Y%m') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT COUNT(DISTINCT product_attributes.product_ID) AS product_count FROM demand_unpivot JOIN product_attributes ON demand_unpivot.FGCODE = product_attributes.product_ID WHERE demand_unpivot.PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_unpivot.demand_month = '202605' AND product_attributes.IS_OXIDE = 1 LIMIT 200;",
     "result_shape": "metric_only",
     "notes": "真实问题样例。该题型同时要求：最新版本过滤、横表需求月份展开、产品属性维过滤，以及产品数量去重统计。"
+  },
+  {
+    "id": "inventory_oms_recent6m_trend_dual_volume_001",
+    "question": "oms库存，近6个月库存变化趋势",
+    "normalized_question": "oms库存，近6个月库存变化趋势",
+    "intent": "查询 OMS 库存在最近 6 个月按月份的库存变化趋势，默认同时返回 glass 与 panel 两套库存口径",
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "real",
+      "inventory",
+      "oms_inventory",
+      "recent_months",
+      "trend",
+      "biz_month",
+      "dual_volume",
+      "glass_qty",
+      "panel_qty"
+    ],
+    "subject_domain": "inventory",
+    "question_type": "new",
+    "tables": [
+      "oms_inventory"
+    ],
+    "entities": [],
+    "metrics": [
+      "inventory_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "filters": [
+      {
+        "field": "source_table",
+        "op": "=",
+        "value": "oms_inventory"
+      },
+      {
+        "field": "biz_month",
+        "op": "between",
+        "value": [
+          "relative_recent_6m_start",
+          "relative_current_month_end"
+        ]
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT oms_inventory.report_month AS biz_month, SUM(oms_inventory.glass_qty) AS inventory_glass_qty, SUM(oms_inventory.panel_qty) AS inventory_panel_qty FROM oms_inventory WHERE oms_inventory.report_month BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m') AND DATE_FORMAT(CURDATE(), '%Y-%m') GROUP BY oms_inventory.report_month ORDER BY oms_inventory.report_month LIMIT 200;",
+    "result_shape": "biz_month",
+    "notes": "真实问题样例。当前校验目标是 OMS 库存趋势必须走 oms_inventory，按 biz_month 展示，并在非库龄场景下默认同时返回 glass_qty 与 panel_qty 两套库存口径。"
   }
 ]

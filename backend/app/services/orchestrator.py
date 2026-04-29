@@ -360,13 +360,47 @@ class ConversationOrchestrator:
             sql_risk_level = sql_result.risk_level if sql_result is not None else "low"
             sql_risk_flags = sql_result.risk_flags if sql_result is not None else []
             if sql_errors and llm_sql and not plan_errors and sql_prompt is not None:
+                if self._should_target_biz_month_shape_repair(query_plan, sql_errors):
+                    targeted_repaired_sql = self.llm_client.repair_sql(
+                        prompt_payload=sql_prompt,
+                        sql=sql,
+                        errors=sql_errors,
+                        warnings=sql_warnings,
+                        repair_focus="missing_biz_month_dimension_shape",
+                        extra_constraints=self._biz_month_repair_constraints(sql_prompt),
+                        extra_context={
+                            "required_dimensions": list(query_plan.dimensions),
+                            "shape_contract": sql_prompt.get("shape_contract"),
+                        },
+                    )
+                    if targeted_repaired_sql:
+                        logger.info(
+                            "targeted biz_month repair candidate trace_id=%s sql_preview=%s errors=%s",
+                            trace.trace_id,
+                            targeted_repaired_sql[:800],
+                            sql_errors,
+                        )
+                        targeted_sql_result = self.sql_validator.validate_detailed(
+                            targeted_repaired_sql,
+                            self.domain_config,
+                            query_plan=query_plan,
+                            required_filter_fields=required_filter_fields,
+                        )
+                        if not targeted_sql_result.errors:
+                            warnings.append("llm sql repaired after biz_month shape validation failure")
+                            sql_hint_metadata["repair_used"] = True
+                            sql = targeted_repaired_sql
+                            sql_errors = []
+                            sql_warnings = targeted_sql_result.warnings
+                            sql_risk_level = targeted_sql_result.risk_level
+                            sql_risk_flags = targeted_sql_result.risk_flags
                 repaired_sql = self.llm_client.repair_sql(
                     prompt_payload=sql_prompt,
                     sql=sql,
                     errors=sql_errors,
                     warnings=sql_warnings,
-                )
-                if repaired_sql:
+                ) if sql_errors else None
+                if repaired_sql and sql_errors:
                     logger.info(
                         "sql repair candidate trace_id=%s sql_preview=%s errors=%s",
                         trace.trace_id,
@@ -574,6 +608,31 @@ class ConversationOrchestrator:
                 metadata=metadata or {},
             )
         )
+
+    def _should_target_biz_month_shape_repair(self, query_plan, sql_errors: list[str]) -> bool:
+        if "biz_month" not in query_plan.dimensions:
+            return False
+        target_errors = (
+            "sql does not group by required dimensions from query plan: biz_month",
+            "sql does not project required dimensions from query plan: biz_month",
+        )
+        return any(error in target_errors for error in sql_errors)
+
+    def _biz_month_repair_constraints(self, sql_prompt: dict) -> list[str]:
+        constraints = [
+            "本次修复目标是补齐缺失的 biz_month 维度，不要只保留其他分类维度的聚合结果。",
+            "最终外层 SELECT 必须显式产出别名 biz_month。",
+            "如果存在聚合指标，最终外层 GROUP BY 必须包含 biz_month；优先直接写 GROUP BY biz_month。",
+            "若 biz_month 来自日字段，必须先映射到月表达式再别名成 biz_month，不能直接返回日粒度。",
+        ]
+        shape_contract = sql_prompt.get("shape_contract", {})
+        logical_examples = shape_contract.get("logical_dimension_examples", {})
+        biz_month_examples = logical_examples.get("biz_month", []) if isinstance(logical_examples, dict) else []
+        if biz_month_examples:
+            constraints.append(
+                "biz_month 可参考这些合法投影形状之一: " + " ; ".join(biz_month_examples[:3])
+            )
+        return constraints
 
     def _sync_classification_with_query_plan(self, classification, query_plan) -> None:
         if classification.question_type == "invalid":

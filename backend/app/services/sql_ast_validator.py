@@ -455,7 +455,7 @@ class SqlAstValidator:
             return []
         fields: list[str] = []
         for expression in getattr(select, "expressions", []) or []:
-            fields.extend(self._expression_column_names(expression))
+            fields.extend(self._expression_select_names(expression))
         return self._unique_strings(fields)
 
     def _extract_sqlglot_outer_functions(self, root: Any) -> list[str]:
@@ -490,6 +490,16 @@ class SqlAstValidator:
                 if getattr(item, "name", None)
             ]
         )
+
+    def _expression_select_names(self, expression: Any) -> list[str]:
+        if exp is None or expression is None:
+            return []
+        names: list[str] = []
+        alias_name = getattr(expression, "alias_or_name", None)
+        if isinstance(alias_name, str) and alias_name:
+            names.append(alias_name)
+        names.extend(self._expression_column_names(expression))
+        return self._unique_strings(names)
 
     def _extract_limit_value(self, limit_node: Any) -> int | None:
         if limit_node is None:

@@ -44,6 +44,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 由 LLM 直接基于真实表和业务知识生成 MySQL SQL
 - PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和少量真实 few-shot，避免 prompt 膨胀
 - PromptBuilder 会把命中的 `retrieved_examples`、`business_notes` 和 `join_patterns` 一起带入 SQL prompt
+- 对 `oms_inventory` 的常规库存问题，如果用户只说“OMS库存/库存”而没有显式指定 `glass`、`panel` 或具体库龄段，当前默认同时返回 `glass_qty` 和 `panel_qty` 两套口径；只有明确问库龄时才应使用 `ONE_AGE_panel_qty` 到 `EUGHT_AGE_panel_qty`
 - SQL 校验器做只读、安全、表字段范围、时间/版本、LIMIT 和风险治理
 - SQL 校验或执行失败时，触发一次 LLM SQL repair
 - 生成下一轮 `session_state`

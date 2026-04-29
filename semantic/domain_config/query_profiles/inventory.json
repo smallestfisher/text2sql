@@ -36,6 +36,7 @@
         ],
         "inventory_qty": [
           "TTL_Qty",
+          "glass_qty",
           "panel_qty"
         ],
         "hold_qty": [

@@ -12,6 +12,7 @@
 - PromptBuilder 只选择当前问题相关的 schema、业务知识和少量真实 few-shot，避免 token 膨胀
 - `examples/nl2sql_examples.template.json` 保留真实 few-shot 资产；命中后会以 `retrieved_examples` 形式进入 SQL prompt
 - 命中的 `join_pattern` 会以 `join_patterns` 形式进入 SQL prompt
+- 对 `oms_inventory` 的常规库存问题，如果用户只说“OMS库存/库存”而没有显式指定 `glass`、`panel` 或具体库龄段，当前默认同时返回 `glass_qty` 和 `panel_qty` 两套口径；只有明确问库龄时才应使用 `ONE_AGE_panel_qty` 到 `EUGHT_AGE_panel_qty`
 - 前端会话恢复的主入口是 `GET /api/chat/sessions/{session_id}/workspace`
 - 前端提问默认走 `POST /api/chat/query/stream`，通过 SSE 主动推送阶段进度和最终结果，不再靠轮询猜状态
 - 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理

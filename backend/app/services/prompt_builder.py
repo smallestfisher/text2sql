@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
@@ -234,11 +235,29 @@ class PromptBuilder:
             if table_name in self._tables_metadata
         }
         field_resolution = self._field_resolution(query_plan)
+        shape_contract = self._shape_contract(query_plan)
         retrieved_examples = self._select_retrieved_examples(query_plan, retrieval)
         sql_preferences = [
             "以 query_plan.tables 为真实数据库对象的首要依据。",
             "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。",
         ]
+        if shape_contract["required_projection"]:
+            sql_preferences = [
+                "把 query_plan.dimensions 当成硬 contract：每个 dimension 都必须在最终外层 SELECT 中显式投影；只要存在聚合指标，这些 dimension 也必须在最终外层 GROUP BY 中逐一出现。",
+                *sql_preferences,
+            ]
+        if shape_contract["dimension_hints"]:
+            sql_preferences = [
+                *shape_contract["dimension_hints"],
+                *sql_preferences,
+            ]
+        if self._is_generic_oms_inventory_plan(query_plan, selected_sources, question):
+            sql_preferences = [
+                "当问题明确查询 OMS 库存，且指标是泛化的 inventory_qty / 库存，而用户没有显式指定 panel、glass 或具体库龄段时，默认同时返回两套库存口径：SUM(glass_qty) AS inventory_glass_qty 和 SUM(panel_qty) AS inventory_panel_qty。",
+                "不要把 OMS 常规库存默认收窄成单一 panel_qty；只有用户明确要求 panel 口径时，才可以只返回 panel_qty；只有用户明确要求 glass 口径时，才可以只返回 glass_qty。",
+                "只有当用户明确提到库龄、0~1月、1~2月、3~6月、6~12月、12~24月、24~36月、36月以上等库龄段时，才改用 ONE_AGE_panel_qty 到 EUGHT_AGE_panel_qty 这类库龄字段。",
+                *sql_preferences,
+            ]
         if "production_actuals" in selected_sources and any(
             item.field == "biz_month" for item in query_plan.filters
         ):
@@ -304,6 +323,7 @@ class PromptBuilder:
             "allowed_sources": selected_sources,
             "allowed_fields": sorted(self._sql_allowed_fields(query_plan)),
             "field_resolution": field_resolution,
+            "shape_contract": shape_contract,
             "tables_metadata": source_schemas,
             "business_notes": business_notes,
             "join_patterns": self._selected_join_patterns(retrieval),
@@ -322,6 +342,8 @@ class PromptBuilder:
                     "如果需求表是横表，需要时请先用 CTE 展开。",
                     "不要使用 SELECT *。",
                     "如果有聚合指标，必须按照 query_plan.dimensions 完整 GROUP BY。",
+                    "最终 SQL 的外层 SELECT 必须完整投影 query_plan.dimensions；不要只在 WHERE 中使用这些维度，或只在中间 CTE 里出现。",
+                    "如果 query_plan.dimensions 包含逻辑时间维度，例如 biz_month，请把它映射成真实月字段或月表达式，并在外层 SELECT 中显式起别名，且该别名或同等表达式必须进入外层 GROUP BY。",
                     "只返回 SQL，不要返回 markdown 或解释。",
                 ],
                 "sql_preferences": sql_preferences,
@@ -759,6 +781,99 @@ class PromptBuilder:
         )
         qualified = self._qualify_columns(query_plan, metric_columns)
         return qualified or metric_columns
+
+    def _shape_contract(self, query_plan: QueryPlan) -> dict:
+        required_projection = list(query_plan.dimensions)
+        aggregate_metrics = list(query_plan.metrics)
+        dimension_hints: list[str] = []
+        logical_dimension_examples: dict[str, list[str]] = {}
+        for field in required_projection:
+            examples = self._logical_dimension_examples(query_plan, field)
+            if examples:
+                logical_dimension_examples[field] = examples
+                if field == "biz_month":
+                    dimension_hints.append(
+                        "若 biz_month 来自月表字段，可直接投影真实月份列并别名成 biz_month；若来自日报字段，需在外层 SELECT 中显式写出月表达式，例如 DATE_FORMAT(<date_col>, '%Y-%m') AS biz_month，并在外层 GROUP BY 中使用相同表达式或别名。"
+                    )
+        return {
+            "required_projection": required_projection,
+            "required_group_by": required_projection if aggregate_metrics else [],
+            "aggregate_metrics": aggregate_metrics,
+            "logical_dimension_examples": logical_dimension_examples,
+            "dimension_hints": dimension_hints,
+        }
+
+    def _logical_dimension_examples(self, query_plan: QueryPlan, logical_field: str) -> list[str]:
+        if logical_field != "biz_month":
+            return []
+        examples: list[str] = []
+        if self.semantic_runtime is None:
+            return examples
+        month_format = self._biz_month_date_format(query_plan)
+        physical_candidates = self._physical_candidates(query_plan, logical_field)
+        for candidate in physical_candidates:
+            if candidate.endswith(".report_month") or candidate == "report_month":
+                examples.append(f"{candidate} AS biz_month")
+            elif candidate.endswith(".plan_month") or candidate == "plan_month":
+                examples.append(f"{candidate} AS biz_month")
+        date_candidates = self._physical_candidates(query_plan, "biz_date")
+        for candidate in date_candidates:
+            if self._looks_like_date_column(candidate):
+                examples.append(f"DATE_FORMAT({candidate}, '{month_format}') AS biz_month")
+        unique_examples: list[str] = []
+        for item in examples:
+            if item not in unique_examples:
+                unique_examples.append(item)
+        return unique_examples
+
+    def _looks_like_date_column(self, candidate: str) -> bool:
+        normalized = candidate.lower().split(".")[-1]
+        return normalized in {"report_date", "work_date", "plan_date"}
+
+    def _biz_month_date_format(self, query_plan: QueryPlan) -> str:
+        compact_month_values = [
+            str(item.value)
+            for item in query_plan.filters
+            if item.field == "biz_month"
+            and isinstance(item.value, str)
+        ]
+        if any(re.fullmatch(r"20\d{4}", value) for value in compact_month_values):
+            return "%Y%m"
+        return "%Y-%m"
+
+    def _is_generic_oms_inventory_plan(
+        self,
+        query_plan: QueryPlan,
+        selected_sources: list[str],
+        question: str | None,
+    ) -> bool:
+        if query_plan.subject_domain != "inventory":
+            return False
+        if "oms_inventory" not in selected_sources:
+            return False
+        if "inventory_qty" not in query_plan.metrics:
+            return False
+        normalized_question = (question or "").lower()
+        explicit_single_volume_terms = (
+            "glass",
+            "gls",
+            "panel",
+        )
+        if any(term in normalized_question for term in explicit_single_volume_terms):
+            return False
+        aging_terms = (
+            "库龄",
+            "0~1",
+            "1~2",
+            "2~3",
+            "3~6",
+            "6~12",
+            "12~24",
+            "24~36",
+            "36月以上",
+            "36个月以上",
+        )
+        return not any(term in (question or "") for term in aging_terms)
 
     def _qualify_columns(self, query_plan: QueryPlan, columns: list[str]) -> list[str]:
         if self.semantic_runtime is None:

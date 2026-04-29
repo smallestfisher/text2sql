@@ -131,5 +131,39 @@
     ],
     "expected_status": null,
     "notes": "真实问题回归样本。当前校验目标是最新 1 版 P 版需求 + 最近 6 个月 + 月度 total 需求物量的语义解析链路。"
+  },
+  {
+    "id": "eval_real_inventory_oms_recent6m_trend_dual_volume_001",
+    "question": "oms库存，近6个月库存变化趋势",
+    "session_questions": [],
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "real",
+      "inventory",
+      "oms_inventory",
+      "recent_months",
+      "trend",
+      "biz_month",
+      "dual_volume",
+      "glass_qty",
+      "panel_qty"
+    ],
+    "expected_domain": "inventory",
+    "expected_question_type": "new",
+    "expected_metrics": [
+      "inventory_qty"
+    ],
+    "expected_dimensions": [
+      "biz_month"
+    ],
+    "expected_sort_fields": [
+      "biz_month"
+    ],
+    "expected_filter_fields": [
+      "source_table",
+      "biz_month"
+    ],
+    "expected_status": null,
+    "notes": "真实问题回归样本。当前校验目标是 OMS 库存趋势必须走 oms_inventory，按 biz_month 展示，并在非库龄场景下默认同时返回 glass_qty 与 panel_qty 两套库存口径。"
   }
 ]

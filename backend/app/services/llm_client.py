@@ -185,10 +185,30 @@ class LLMClient:
                 time.sleep(min(0.4 * attempt, 1.0))
         raise LLMServiceError("llm did not return a valid readonly SQL statement during sql generation")
 
-    def repair_sql(self, prompt_payload: dict, sql: str, errors: list[str], warnings: list[str]) -> str | None:
+    def repair_sql(
+        self,
+        prompt_payload: dict,
+        sql: str,
+        errors: list[str],
+        warnings: list[str],
+        *,
+        repair_focus: str | None = None,
+        extra_constraints: list[str] | None = None,
+        extra_context: dict | None = None,
+    ) -> str | None:
         if not self.enabled:
             return None
 
+        constraints = [
+            "只能基于原始 prompt 上下文修复 SQL。",
+            "精确返回一条只读 SELECT 或 WITH ... SELECT 语句。",
+            "必须继续满足 query_plan.tables、filters、dimensions、sort 和 limit 这些硬约束。",
+            "如果 errors 指出缺失 required dimensions，先修复最终外层 SELECT 和最终外层 GROUP BY 的 shape。",
+            "不要输出 markdown 或解释。",
+            "必须包含 LIMIT。",
+        ]
+        if extra_constraints:
+            constraints = [*extra_constraints, *constraints]
         repair_payload = {
             "task": "sql_repair",
             "original_prompt": prompt_payload,
@@ -197,16 +217,17 @@ class LLMClient:
             "warnings": warnings,
             "instructions": {
                 "return_format": "sql_only",
-                "constraints": [
-                    "只能基于原始 prompt 上下文修复 SQL。",
-                    "精确返回一条只读 SELECT 或 WITH ... SELECT 语句。",
-                    "不要输出 markdown 或解释。",
-                    "必须包含 LIMIT。",
-                ],
+                "constraints": constraints,
             },
         }
+        if repair_focus:
+            repair_payload["repair_focus"] = repair_focus
+        if extra_context:
+            repair_payload["repair_context"] = extra_context
         system_prompt = (
-            "你负责修复 MySQL Text2SQL 的输出。只返回一条修正后的只读 SQL 语句。"
+            "你负责修复 MySQL Text2SQL 的输出。"
+            "只返回一条修正后的只读 SQL 语句。"
+            "优先保证最终外层 SELECT / GROUP BY 的输出 shape 与 query_plan.dimensions 一致。"
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -223,7 +244,7 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "精确返回一条合法的只读 SQL 语句。不要额外文字。",
+                            "content": "精确返回一条合法的只读 SQL 语句。若缺少 required dimensions，先补齐最终外层 SELECT 和 GROUP BY。不要额外文字。",
                         }
                     )
             except Exception:
