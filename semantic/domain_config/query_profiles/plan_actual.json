@@ -8,6 +8,7 @@
         "version_code",
         "factory",
         "stage_product_id",
+        "common_categories",
         "fg_product_id",
         "plan_input_qty",
         "approved_input_qty",

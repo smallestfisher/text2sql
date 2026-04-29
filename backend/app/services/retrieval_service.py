@@ -25,6 +25,7 @@ class RetrievalService:
         join_patterns_path: Path = JOIN_PATTERNS_PATH,
         vector_retriever: VectorRetriever | None = None,
         vector_top_k: int = 3,
+        async_vector_index: bool = True,
     ) -> None:
         self.domain_config = domain_config
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
@@ -34,6 +35,7 @@ class RetrievalService:
         self.join_patterns_path = join_patterns_path
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
         self.vector_top_k = vector_top_k
+        self.async_vector_index = async_vector_index
         self.examples = self._load_examples()
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
@@ -92,9 +94,12 @@ class RetrievalService:
         }
 
     def health(self) -> dict:
+        vector_health = self.vector_retriever.health()
         return {
             "vector_enabled": self.vector_retriever.enabled,
             "vector_provider": self.vector_retriever.provider,
+            "vector_ready": vector_health.get("ready", False),
+            "vector_indexing": vector_health.get("indexing", False),
             "document_count": len(self.corpus_documents),
             "document_count_by_source": dict(
                 Counter(document["source_type"] for document in self.corpus_documents)
@@ -130,7 +135,10 @@ class RetrievalService:
             total_length += document["length"]
             self.document_frequency.update(set(document["token_counts"].keys()))
         self.average_doc_length = total_length / len(self.corpus_documents) if self.corpus_documents else 1.0
-        self.vector_retriever.index_documents(self.corpus_documents)
+        if self.async_vector_index:
+            self.vector_retriever.index_documents_async(self.corpus_documents)
+        else:
+            self.vector_retriever.index_documents(self.corpus_documents)
 
     def _build_example_documents(self) -> list[dict]:
         documents: list[dict] = []

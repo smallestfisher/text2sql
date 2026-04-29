@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from backend.app.api.dependencies import get_container
 from backend.app.api.routes.admin import router as admin_router
 from backend.app.api.middleware import RequestTraceMiddleware
 from backend.app.api.routes.auth import router as auth_router
@@ -33,6 +34,12 @@ def create_app() -> FastAPI:
     app.include_router(query_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)
+
+    @app.on_event("startup")
+    def warm_app_container() -> None:
+        # Move container construction off the first user request path.
+        get_container()
+
     return app
 
 

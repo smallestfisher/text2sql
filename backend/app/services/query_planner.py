@@ -51,7 +51,7 @@ class QueryPlanner:
             query_intent=parser_query_intent,
             session_state=session_state,
         )
-        normalized_intent = self._normalize_intent(llm_intent)
+        normalized_intent = self._normalize_intent(question=question, llm_intent=llm_intent)
         query_intent, intent_selection = self._select_effective_query_intent(
             parser_query_intent=parser_query_intent,
             normalized_intent_payload=normalized_intent,
@@ -123,8 +123,8 @@ class QueryPlanner:
             session_state=session_state,
         )
 
-    def _normalize_intent(self, llm_intent: dict[str, Any]) -> dict[str, Any]:
-        return self.intent_normalizer.normalize(llm_intent["intent"])
+    def _normalize_intent(self, *, question: str, llm_intent: dict[str, Any]) -> dict[str, Any]:
+        return self.intent_normalizer.normalize(llm_intent["intent"], question=question)
 
     def _select_effective_query_intent(
         self,

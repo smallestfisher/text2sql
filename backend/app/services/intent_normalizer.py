@@ -11,7 +11,7 @@ class IntentNormalizer:
     def __init__(self, semantic_runtime: SemanticRuntime) -> None:
         self.semantic_runtime = semantic_runtime
 
-    def normalize(self, intent: StructuredIntent) -> dict[str, Any]:
+    def normalize(self, intent: StructuredIntent, question: str | None = None) -> dict[str, Any]:
         normalized = intent.model_copy(deep=True)
         normalized.source = "normalized"
         warnings: list[str] = []
@@ -27,6 +27,7 @@ class IntentNormalizer:
             normalized.metrics,
             normalized.subject_domain,
             normalized.filters,
+            question=question or normalized.normalized_question,
         )
         warnings.extend(metric_warnings)
 
@@ -60,6 +61,7 @@ class IntentNormalizer:
         metrics: list[str],
         subject_domain: str,
         filters: list,
+        question: str,
     ) -> tuple[list[str], list[str]]:
         normalized_metrics: list[str] = []
         warnings: list[str] = []
@@ -72,7 +74,7 @@ class IntentNormalizer:
                 normalized_metrics.append(resolved)
 
         normalized_metrics = self.semantic_runtime.resolve_metrics(
-            question="",
+            question=question,
             matched_metrics=normalized_metrics,
             filters=filters,
         )
@@ -132,16 +134,7 @@ class IntentNormalizer:
         return allowed_fields
 
     def _normalize_domain_field(self, field_name: str, subject_domain: str) -> str:
-        if not field_name:
-            return field_name
-        if field_name in self.semantic_runtime.profile_allowed_fields(subject_domain):
-            return field_name
-        lowered = field_name.lower()
-        for logical_field, aliases in self.semantic_runtime.profile_field_aliases(subject_domain).items():
-            candidates = [logical_field, *aliases]
-            if any(candidate.lower() == lowered for candidate in candidates if candidate):
-                return logical_field
-        return field_name
+        return self.semantic_runtime.normalize_field_name(field_name, subject_domain)
 
     def _resolve_metric_name(
         self,

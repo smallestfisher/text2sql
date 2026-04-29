@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import logging
 import math
 import re
+import threading
 
 from openai import OpenAI
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,6 +40,12 @@ class VectorRetriever:
         self.dimensions = max(32, dimensions)
         self.timeout_seconds = timeout_seconds
         self.documents: list[VectorDocument] = []
+        self._documents_lock = threading.RLock()
+        self._index_generation = 0
+        self._indexing = False
+        self._ready = not self.enabled
+        self._last_index_error: str | None = None
+        self._indexed_document_count = 0
         self.client = None
         if self.provider in {"openai", "compatible", "siliconflow"} and self.api_key:
             self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
@@ -44,29 +55,60 @@ class VectorRetriever:
         return self.provider != "disabled"
 
     def health(self) -> dict:
+        with self._documents_lock:
+            ready = self._ready
+            indexing = self._indexing
+            indexed_document_count = self._indexed_document_count
+            last_index_error = self._last_index_error
         return {
             "enabled": self.enabled,
             "provider": self.provider,
             "model": self.model_name if self.client is not None else ("local-hash" if self.enabled else None),
             "api_base": self.api_base if self.client is not None else None,
+            "ready": ready,
+            "indexing": indexing,
+            "indexed_document_count": indexed_document_count,
+            "last_index_error": last_index_error,
         }
 
     def index_documents(self, documents: list[dict]) -> None:
         if not self.enabled:
-            self.documents = []
+            with self._documents_lock:
+                self.documents = []
+                self._indexing = False
+                self._ready = True
+                self._last_index_error = None
+                self._indexed_document_count = 0
             return
 
-        self.documents = [
-            VectorDocument(
-                source_type=item["source_type"],
-                source_id=item["source_id"],
-                summary=item.get("summary", item["source_id"]),
-                text=item.get("text", ""),
-                metadata=item.get("metadata", {}),
-                vector=self._embed(item.get("text", "")),
-            )
-            for item in documents
-        ]
+        indexed_documents = self._build_vector_documents(documents)
+        with self._documents_lock:
+            self.documents = indexed_documents
+            self._indexing = False
+            self._ready = True
+            self._last_index_error = None
+            self._indexed_document_count = len(indexed_documents)
+
+    def index_documents_async(self, documents: list[dict]) -> None:
+        if not self.enabled:
+            self.index_documents(documents)
+            return
+
+        snapshot = [dict(item) for item in documents]
+        with self._documents_lock:
+            self._index_generation += 1
+            generation = self._index_generation
+            self._indexing = True
+            self._ready = bool(self.documents)
+            self._last_index_error = None
+
+        thread = threading.Thread(
+            target=self._index_documents_worker,
+            args=(generation, snapshot),
+            daemon=True,
+            name="vector-index-builder",
+        )
+        thread.start()
 
     def search(
         self,
@@ -80,8 +122,10 @@ class VectorRetriever:
         query_vector = self._embed(query_text)
         allowed_source_types = set(source_types or [])
         scored: list[dict] = []
+        with self._documents_lock:
+            documents = list(self.documents)
 
-        for document in self.documents:
+        for document in documents:
             if allowed_source_types and document.source_type not in allowed_source_types:
                 continue
             score = self._cosine_similarity(query_vector, document.vector)
@@ -99,6 +143,41 @@ class VectorRetriever:
 
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
+
+    def _index_documents_worker(self, generation: int, documents: list[dict]) -> None:
+        try:
+            indexed_documents = self._build_vector_documents(documents)
+        except Exception as exc:
+            logger.exception("vector index build failed")
+            with self._documents_lock:
+                if generation != self._index_generation:
+                    return
+                self._indexing = False
+                self._ready = bool(self.documents)
+                self._last_index_error = str(exc)
+            return
+
+        with self._documents_lock:
+            if generation != self._index_generation:
+                return
+            self.documents = indexed_documents
+            self._indexing = False
+            self._ready = True
+            self._last_index_error = None
+            self._indexed_document_count = len(indexed_documents)
+
+    def _build_vector_documents(self, documents: list[dict]) -> list[VectorDocument]:
+        return [
+            VectorDocument(
+                source_type=item["source_type"],
+                source_id=item["source_id"],
+                summary=item.get("summary", item["source_id"]),
+                text=item.get("text", ""),
+                metadata=item.get("metadata", {}),
+                vector=self._embed(item.get("text", "")),
+            )
+            for item in documents
+        ]
 
     def _embed(self, text: str) -> list[float]:
         if self.client is not None and text.strip():

@@ -299,6 +299,25 @@
         ]
       }
     ],
+    "metric_variant_rules": [
+      {
+        "name": "mdl_panel_quantity_defaults",
+        "required_filters": [
+          {
+            "field": "factory",
+            "op": "=",
+            "value": "MDL"
+          }
+        ],
+        "replace_metrics": {
+          "approved_input_qty": "approved_input_panel_qty",
+          "actual_input_qty": "actual_input_panel_qty",
+          "actual_output_qty": "actual_output_panel_qty",
+          "input_gap_qty": "input_panel_gap_qty",
+          "input_achievement_rate": "input_panel_achievement_rate"
+        }
+      }
+    ],
     "context_management": {
       "replace_filter_groups": {
         "time": [

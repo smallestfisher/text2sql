@@ -1,5 +1,61 @@
 [
   {
+    "id": "plan_actual_mdl_common_categories_input_panel_202604_001",
+    "question": "202604，MDL工厂各个产品大类实际投入数量",
+    "normalized_question": "202604，mdl工厂各个产品大类实际投入数量",
+    "intent": "查询 2026 年 4 月 MDL 工厂按产品常用分类拆分的实际投入 panel 数量",
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "real",
+      "plan_actual",
+      "production_actuals",
+      "product_attributes",
+      "common_categories",
+      "field_semantics",
+      "factory_named",
+      "month",
+      "panel_default_mdl"
+    ],
+    "subject_domain": "plan_actual",
+    "question_type": "new",
+    "tables": [
+      "production_actuals",
+      "product_attributes"
+    ],
+    "entities": [
+      "factory"
+    ],
+    "metrics": [
+      "actual_input_panel_qty"
+    ],
+    "dimensions": [
+      "common_categories"
+    ],
+    "filters": [
+      {
+        "field": "biz_month",
+        "op": "=",
+        "value": "202604"
+      },
+      {
+        "field": "factory",
+        "op": "=",
+        "value": "MDL"
+      },
+      {
+        "field": "act_type",
+        "op": "=",
+        "value": "投入"
+      }
+    ],
+    "join_path": [
+      "production_actuals.product_ID = product_attributes.product_ID"
+    ],
+    "sql": "SELECT product_attributes.common_categories, SUM(production_actuals.Panel_qty) AS actual_input_panel_qty FROM production_actuals INNER JOIN product_attributes ON production_actuals.product_ID = product_attributes.product_ID WHERE production_actuals.work_date >= '2026-04-01' AND production_actuals.work_date < '2026-05-01' AND production_actuals.FACTORY = 'MDL' AND production_actuals.act_type = '投入' GROUP BY product_attributes.common_categories LIMIT 200;",
+    "result_shape": "common_categories",
+    "notes": "真实调试样例。该问题验证字段语义目录把“产品大类/产品类别/产品分类”收敛到 common_categories，同时 MDL 工厂的实际投入数量默认走 Panel_qty 口径。"
+  },
+  {
     "id": "plan_actual_mdl_input_panel_top10_001",
     "question": "26年MDL工厂top10投入型号及其物量",
     "normalized_question": "26年mdl工厂top10投入型号及其物量",

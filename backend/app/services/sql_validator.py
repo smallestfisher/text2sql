@@ -163,6 +163,8 @@ class SqlValidator:
 
             time_filter_errors = self._validate_time_context(query_plan, filter_scope)
             errors.extend(time_filter_errors)
+            month_filter_semantic_errors = self._validate_month_filter_semantics(query_plan, filter_scope)
+            errors.extend(month_filter_semantic_errors)
 
             version_errors = self._validate_version_context(query_plan, filter_scope)
             errors.extend(version_errors)
@@ -376,6 +378,54 @@ class SqlValidator:
         ):
             return []
         return ["sql is missing required version filter from query plan"]
+
+    def _validate_month_filter_semantics(
+        self,
+        query_plan: QueryPlan,
+        where_clause: str,
+    ) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+
+        if any(item.field == "biz_date" for item in query_plan.filters):
+            return []
+
+        month_filters = [
+            item
+            for item in query_plan.filters
+            if item.field == "biz_month"
+            and item.op == "="
+            and isinstance(item.value, str)
+            and re.fullmatch(r"20\d{4}", item.value)
+        ]
+        if not month_filters:
+            return []
+
+        day_field_candidates = {
+            field
+            for field in self._field_candidates(query_plan, "biz_date")
+            if field and field != "biz_date"
+        }
+        if not day_field_candidates:
+            return []
+
+        for month_filter in month_filters:
+            month_value = str(month_filter.value)
+            day_one_literal = f"{month_value[:4]}-{month_value[4:6]}-01"
+            for field_name in day_field_candidates:
+                single_day_pattern = rf"\b{re.escape(field_name)}\b\s*=\s*'{re.escape(day_one_literal)}'"
+                between_same_day_pattern = (
+                    rf"\b{re.escape(field_name)}\b\s+between\s+'{re.escape(day_one_literal)}'\s+and\s+'{re.escape(day_one_literal)}'"
+                )
+                if re.search(single_day_pattern, where_clause, re.IGNORECASE) or re.search(
+                    between_same_day_pattern,
+                    where_clause,
+                    re.IGNORECASE,
+                ):
+                    return [
+                        "sql collapses biz_month filter to a single day; expand it to a full-month range or month expression"
+                    ]
+        return []
 
     def _validate_limit_consistency(
         self,

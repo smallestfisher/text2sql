@@ -49,6 +49,13 @@
 
 **问题理解 → 混合检索 → Query Plan → Prompt 上下文选择 → LLM 生成 SQL → 校验/修复 → 执行 → 组织回答 → 落库审计 → 前端恢复与排查**
 
+补充一点，当前“问题理解”里的字段识别也遵循 **LLM-first + 少量确定性收敛**：
+
+- 少量 parser 规则只抽时间、版本、枚举、topN 这类低歧义硬信号
+- 稳定字段叫法统一收敛到 `semantic/domain_config/base/field_semantics.json`
+- LLM intent 在受限的字段语义候选里做主判断，而不是从全 schema 自由发挥
+- `IntentNormalizer`、`QueryPlanValidator` 和 `SqlValidator` 负责把结果收回到可执行边界
+
 ### 1.1 当前架构问题与下一步方向
 
 当前主链路虽然已经是 LLM-first，但仍存在一个现实问题：
@@ -230,6 +237,20 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 它不是主编译器
 - 它可以用于“用户这句话是什么意思”，不能扩展成“SQL 必须怎么写”
 - 它适合表达稳定语义映射，不适合承载单问题业务特判
+
+当前这里又细分出一层 `field_semantics`：
+
+- 位置：`semantic/domain_config/base/field_semantics.json`
+- 作用：维护稳定字段的 canonical name、业务别名、适用 domain、角色和依赖表
+- 用法：parser 用它做低风险字段识别，PromptBuilder 用它给 LLM 提供字段候选，Normalizer 用它把 LLM 返回的近义字段收敛为 canonical field
+- 边界：它回答的是“用户在说哪个字段”，不是“SQL 必须怎么写”
+
+例如 `common_categories` 会统一承接这类说法：
+
+- `产品大类`
+- `产品类别`
+- `产品分类`
+- `常用分类`
 
 ### 3.2 Backend 实现层
 
@@ -1263,6 +1284,7 @@ demand 是当前架构里最容易被误解的区域，所以单列说明。
 - 时间解析：`26年 -> 2026`
 - 枚举映射：`投入 / 产出 / 报废 -> act_type`
 - 稳定字段别名
+- 稳定字段语义目录，例如 `field_semantics`
 - 被多个真实问题验证过的稳定 metric 消歧
 
 ### 17.2 不可以进配置的内容
@@ -1285,6 +1307,7 @@ demand 是当前架构里最容易被误解的区域，所以单列说明。
 ### 17.3 最简单判断法
 
 - 如果规则回答的是“这句话是什么意思”，可以考虑进配置
+- 如果只是新增一个稳定字段说法，优先补 `field_semantics` 或真实 example，不要单独加一条问题规则
 - 如果规则回答的是“SQL 应该怎么写”，就不应该进配置
 
 ---

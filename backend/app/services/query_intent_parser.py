@@ -29,6 +29,22 @@ class QueryIntentParser:
         requested_sort = self.semantic_runtime.extract_sort(question, matched_metrics)
         requested_limit = self.semantic_runtime.extract_limit(question)
         analysis_mode = self.semantic_runtime.extract_analysis_mode(question)
+        preliminary_subject_domain = self.semantic_runtime.infer_domain(
+            matched_metrics=matched_metrics,
+            matched_entities=matched_entities,
+            requested_dimensions=requested_dimensions,
+            filters=filters,
+            question=normalized_question,
+            session_state=None,
+        )
+        requested_dimensions = self.semantic_runtime.extract_dimensions(
+            question,
+            subject_domain=(
+                preliminary_subject_domain
+                if preliminary_subject_domain != "unknown"
+                else None
+            ),
+        )
         subject_domain = self.semantic_runtime.infer_domain(
             matched_metrics=matched_metrics,
             matched_entities=matched_entities,

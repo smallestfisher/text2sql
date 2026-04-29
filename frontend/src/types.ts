@@ -381,12 +381,34 @@ export interface EvaluationReplayResult {
   response: ChatResponse;
 }
 
+export interface VectorRetrievalStatus {
+  enabled: boolean;
+  provider: string;
+  model?: string | null;
+  api_base?: string | null;
+  ready: boolean;
+  indexing: boolean;
+  indexed_document_count: number;
+  last_index_error?: string | null;
+}
+
+export interface RetrievalCorpusStatus {
+  vector_enabled: boolean;
+  vector_provider: string;
+  vector_ready: boolean;
+  vector_indexing: boolean;
+  document_count: number;
+  document_count_by_source: Record<string, number>;
+  example_count: number;
+  join_pattern_count: number;
+}
+
 export interface RuntimeStatus {
   business_database: Record<string, unknown>;
   runtime_database: Record<string, unknown>;
   llm: Record<string, unknown>;
-  vector_retrieval: Record<string, unknown>;
-  retrieval_corpus: Record<string, unknown>;
+  vector_retrieval: VectorRetrievalStatus;
+  retrieval_corpus: RetrievalCorpusStatus;
   sql_ast: Record<string, unknown>;
 }
 

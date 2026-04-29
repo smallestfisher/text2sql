@@ -17,6 +17,12 @@
 
 当前工程是 **LLM-first Text2SQL**。
 
+补一条实践原则：
+
+- 字段叫法优先沉淀到 `semantic/domain_config/base/field_semantics.json`
+- 让 parser、LLM intent 和 normalizer 共用同一份字段语义目录
+- 不要因为一个新说法就立刻往 `extractors` 里再堆一条单独规则
+
 遇到问题时，优先按这个顺序处理：
 
 1. 修 `tables.json`
@@ -27,6 +33,40 @@
 6. 最后才考虑加局部规则
 
 不要一上来就把问题改成 Python 分支或本地 SQL 模板。
+
+### 2.1 5分钟排查清单
+
+如果你刚拿到一个真实问题，先不要深挖代码，先按下面顺序走一遍：
+
+1. 先复现问题，记下 `session_id` 和 `trace_id`
+2. 打开 `GET /api/chat/sessions/{session_id}/workspace`
+3. 先看 5 个字段：
+   `classification.question_type`
+   `classification.subject_domain`
+   `plan_validation.valid`
+   `sql_validation.valid`
+   `execution.status`
+4. 用下面的分流法快速判断该改哪一层：
+   `classification` 不对：先查语义解析 / 分类
+   `plan_validation.valid = false`：先查 Query Plan
+   `sql_validation.valid = false`：先查 SQL 生成 / validator
+   `execution.status = db_error` 或 `not_configured`：先查执行环境 / 数据库连接
+   `execution.status = empty_result`：先查时间、版本、过滤条件和真实数据
+5. 如果是“没听懂问题”：
+   先看时间、版本、指标、字段叫法有没有被识别
+   字段叫法问题优先查 `semantic/domain_config/base/field_semantics.json`
+6. 如果 `QueryPlan` 已经正确但 SQL 仍然错：
+   优先修 `PromptBuilder`、真实 example、validator
+   不要先加单题规则
+7. 修完后必须 replay 原 `trace_id`
+   再看 `workspace`、`query_plan`、`sql_validation`、`execution` 是否一起变对
+
+最短判断原则：
+
+- 没听懂：优先修语义配置 / `field_semantics`
+- 听懂了但 SQL 生成错：优先修 prompt / example / validator
+- 高频真实问法：补 example
+- 不要直接把系统拉回“大量规则 + 本地 SQL 模板”
 
 ---
 
@@ -83,6 +123,31 @@
 
 如果左边消息对、右边详情不对，先看 `workspace` 返回是不是已经错位。
 
+### 4.3 管理台最短操作路径
+
+如果你是管理员，推荐直接按下面的前端操作走：
+
+1. 在工作台复现问题，先拿到 `session_id`、`trace_id`
+2. 留在工作台右侧详情先看一次结果卡
+   重点确认 `question_type`、`subject_domain`、`plan_validation`、`sql_validation`、`execution.status`
+3. 切到管理台，打开 `query logs`
+4. 按时间或问题文案找到对应 `trace_id`
+5. 先看这几个后端记录是否一致：
+   `GET /api/admin/runtime/query-logs/{trace_id}`
+   `GET /api/admin/runtime/query-logs/{trace_id}/sql-audit`
+   `GET /api/admin/runtime/query-logs/{trace_id}/retrieval`
+6. 如果怀疑是历史上下文、prompt 抖动或修复前后不一致，直接点“复跑”
+   对应后端接口是 `POST /api/admin/runtime/query-logs/{trace_id}/replay`
+7. 如果复跑后确认这是高频真实问题，再考虑沉淀资产
+   `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
+   `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
+
+最短理解方式：
+
+- 工作台负责复现和看当前会话恢复结果
+- 管理台负责查 runtime 记录、看 replay、沉淀 case/example
+- 如果工作台结果和管理台 runtime 记录不一致，优先排查 `workspace` 恢复链路
+
 ---
 
 ## 5. 先分流，不要先改 SQL
@@ -127,10 +192,12 @@
 - 时间没提出来
 - 版本没提出来
 - 指标别名没识别
+- 维度叫法没落到正确 canonical field
 
 优先修：
 
 - 指标别名、实体别名、domain inference
+- `field_semantics` 里的字段别名是否覆盖了当前问法
 - 时间/版本提取
 - follow-up cue
 
@@ -348,6 +415,7 @@
 - `eval/evaluation_cases.json` 也只保留真实问题、真实 trace 或真实 replay 沉淀出的 case
 - example 会参与检索、管理和调试证据，并在命中时以 `retrieved_examples` 形式进入 SQL prompt
 - 主 SQL prompt 不再依赖问题特定的内置场景模板；当前主要依赖 `retrieved_examples`、`business_notes`、`join_patterns` 和 validator 约束
+- 像“202604，MDL工厂各个产品大类实际投入数量”这类高频真实问法，既适合沉淀为 example，也适合把稳定字段叫法收进 `field_semantics`
 
 不要再维护假设样本。
 
@@ -375,7 +443,7 @@
 补一个判断口径，避免每次失败都直接加配置规则：
 
 1. 先判断失败点是在 `QueryPlan` 之前，还是在 SQL 生成之后
-2. 如果系统没听懂问题，例如 `最新p版`、`最近6个月` 没被解析出来，优先修语义配置
+2. 如果系统没听懂问题，例如 `最新p版`、`最近6个月` 或 `产品分类` 这类字段说法没被解析出来，优先修语义配置 / `field_semantics`
 3. 如果 `QueryPlan` 已经正确，但 SQL 仍然按错维度或错结构生成，优先修 prompt / example / validator
 4. 只有当新增内容能复用到一类真实问题时，才保留；单题补丁不要长期沉淀
 

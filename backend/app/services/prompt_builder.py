@@ -191,6 +191,7 @@ class PromptBuilder:
                 "subject_domain": subject_domain,
                 "domain_tables": domain_tables,
                 "domain_fields": sorted(set(domain_fields))[:120],
+                "semantic_fields": self._semantic_fields(subject_domain),
                 "supported_domains": self._supported_domains(),
             },
             "business_knowledge": business_notes,
@@ -213,6 +214,7 @@ class PromptBuilder:
                 "constraints": [
                     "优先尊重 shallow_parse 中已确定的高置信时间、版本、topN 和筛选信号。",
                     "只能使用系统已支持的业务域，不要发明新的 subject_domain。",
+                    "如果 question 中的字段说法命中 domain_hints.semantic_fields.aliases，应优先返回对应 canonical field，不要自造近义字段名。",
                     "不要输出 SQL，不要输出 schema 解释，只返回结构化 intent。",
                     "如果无法确定字段或指标，可以留空，不要虚构。",
                 ],
@@ -237,6 +239,14 @@ class PromptBuilder:
             "以 query_plan.tables 为真实数据库对象的首要依据。",
             "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。",
         ]
+        if "production_actuals" in selected_sources and any(
+            item.field == "biz_month" for item in query_plan.filters
+        ):
+            sql_preferences = [
+                "production_actuals 只有日字段 work_date，没有独立的月字段。若 query_plan.filters 包含 biz_month='YYYYMM'，必须把它展开成整月过滤，例如 work_date >= 'YYYY-MM-01' AND work_date < '下月1号'，或使用 DATE_FORMAT(work_date, '%Y%m')='YYYYMM'。",
+                "不要把 biz_month='YYYYMM' 误写成 work_date='YYYY-MM-01' 这样的单日过滤。",
+                *sql_preferences,
+            ]
         if self._is_demand_plan(query_plan, selected_sources):
             sql_preferences = [
                 "对于 p_demand/v_demand 这类横向需求表，MONTH 是起始需求月份。REQUIREMENT_QTY 对应 base MONTH，NEXT_REQUIREMENT 对应 base MONTH 加 1 个月，LAST_REQUIREMENT 对应 base MONTH 加 2 个月，MONTH4 到 MONTH7 对应 base MONTH 加 3 到 6 个月。",
@@ -800,6 +810,11 @@ class PromptBuilder:
             for domain_name in self.semantic_runtime.query_profiles.keys()
             if domain_name != "unknown"
         )
+
+    def _semantic_fields(self, subject_domain: str) -> list[dict]:
+        if self.semantic_runtime is None or subject_domain == "unknown":
+            return []
+        return self.semantic_runtime.semantic_field_metadata(subject_domain=subject_domain)[:20]
 
     def _classification_evidence(
         self,

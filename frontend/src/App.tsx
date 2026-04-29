@@ -1188,13 +1188,15 @@ function AdminView(props: {
   onReplayLog: (log: RuntimeQueryLogRecord) => void;
   onRefresh: () => void;
 }) {
+  const vectorStatus = props.runtimeStatus?.vector_retrieval;
+  const retrievalCorpusStatus = props.runtimeStatus?.retrieval_corpus;
   const runtimeEntries = props.runtimeStatus
     ? [
         ["业务库", describeHealth(props.runtimeStatus.business_database)],
         ["运行时库", describeHealth(props.runtimeStatus.runtime_database)],
         ["LLM", describeHealth(props.runtimeStatus.llm)],
-        ["向量检索", describeHealth(props.runtimeStatus.vector_retrieval)],
-        ["语料索引", describeHealth(props.runtimeStatus.retrieval_corpus)],
+        ["向量检索", describeVectorHealth(vectorStatus)],
+        ["语料索引", describeCorpusHealth(retrievalCorpusStatus)],
         ["SQL AST", describeHealth(props.runtimeStatus.sql_ast)],
       ]
     : [];
@@ -1261,6 +1263,18 @@ function AdminView(props: {
               <MetaRow label="物理表数" value={String(props.metadataOverview?.table_count || 0)} />
               <MetaRow label="示例数" value={String(props.metadataOverview?.example_count || 0)} />
               <MetaRow label="Trace 数" value={String(props.metadataOverview?.trace_count || 0)} />
+            </div>
+          </article>
+
+          <article className="detail-card admin-card">
+            <div className="detail-title">向量预热</div>
+            <div className="meta-stack">
+              <MetaRow label="当前状态" value={describeVectorWarmStatus(vectorStatus)} />
+              <MetaRow label="Provider" value={vectorStatus?.provider || "-"} />
+              <MetaRow label="模型" value={vectorStatus?.model || "-"} />
+              <MetaRow label="已索引文档" value={String(vectorStatus?.indexed_document_count ?? 0)} />
+              <MetaRow label="当前语料文档" value={String(retrievalCorpusStatus?.document_count ?? 0)} />
+              <MetaRow label="最后错误" value={vectorStatus?.last_index_error || "-"} />
             </div>
           </article>
         </div>
@@ -2356,6 +2370,57 @@ function describeHealth(value: Record<string, unknown> | null | undefined) {
     return value.healthy ? "健康" : "异常";
   }
   return "已返回";
+}
+
+function describeVectorHealth(value: RuntimeStatus["vector_retrieval"] | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  if (!value.enabled) {
+    return "未启用";
+  }
+  if (value.indexing) {
+    return value.ready ? "后台刷新中" : "预热中";
+  }
+  if (value.ready && value.last_index_error) {
+    return "已就绪，上次刷新失败";
+  }
+  if (value.ready) {
+    return "已就绪";
+  }
+  if (value.last_index_error) {
+    return "预热失败";
+  }
+  return "等待初始化";
+}
+
+function describeCorpusHealth(value: RuntimeStatus["retrieval_corpus"] | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  return `${value.document_count} 篇文档`;
+}
+
+function describeVectorWarmStatus(value: RuntimeStatus["vector_retrieval"] | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  if (!value.enabled) {
+    return "向量检索未启用";
+  }
+  if (value.indexing) {
+    return value.ready ? "后台刷新中，旧索引仍可用" : "初次预热中";
+  }
+  if (value.ready && value.last_index_error) {
+    return "已就绪，但最近一次刷新失败";
+  }
+  if (value.ready) {
+    return "已就绪";
+  }
+  if (value.last_index_error) {
+    return "预热失败";
+  }
+  return "等待初始化";
 }
 
 function parseAppDate(value?: string | null) {

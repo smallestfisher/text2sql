@@ -63,6 +63,7 @@ Unknown column '...'
 
 - [TEXT2SQL_ARCHITECTURE.md](TEXT2SQL_ARCHITECTURE.md)：LLM-first 架构、端到端运行流程、前后端模块职责、runtime 闭环和配置边界
 - [LLM_INTENT_MIGRATION_PLAN.md](LLM_INTENT_MIGRATION_PLAN.md)：parser / classifier / planner 迁移到 LLM 主理解链路的收官说明
+- [NEXT_STAGE_EXECUTION_PLAN.md](NEXT_STAGE_EXECUTION_PLAN.md)：retrieval-first 去门控一期清单与未来两周资产补齐计划
 - [DEBUG_PLAYBOOK.md](DEBUG_PLAYBOOK.md)：单题调试、真实联调、样本沉淀和 eval / replay 入口
 - [backend/README.md](backend/README.md)：后端运行方式、配置、API、runtime 库、eval / replay 和 example 资产说明
 - [frontend/README.md](frontend/README.md)：前端工作台、详情侧栏和数据加载方式

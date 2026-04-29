@@ -1,0 +1,24 @@
+{
+  "field_semantics": [
+    {
+      "field": "common_categories",
+      "domains": [
+        "inventory",
+        "plan_actual"
+      ],
+      "roles": [
+        "dimension"
+      ],
+      "tables": [
+        "product_attributes"
+      ],
+      "description": "产品常用分类，也常被业务口径称为产品大类、产品类别或产品分类。",
+      "aliases": [
+        "产品大类",
+        "产品类别",
+        "产品分类",
+        "常用分类"
+      ]
+    }
+  ]
+}
