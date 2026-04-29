@@ -25,6 +25,7 @@ class QueryPlanner:
         prompt_builder: PromptBuilder | None = None,
         intent_service: IntentService | None = None,
         intent_normalizer: IntentNormalizer | None = None,
+        enable_chitchat_mode: bool = False,
     ) -> None:
         self.domain_config = domain_config
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
@@ -33,6 +34,7 @@ class QueryPlanner:
             semantic_runtime=self.semantic_runtime,
             llm_client=llm_client,
             prompt_builder=prompt_builder,
+            enable_chitchat_mode=enable_chitchat_mode,
         )
         self.intent_service = intent_service
         self.intent_normalizer = intent_normalizer

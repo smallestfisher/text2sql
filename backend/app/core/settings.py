@@ -72,12 +72,20 @@ def _default_vector_api_base() -> str | None:
     return None
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Text2SQL Backend")
     app_version: str = os.getenv("APP_VERSION", "0.3.0")
     app_env: str = os.getenv("APP_ENV", "dev")
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
-    enable_docs: bool = os.getenv("ENABLE_DOCS", "true").lower() == "true"
+    enable_docs: bool = _env_bool("ENABLE_DOCS", default=True)
+    enable_chitchat_mode: bool = _env_bool("ENABLE_CHITCHAT_MODE", default=False)
     business_database_url: str | None = _raw_business_database_url()
     runtime_database_url: str | None = _resolve_runtime_database_url()
     runtime_database_name: str = os.getenv("RUNTIME_DATABASE_NAME", "manager")

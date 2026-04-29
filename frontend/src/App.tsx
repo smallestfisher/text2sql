@@ -1576,6 +1576,7 @@ function ConversationResultCard(props: {
   const domain = response?.query_plan.subject_domain || queryLog?.subject_domain || "unknown";
   const status = execution?.status || answer?.status || queryLog?.answer_status || "unknown";
   const rowCount = execution?.row_count ?? props.artifact.sql_audit?.row_count ?? queryLog?.row_count ?? 0;
+  const showRowCount = Boolean(execution) || !isTerminalNonSqlStatus(answer?.status || queryLog?.answer_status);
   const previewColumns = (execution?.columns || []).slice(0, 4);
   const previewRows = (execution?.rows || []).slice(0, 5);
   const canDownload = Boolean(
@@ -1590,7 +1591,7 @@ function ConversationResultCard(props: {
         <div className="message-result-summary">
           <strong>{domain}</strong>
           <span>{describeResponseStatus(status)}</span>
-          <span>{`结果 ${rowCount} 行`}</span>
+          <span>{showRowCount ? `结果 ${rowCount} 行` : "未进入 SQL"}</span>
         </div>
         <div className="message-result-actions">
           {props.canInspect ? (
@@ -1703,7 +1704,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
         </div>
         <div className="compact-stat">
           <span>返回行数</span>
-          <strong>{String(execution?.row_count ?? 0)}</strong>
+          <strong>{execution ? String(execution.row_count ?? 0) : "-"}</strong>
         </div>
         <div className="compact-stat">
           <span>耗时</span>
@@ -2126,6 +2127,11 @@ function describeProgressCurrentNote(event: ProgressEvent) {
   return getProgressStageMeta(event.stage).note;
 }
 
+function isTerminalNonSqlStatus(status: string | null | undefined) {
+  const normalized = (status || "").toLowerCase();
+  return ["clarification_needed", "invalid", "chat"].includes(normalized);
+}
+
 function classifyProgressTone(event: ProgressEvent) {
   const normalized = event.status.toLowerCase();
   if (event.type === "failed" || ["failed", "error", "invalid", "denied"].includes(normalized)) {
@@ -2269,6 +2275,9 @@ function describeResponseStatus(status: string) {
   }
   if (["clarification_needed"].includes(normalized)) {
     return "需澄清";
+  }
+  if (["chat"].includes(normalized)) {
+    return "闲聊";
   }
   if (["skipped"].includes(normalized)) {
     return "已跳过";

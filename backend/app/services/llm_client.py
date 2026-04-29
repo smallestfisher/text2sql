@@ -6,6 +6,8 @@ import time
 
 from openai import OpenAI
 
+from backend.app.core.exceptions import LLMServiceError
+
 
 class LLMClient:
     def __init__(
@@ -30,13 +32,7 @@ class LLMClient:
         return self.client is not None
 
     def generate_classification_hint(self, prompt_payload: dict) -> dict:
-        if not self.enabled:
-            return {
-                "mode": "stub",
-                "model": self.model_name,
-                "note": "LLM is not connected; classification generation is unavailable.",
-                "task": prompt_payload.get("task"),
-            }
+        self._require_enabled("classification generation")
 
         system_prompt = (
             "你是一个用于 Text2SQL 会话分类的裁决模型。"
@@ -68,29 +64,15 @@ class LLMClient:
                     )
             except Exception as exc:
                 if attempt >= self.max_retries:
-                    return {
-                        "mode": "stub",
-                        "model": self.model_name,
-                        "note": f"LLM call failed, classification generation skipped: {exc}",
-                        "task": prompt_payload.get("task"),
-                    }
+                    raise LLMServiceError(
+                        f"llm call failed during classification generation: {exc}"
+                    ) from exc
                 time.sleep(min(0.4 * attempt, 1.0))
 
-        return {
-            "mode": "stub",
-            "model": self.model_name,
-            "note": "LLM returned non-JSON content, classification generation skipped.",
-            "task": prompt_payload.get("task"),
-        }
+        raise LLMServiceError("llm returned invalid JSON during classification generation")
 
     def generate_intent(self, prompt_payload: dict) -> dict:
-        if not self.enabled:
-            return {
-                "mode": "stub",
-                "model": self.model_name,
-                "note": "LLM is not connected; intent generation is unavailable.",
-                "task": prompt_payload.get("task"),
-            }
+        self._require_enabled("intent generation")
 
         system_prompt = (
             "你是一个 Text2SQL 意图理解器。"
@@ -121,29 +103,15 @@ class LLMClient:
                     )
             except Exception as exc:
                 if attempt >= self.max_retries:
-                    return {
-                        "mode": "stub",
-                        "model": self.model_name,
-                        "note": f"LLM call failed, intent generation skipped: {exc}",
-                        "task": prompt_payload.get("task"),
-                    }
+                    raise LLMServiceError(
+                        f"llm call failed during intent generation: {exc}"
+                    ) from exc
                 time.sleep(min(0.4 * attempt, 1.0))
 
-        return {
-            "mode": "stub",
-            "model": self.model_name,
-            "note": "LLM returned non-JSON content, intent generation skipped.",
-            "task": prompt_payload.get("task"),
-        }
+        raise LLMServiceError("llm returned invalid JSON during intent generation")
 
     def check_question_relevance(self, prompt_payload: dict) -> dict:
-        if not self.enabled:
-            return {
-                "mode": "stub",
-                "model": self.model_name,
-                "note": "LLM is not connected; relevance guard is disabled.",
-                "task": prompt_payload.get("task"),
-            }
+        self._require_enabled("relevance guard")
 
         system_prompt = (
             "你是一个 Text2SQL 系统的相关性守卫模型。"
@@ -175,24 +143,15 @@ class LLMClient:
                     )
             except Exception as exc:
                 if attempt >= self.max_retries:
-                    return {
-                        "mode": "stub",
-                        "model": self.model_name,
-                        "note": f"LLM call failed, relevance guard skipped: {exc}",
-                        "task": prompt_payload.get("task"),
-                    }
+                    raise LLMServiceError(
+                        f"llm call failed during relevance guard: {exc}"
+                    ) from exc
                 time.sleep(min(0.4 * attempt, 1.0))
 
-        return {
-            "mode": "stub",
-            "model": self.model_name,
-            "note": "LLM returned non-JSON content, relevance guard skipped.",
-            "task": prompt_payload.get("task"),
-        }
+        raise LLMServiceError("llm returned invalid JSON during relevance guard")
 
-    def generate_sql_hint(self, prompt_payload: dict) -> str | None:
-        if not self.enabled:
-            return None
+    def generate_sql_hint(self, prompt_payload: dict) -> str:
+        self._require_enabled("sql generation")
 
         system_prompt = (
             "你是 MySQL 场景下的主 Text2SQL 生成器。"
@@ -218,11 +177,13 @@ class LLMClient:
                             "content": "精确返回一条只读 SELECT 或 WITH ... SELECT 语句，并且必须带 LIMIT。不要解释。",
                         }
                     )
-            except Exception:
+            except Exception as exc:
                 if attempt >= self.max_retries:
-                    return None
+                    raise LLMServiceError(
+                        f"llm call failed during sql generation: {exc}"
+                    ) from exc
                 time.sleep(min(0.4 * attempt, 1.0))
-        return None
+        raise LLMServiceError("llm did not return a valid readonly SQL statement during sql generation")
 
     def repair_sql(self, prompt_payload: dict, sql: str, errors: list[str], warnings: list[str]) -> str | None:
         if not self.enabled:
@@ -279,6 +240,11 @@ class LLMClient:
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
         }
+
+    def _require_enabled(self, task_name: str) -> None:
+        if self.enabled:
+            return
+        raise LLMServiceError(f"llm is required but not configured for {task_name}")
 
     def _complete(self, messages: list[dict]) -> str:
         response = self.client.chat.completions.create(

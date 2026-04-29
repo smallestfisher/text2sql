@@ -16,3 +16,8 @@ class PermissionDeniedError(AppError):
 class ResourceNotFoundError(AppError):
     def __init__(self, message: str = "resource not found") -> None:
         super().__init__(message=message, status_code=404)
+
+
+class LLMServiceError(AppError):
+    def __init__(self, message: str = "llm service unavailable", status_code: int = 503) -> None:
+        super().__init__(message=message, status_code=status_code)

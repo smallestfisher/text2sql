@@ -90,6 +90,7 @@ class AppContainer:
             prompt_builder=self.prompt_builder,
             intent_service=self.intent_service,
             intent_normalizer=self.intent_normalizer,
+            enable_chitchat_mode=self.settings.enable_chitchat_mode,
         )
         self.query_plan_validator = QueryPlanValidator(semantic_runtime=self.semantic_runtime)
         self.query_plan_compiler = QueryPlanCompiler(
@@ -131,7 +132,9 @@ class AppContainer:
             vector_retriever=self.vector_retriever,
             vector_top_k=self.settings.vector_top_k,
         )
-        self.answer_builder = AnswerBuilder()
+        self.answer_builder = AnswerBuilder(
+            enable_chitchat_mode=self.settings.enable_chitchat_mode,
+        )
         self.metadata_repository = FileMetadataRepository()
         self.session_service = SessionService(self.session_repository)
         self.audit_service = AuditService(self.audit_repository)

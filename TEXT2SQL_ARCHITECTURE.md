@@ -88,6 +88,7 @@ LLM 是主生成器，但不是裸奔：
 - PromptBuilder 只给当前问题真正相关的 schema、知识和少量 few-shot
 - SqlValidator 再校验只读、安全、来源范围、时间/版本、LIMIT、风险级别
 - 失败时允许一次 repair，而不是无限次自我修复
+- 在真实 runtime 中，LLM 是**强依赖**；如果 LLM 不可用、调用失败或返回非法 JSON / SQL，主链路会显式失败，而不是静默降级成 `stub/skipped`
 
 ### 2.1.1 Retrieval-first，不等于纯向量或纯相似度
 
@@ -146,6 +147,11 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 历史结果是否可恢复
 - 每轮生成是否可追溯
 - 失败后是否可 replay、可物化 sample、可进入 eval
+
+补充一点：
+
+- 默认模式下，非业务问题会被判为 terminal non-SQL 响应，不进入 SQL 链路
+- 只有显式设置 `ENABLE_CHITCHAT_MODE=true` 时，这类 terminal 响应才会以“闲聊回复”形式返回给前端
 
 ---
 
@@ -389,6 +395,8 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 - 当前主链路里已经没有单独的 “query-plan prompt / plan hint” 阶段；LLM 在主执行链路里主要参与 `llm_intent`、`classification` 和 `generate_sql / repair_sql`
 - parser 仍然保留，但它现在主要是理解基线和 trace 证据；如果标准化后的 intent 不可用，主链路不会退回到 parser baseline 继续执行
 
+如果任一 LLM 调用抛错，orchestrator 会先发布 `failed` 事件，再把异常继续抛出给接口层。
+
 ### 5.4 进度事件阶段定义
 
 当前已接入前端的阶段主要有：
@@ -422,13 +430,15 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 1. `QueryIntentParser` 产出 shallow parse
 2. `LLMIntentService` 产出 LLM intent
 3. `IntentNormalizer` 收口 LLM intent
-4. `QueryPlanner` 选择 effective intent：优先 `normalized`，不可用时直接保留 `parser`
+4. `QueryPlanner` 选择 effective intent：优先 `normalized`
 5. `QuestionClassifier` 基于 effective intent 做分类
 6. `QueryPlanner` 基于 effective intent + classification 生成 deterministic `QueryPlan`
 
-对应的核心开关有：
+当前 runtime 相关的行为开关主要是：
 
-- `CLASSIFICATION_LLM_ENABLED`
+- `ENABLE_CHITCHAT_MODE`
+
+LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主链路执行，不再依赖过渡开关。
 
 ### 6.1 QueryIntentParser
 
@@ -505,6 +515,8 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 - 如果 normalized intent 可用，使用 normalized intent 进入主链路
 - 如果 normalized intent 不可用，主链路不会继续沿用 parser 结果执行；parser 只保留为 trace 对照基线
+- 在真实 runtime 中，LLM intent / normalized intent 被视为强依赖；如果这里失败，请求会直接显式失败
+- 只有在离线回归或显式缺省依赖的测试路径里，才会出现 `selected_source=none` 的降级痕迹
 
 当前 trace 中会显式记录：
 
@@ -545,9 +557,14 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 在进入会话分类后：
 
 - 本地 baseline 启发式仍会计算，但只作为 `baseline_classification` 仲裁基线
-- 只要 `CLASSIFICATION_LLM_ENABLED=true` 且有 session，就优先尝试 LLM classification
+- 只要当前请求带有 session，并且通过了前置 hard guard，就会进入 LLM classification + 本地 accept/reject 校验链路
 - LLM 输出仍需通过本地 accept/reject 校验
 - 不可接受时保留本地分类结果
+
+补充一点：
+
+- 默认模式下，`invalid_smalltalk` / `llm_out_of_scope` 会直接成为 terminal non-SQL 响应
+- 当 `ENABLE_CHITCHAT_MODE=true` 时，这两类 terminal 响应会在 AnswerBuilder 中转成 `chat` 状态返回前端，但依然不会进入 SQL 链路
 
 当前 trace / debug 中会显式记录：
 
@@ -748,15 +765,25 @@ planner 终版不再引入额外的 LLM query plan hint 改写链路；QueryPlan
 
 ### 10.1 LLMClient
 
-`LLMClient` 在主链路里承担三类调用：
+`LLMClient` 在真实 runtime 主链路里承担这些调用：
 
+- `generate_intent`
+- `check_question_relevance`
+- `generate_classification_hint`
 - `generate_sql_hint`
 - `repair_sql`
 
 其中：
 
+- intent / relevance / classification 负责问题理解层
 - SQL hint 是主 SQL 生成输出
 - repair 是在 validator 或执行器返回错误后的一次定向修复
+
+当前失败语义也要明确：
+
+- 如果 LLM 未配置、请求失败或返回非法 JSON，`LLMClient` 会抛显式 `LLMServiceError`
+- 如果 SQL 生成返回的不是合法只读 SQL，同样会抛显式 `LLMServiceError`
+- runtime 接口层不会再把这些情况静默折叠成 `stub/skipped`
 
 ### 10.2 SQL 生成
 

@@ -78,6 +78,7 @@ export interface QuestionClassification {
   confidence: number;
   reason?: string | null;
   reason_code?: string | null;
+  suggested_reply?: string | null;
   need_clarification: boolean;
   clarification_question?: string | null;
   context_delta?: Record<string, unknown>;

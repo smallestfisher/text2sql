@@ -101,6 +101,7 @@ class ChatResponseRestoreService:
             "need_clarification": classification_payload.get("need_clarification", False),
             "reason": classification_payload.get("reason"),
             "reason_code": classification_payload.get("reason_code"),
+            "suggested_reply": classification_payload.get("suggested_reply"),
             "clarification_question": classification_payload.get("clarification_question"),
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
@@ -206,7 +207,7 @@ class ChatResponseRestoreService:
         execute_metadata: dict,
     ) -> ExecutionResponse | None:
         status = execute_metadata.get("status") or self._warning_value(query_log.warnings, "execution_status")
-        if query_log.answer_status in {"invalid", "clarification_needed"} and not query_log.executed:
+        if query_log.answer_status in {"invalid", "clarification_needed", "chat"} and not query_log.executed:
             return None
         if status is None and sql_audit is None and not query_log.executed:
             return None

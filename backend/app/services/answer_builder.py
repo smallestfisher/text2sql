@@ -7,6 +7,9 @@ from backend.app.models.query_plan import QueryPlan
 
 
 class AnswerBuilder:
+    def __init__(self, *, enable_chitchat_mode: bool = False) -> None:
+        self.enable_chitchat_mode = enable_chitchat_mode
+
     def build(
         self,
         classification: QuestionClassification,
@@ -16,6 +19,12 @@ class AnswerBuilder:
         sql_validation: ValidationResponse,
     ) -> AnswerPayload:
         if classification.question_type == "invalid":
+            if self.enable_chitchat_mode and classification.reason_code in {"invalid_smalltalk", "llm_out_of_scope"}:
+                return AnswerPayload(
+                    status="chat",
+                    summary=classification.suggested_reply or self._default_chat_reply(),
+                    follow_up_hint="如果要切回数据查询，尽量带上指标、对象和时间范围。",
+                )
             summary = "当前输入不属于当前系统支持的业务数据查询范围。"
             if classification.reason_code == "invalid_smalltalk":
                 summary = "当前输入不是有效的数据查询问题。"
@@ -77,3 +86,6 @@ class AnswerBuilder:
             summary=f"已完成查询规划，当前输出围绕指标: {metric_text}。",
             detail="当前结果来自骨架链路，尚未获得数据库执行结果。",
         )
+
+    def _default_chat_reply(self) -> str:
+        return "我在。你可以继续闲聊，或者直接告诉我要查询的业务数据。"

@@ -17,6 +17,8 @@
 - 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
 - 当前检索方向已经明确为 `hybrid retrieval`：关键词 / 向量 / 结构化重排联合召回，而不是继续扩张规则门控
 - 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
+- `ENABLE_CHITCHAT_MODE=true` 时，问候/闲聊/无关问题不再直接丢弃，而是返回终止型闲聊回复；默认 `false`
+- LLM 不可用、调用失败或返回非法结构时，请求会显式失败，不再静默降级为 `stub/skipped`
 
 ## 快速启动
 

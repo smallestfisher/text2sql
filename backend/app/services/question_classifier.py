@@ -19,10 +19,12 @@ class QuestionClassifier:
         semantic_runtime: SemanticRuntime | None = None,
         llm_client: LLMClient | None = None,
         prompt_builder: PromptBuilder | None = None,
+        enable_chitchat_mode: bool = False,
     ) -> None:
         self.semantic_runtime = semantic_runtime
         self.llm_client = llm_client
         self.prompt_builder = prompt_builder
+        self.enable_chitchat_mode = enable_chitchat_mode
         self._last_debug_info: dict = {}
 
     def last_debug_info(self) -> dict:
@@ -43,6 +45,7 @@ class QuestionClassifier:
             "matched_entities": list(query_intent.matched_entities),
             "filter_fields": [item.field for item in query_intent.filters],
             "requested_dimensions": list(query_intent.requested_dimensions),
+            "enable_chitchat_mode": self.enable_chitchat_mode,
         }
         if self._is_invalid_smalltalk(normalized_question):
             classification = QuestionClassification(
@@ -52,6 +55,7 @@ class QuestionClassifier:
                 confidence=0.98,
                 reason="问题不属于数据查询请求。",
                 reason_code="invalid_smalltalk",
+                suggested_reply=self._default_smalltalk_reply(normalized_question),
                 need_clarification=False,
             )
             self._last_debug_info.update(
@@ -79,6 +83,7 @@ class QuestionClassifier:
                 confidence=self._sanitize_confidence(relevance_hint.get("confidence"), 0.86),
                 reason=reason,
                 reason_code="llm_out_of_scope",
+                suggested_reply=self._suggested_reply_from_relevance_hint(relevance_hint),
                 need_clarification=False,
             )
             self._last_debug_info.update(
@@ -406,6 +411,22 @@ class QuestionClassifier:
             return False
         confidence = self._sanitize_confidence(hint.get("confidence"), 0.0)
         return confidence >= 0.7
+
+    def _suggested_reply_from_relevance_hint(self, hint: dict) -> str:
+        suggested_reply = hint.get("suggested_reply")
+        if isinstance(suggested_reply, str) and suggested_reply.strip():
+            return suggested_reply.strip()
+        return self._default_out_of_scope_reply()
+
+    def _default_smalltalk_reply(self, normalized_question: str) -> str:
+        if normalized_question in {"你好", "hello", "hi"}:
+            return "你好，我在。你可以直接告诉我要查的业务指标、对象和时间范围。"
+        if normalized_question in {"谢谢", "thanks"}:
+            return "不客气。你可以继续告诉我要查询的指标、对象和时间范围。"
+        return self._default_out_of_scope_reply()
+
+    def _default_out_of_scope_reply(self) -> str:
+        return "我可以先陪你简单聊两句，但更擅长处理业务数据查询。你也可以直接告诉我要查的指标、对象和时间范围。"
 
     def _classify_with_llm_primary(
         self,

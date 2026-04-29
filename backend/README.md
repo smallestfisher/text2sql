@@ -30,6 +30,8 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 向量检索默认使用 `VECTOR_RETRIEVAL_PROVIDER=siliconflow`
 - 默认向量模型为 `VECTOR_MODEL=Qwen/Qwen3-Embedding-8B`
 - 默认向量维度为 `VECTOR_DIMENSIONS=1024`
+- `ENABLE_CHITCHAT_MODE=true` 时，问候/闲聊/无关问题会返回闲聊回复而不是 `invalid`；默认 `false`
+- LLM 不可用、调用失败或返回非法 JSON / SQL 时，请求会直接报错，不再静默降级
 
 ## 当前范围
 

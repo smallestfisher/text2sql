@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 
-AnswerStatus = Literal["ok", "clarification_needed", "invalid", "error", "stub"]
+AnswerStatus = Literal["ok", "clarification_needed", "invalid", "error", "stub", "chat"]
 
 
 class AnswerPayload(BaseModel):
