@@ -3,191 +3,403 @@
   "$id": "query_plan.schema.json",
   "title": "QueryPlan",
   "type": "object",
-  "required": [
-    "question_type",
-    "subject_domain",
-    "tables",
-    "metrics",
-    "dimensions",
-    "filters",
-    "time_context",
-    "inherit_context",
-    "context_delta",
-    "limit"
-  ],
   "properties": {
     "question_type": {
-      "type": "string",
-      "enum": ["new", "follow_up", "new_related", "new_unrelated", "invalid", "clarification_needed"]
+      "enum": [
+        "new",
+        "follow_up",
+        "new_related",
+        "new_unrelated",
+        "invalid",
+        "clarification_needed"
+      ],
+      "title": "Question Type",
+      "type": "string"
     },
     "subject_domain": {
-      "type": "string",
-      "enum": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"]
+      "enum": [
+        "inventory",
+        "demand",
+        "plan_actual",
+        "sales_financial",
+        "dimension",
+        "unknown"
+      ],
+      "title": "Subject Domain",
+      "type": "string"
     },
     "tables": {
-      "type": "array",
       "items": {
         "type": "string"
       },
-      "minItems": 0
+      "title": "Tables",
+      "type": "array"
     },
     "entities": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "metrics": {
-      "type": "array",
       "items": {
         "type": "string"
       },
-      "minItems": 0
+      "title": "Entities",
+      "type": "array"
+    },
+    "metrics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Metrics",
+      "type": "array"
     },
     "dimensions": {
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "title": "Dimensions",
+      "type": "array"
     },
     "filters": {
-      "type": "array",
       "items": {
-        "$ref": "#/$defs/filter"
-      }
+        "$ref": "#/$defs/FilterItem"
+      },
+      "title": "Filters",
+      "type": "array"
     },
     "join_path": {
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "title": "Join Path",
+      "type": "array"
     },
     "time_context": {
-      "$ref": "#/$defs/time_context"
+      "$ref": "#/$defs/TimeContext"
     },
     "version_context": {
-      "$ref": "#/$defs/version_context"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VersionContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "inherit_context": {
+      "default": false,
+      "title": "Inherit Context",
       "type": "boolean"
     },
     "context_delta": {
-      "$ref": "#/$defs/context_delta"
+      "$ref": "#/$defs/ContextDelta"
     },
     "need_clarification": {
-      "type": "boolean",
-      "default": false
+      "default": false,
+      "title": "Need Clarification",
+      "type": "boolean"
     },
     "clarification_question": {
-      "type": ["string", "null"]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Clarification Question"
+    },
+    "reason_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason Code"
+    },
+    "analysis_mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Analysis Mode"
     },
     "sort": {
-      "type": "array",
       "items": {
-        "$ref": "#/$defs/sort"
-      }
+        "$ref": "#/$defs/SortItem"
+      },
+      "title": "Sort",
+      "type": "array"
     },
     "limit": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 1000
+      "default": 200,
+      "title": "Limit",
+      "type": "integer"
     },
     "reason": {
-      "type": ["string", "null"]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
     }
   },
+  "required": [
+    "question_type",
+    "subject_domain"
+  ],
   "$defs": {
-    "filter": {
-      "type": "object",
-      "required": ["field", "op", "value"],
+    "ContextDelta": {
+      "properties": {
+        "add_filters": {
+          "items": {
+            "$ref": "#/$defs/FilterItem"
+          },
+          "title": "Add Filters",
+          "type": "array"
+        },
+        "remove_filters": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remove Filters",
+          "type": "array"
+        },
+        "clear_filters": {
+          "default": false,
+          "title": "Clear Filters",
+          "type": "boolean"
+        },
+        "replace_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replace Entities",
+          "type": "array"
+        },
+        "replace_metrics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replace Metrics",
+          "type": "array"
+        },
+        "replace_dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replace Dimensions",
+          "type": "array"
+        },
+        "replace_sort": {
+          "items": {
+            "$ref": "#/$defs/SortItem"
+          },
+          "title": "Replace Sort",
+          "type": "array"
+        },
+        "replace_time_context": {
+          "$ref": "#/$defs/TimeContext"
+        },
+        "replace_version_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "replace_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replace Limit"
+        },
+        "replace_analysis_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replace Analysis Mode"
+        }
+      },
+      "title": "ContextDelta",
+      "type": "object"
+    },
+    "FilterItem": {
       "properties": {
         "field": {
+          "title": "Field",
           "type": "string"
         },
         "op": {
-          "type": "string",
-          "enum": ["=", "!=", ">", ">=", "<", "<=", "between", "in", "like", "is_null", "not_null"]
-        },
-        "value": {}
-      }
-    },
-    "time_context": {
-      "type": "object",
-      "required": ["grain", "range"],
-      "properties": {
-        "grain": {
-          "type": "string",
-          "enum": ["day", "week", "month", "version", "unknown"]
-        },
-        "range": {
-          "type": ["object", "null"],
-          "properties": {
-            "start": {
-              "type": ["string", "null"]
-            },
-            "end": {
-              "type": ["string", "null"]
-            }
-          }
-        }
-      }
-    },
-    "version_context": {
-      "type": ["object", "null"],
-      "properties": {
-        "field": {
-          "type": ["string", "null"]
+          "enum": [
+            "=",
+            "!=",
+            ">",
+            ">=",
+            "<",
+            "<=",
+            "between",
+            "in",
+            "like",
+            "latest_n",
+            "is_null",
+            "not_null"
+          ],
+          "title": "Op",
+          "type": "string"
         },
         "value": {
-          "type": ["string", "null"]
+          "title": "Value"
         }
-      }
+      },
+      "required": [
+        "field",
+        "op",
+        "value"
+      ],
+      "title": "FilterItem",
+      "type": "object"
     },
-    "context_delta": {
-      "type": "object",
-      "required": ["add_filters", "remove_filters", "replace_metrics", "replace_dimensions", "replace_time_context"],
-      "properties": {
-        "add_filters": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/filter"
-          }
-        },
-        "remove_filters": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "replace_metrics": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "replace_dimensions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "replace_time_context": {
-          "$ref": "#/$defs/time_context"
-        }
-      }
-    },
-    "sort": {
-      "type": "object",
-      "required": ["field", "order"],
+    "SortItem": {
       "properties": {
         "field": {
+          "title": "Field",
           "type": "string"
         },
         "order": {
-          "type": "string",
-          "enum": ["asc", "desc"]
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "title": "Order",
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "field",
+        "order"
+      ],
+      "title": "SortItem",
+      "type": "object"
+    },
+    "TimeContext": {
+      "properties": {
+        "grain": {
+          "default": "unknown",
+          "enum": [
+            "day",
+            "week",
+            "month",
+            "version",
+            "unknown"
+          ],
+          "title": "Grain",
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "TimeContext",
+      "type": "object"
+    },
+    "TimeRange": {
+      "properties": {
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        }
+      },
+      "title": "TimeRange",
+      "type": "object"
+    },
+    "VersionContext": {
+      "properties": {
+        "field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "VersionContext",
+      "type": "object"
     }
   }
 }

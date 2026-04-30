@@ -3,72 +3,576 @@
   "$id": "session_state.schema.json",
   "title": "SessionState",
   "type": "object",
-  "required": [
-    "session_id",
-    "topic",
-    "subject_domain",
-    "tables",
-    "metrics",
-    "dimensions",
-    "filters",
-    "time_context",
-    "version_context",
-    "last_question_type",
-    "last_query_plan"
-  ],
   "properties": {
     "session_id": {
+      "title": "Session Id",
       "type": "string"
     },
     "topic": {
-      "type": ["string", "null"]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Topic"
     },
     "subject_domain": {
-      "type": "string",
-      "enum": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"]
+      "default": "unknown",
+      "enum": [
+        "inventory",
+        "demand",
+        "plan_actual",
+        "sales_financial",
+        "dimension",
+        "unknown"
+      ],
+      "title": "Subject Domain",
+      "type": "string"
+    },
+    "entities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Entities",
+      "type": "array"
     },
     "tables": {
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "title": "Tables",
+      "type": "array"
     },
     "metrics": {
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "title": "Metrics",
+      "type": "array"
     },
     "dimensions": {
-      "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "title": "Dimensions",
+      "type": "array"
     },
     "filters": {
-      "type": "array",
       "items": {
-        "type": "object"
-      }
+        "$ref": "#/$defs/FilterItem"
+      },
+      "title": "Filters",
+      "type": "array"
+    },
+    "sort": {
+      "items": {
+        "$ref": "#/$defs/SortItem"
+      },
+      "title": "Sort",
+      "type": "array"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit"
     },
     "time_context": {
-      "type": ["object", "null"]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "version_context": {
-      "type": ["object", "null"]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VersionContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "analysis_mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Analysis Mode"
     },
     "last_question_type": {
-      "type": ["string", "null"],
-      "enum": ["new", "follow_up", "new_related", "new_unrelated", "invalid", "clarification_needed", null]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Question Type"
     },
     "last_query_plan": {
-      "type": ["object", "null"]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QueryPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "last_sql": {
-      "type": ["string", "null"]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Sql"
     },
     "last_result_shape": {
-      "type": ["string", "null"]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Result Shape"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "$defs": {
+    "ContextDelta": {
+      "properties": {
+        "add_filters": {
+          "items": {
+            "$ref": "#/$defs/FilterItem"
+          },
+          "title": "Add Filters",
+          "type": "array"
+        },
+        "remove_filters": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remove Filters",
+          "type": "array"
+        },
+        "clear_filters": {
+          "default": false,
+          "title": "Clear Filters",
+          "type": "boolean"
+        },
+        "replace_entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replace Entities",
+          "type": "array"
+        },
+        "replace_metrics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replace Metrics",
+          "type": "array"
+        },
+        "replace_dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replace Dimensions",
+          "type": "array"
+        },
+        "replace_sort": {
+          "items": {
+            "$ref": "#/$defs/SortItem"
+          },
+          "title": "Replace Sort",
+          "type": "array"
+        },
+        "replace_time_context": {
+          "$ref": "#/$defs/TimeContext"
+        },
+        "replace_version_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "replace_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replace Limit"
+        },
+        "replace_analysis_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replace Analysis Mode"
+        }
+      },
+      "title": "ContextDelta",
+      "type": "object"
+    },
+    "FilterItem": {
+      "properties": {
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "op": {
+          "enum": [
+            "=",
+            "!=",
+            ">",
+            ">=",
+            "<",
+            "<=",
+            "between",
+            "in",
+            "like",
+            "latest_n",
+            "is_null",
+            "not_null"
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value"
+        }
+      },
+      "required": [
+        "field",
+        "op",
+        "value"
+      ],
+      "title": "FilterItem",
+      "type": "object"
+    },
+    "QueryPlan": {
+      "properties": {
+        "question_type": {
+          "enum": [
+            "new",
+            "follow_up",
+            "new_related",
+            "new_unrelated",
+            "invalid",
+            "clarification_needed"
+          ],
+          "title": "Question Type",
+          "type": "string"
+        },
+        "subject_domain": {
+          "enum": [
+            "inventory",
+            "demand",
+            "plan_actual",
+            "sales_financial",
+            "dimension",
+            "unknown"
+          ],
+          "title": "Subject Domain",
+          "type": "string"
+        },
+        "tables": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tables",
+          "type": "array"
+        },
+        "entities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "metrics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "dimensions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "filters": {
+          "items": {
+            "$ref": "#/$defs/FilterItem"
+          },
+          "title": "Filters",
+          "type": "array"
+        },
+        "join_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Join Path",
+          "type": "array"
+        },
+        "time_context": {
+          "$ref": "#/$defs/TimeContext"
+        },
+        "version_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inherit_context": {
+          "default": false,
+          "title": "Inherit Context",
+          "type": "boolean"
+        },
+        "context_delta": {
+          "$ref": "#/$defs/ContextDelta"
+        },
+        "need_clarification": {
+          "default": false,
+          "title": "Need Clarification",
+          "type": "boolean"
+        },
+        "clarification_question": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clarification Question"
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason Code"
+        },
+        "analysis_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Analysis Mode"
+        },
+        "sort": {
+          "items": {
+            "$ref": "#/$defs/SortItem"
+          },
+          "title": "Sort",
+          "type": "array"
+        },
+        "limit": {
+          "default": 200,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "question_type",
+        "subject_domain"
+      ],
+      "title": "QueryPlan",
+      "type": "object"
+    },
+    "SortItem": {
+      "properties": {
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "order": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "order"
+      ],
+      "title": "SortItem",
+      "type": "object"
+    },
+    "TimeContext": {
+      "properties": {
+        "grain": {
+          "default": "unknown",
+          "enum": [
+            "day",
+            "week",
+            "month",
+            "version",
+            "unknown"
+          ],
+          "title": "Grain",
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "TimeContext",
+      "type": "object"
+    },
+    "TimeRange": {
+      "properties": {
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        }
+      },
+      "title": "TimeRange",
+      "type": "object"
+    },
+    "VersionContext": {
+      "properties": {
+        "field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Field"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "VersionContext",
+      "type": "object"
     }
   }
 }

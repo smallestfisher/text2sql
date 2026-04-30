@@ -4,8 +4,8 @@
 
 ## 当前状态
 
-- `tables.json` 是真实数据库表和字段描述的主来源
-- `business_knowledge.json` 是主业务知识来源
+- `semantic/tables.json` 是真实数据库表和字段描述的主来源
+- `semantic/business_knowledge.json` 是主业务知识来源
 - `semantic/join_patterns.json` 是稳定多表关联经验的主来源
 - `semantic/domain_config.json` 仍然保留，但现在只是语义配置的 manifest 入口；真实内容按职责拆在 `semantic/domain_config/`
 - SQL、分类、相关性判断 prompt 目前统一以中文自然语言指令为主
@@ -15,7 +15,7 @@
 - 对 `oms_inventory` 的常规库存问题，如果用户只说“OMS库存/库存”而没有显式指定 `glass`、`panel` 或具体库龄段，当前默认同时返回 `glass_qty` 和 `panel_qty` 两套口径；只有明确问库龄时才应使用 `ONE_AGE_panel_qty` 到 `EUGHT_AGE_panel_qty`
 - 前端会话恢复的主入口是 `GET /api/chat/sessions/{session_id}/workspace`
 - 前端提问默认走 `POST /api/chat/query/stream`，通过 SSE 主动推送阶段进度和最终结果，不再靠轮询猜状态
-- 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
+- 复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
 - 当前检索方向已经明确为 `hybrid retrieval`：关键词 / 向量 / 结构化重排联合召回，而不是继续扩张规则门控
 - 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
 - retrieval corpus 的 embedding 现在会增量持久化到 runtime 库的 `vector_corpus_documents` 表，重启或 metadata reload 时优先复用已有向量，再加载回内存做 brute-force cosine search
@@ -75,4 +75,4 @@ Unknown column '...'
 
 ## 一句话原则
 
-遇到准确率问题时，优先修 `tables.json`、`business_knowledge.json`、example / few-shot 资产、retrieval、prompt 上下文和 validator；不要把系统重新拉回“大量场景规则 + 本地 SQL 模板”的旧路径。
+遇到准确率问题时，优先修 `semantic/tables.json`、`semantic/business_knowledge.json`、example / few-shot 资产、retrieval、prompt 上下文和 validator；不要把系统重新拉回“大量场景规则 + 本地 SQL 模板”的旧路径。

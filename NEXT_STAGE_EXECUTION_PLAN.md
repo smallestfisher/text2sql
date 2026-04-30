@@ -197,7 +197,7 @@
 - 新增字段叫法时，优先补 `field_semantics`
 - 不再为单个新叫法继续往 `extractors` 里堆散规则
 
-### 4.2 第二优先级：`tables.json`
+### 4.2 第二优先级：`semantic/tables.json`
 
 目标：
 
@@ -220,9 +220,9 @@
 
 验收标准：
 
-- LLM 和调试人员都能从 `tables.json` 直接看懂表职责、时间字段、关系字段和口径边界
+- LLM 和调试人员都能从 `semantic/tables.json` 直接看懂表职责、时间字段、关系字段和口径边界
 
-### 4.3 第三优先级：`business_knowledge.json`
+### 4.3 第三优先级：`semantic/business_knowledge.json`
 
 目标：
 
@@ -309,7 +309,7 @@
 ### 第 1 周
 
 - 补 `field_semantics`
-- 补 `tables.json` / `business_knowledge.json`
+- 补 `semantic/tables.json` / `semantic/business_knowledge.json`
 - 沉淀一批真实 example / eval case
 - 先做去门控一期的 `A + B`
 

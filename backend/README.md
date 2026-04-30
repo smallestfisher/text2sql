@@ -56,8 +56,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 当前阶段的明确边界：
 
-- 不再要求数据库预建额外分析对象
-- `business_knowledge.json` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
+- `semantic/business_knowledge.json` 只参与 prompt 上下文选择，不参与本地 SQL 拼接
 - 对横表和复杂口径，优先通过 prompt / retrieved examples / business knowledge / repair loop 驱动 LLM 生成 SQL，再由 validator 治理
 - `GET /api/chat/sessions/{session_id}/workspace` 是前端会话恢复的主入口
 - `POST /api/chat/query/stream` 是前端默认提问入口；通过 SSE 推送 `accepted`、`planning`、`sql_generation`、`execution`、`completed` 等阶段事件

@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.app.services.domain_config_loader import DomainConfigLoader
 
-TABLES_METADATA_PATH = REPO_ROOT / "tables.json"
+TABLES_METADATA_PATH = REPO_ROOT / "semantic" / "tables.json"
 
 
 class DomainConfigLintError(ValueError):
