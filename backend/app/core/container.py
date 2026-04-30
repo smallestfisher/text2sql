@@ -7,6 +7,7 @@ from backend.app.repositories.db_auth_repository import DbAuthRepository
 from backend.app.repositories.db_feedback_repository import DbFeedbackRepository
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.repositories.db_session_repository import DbSessionRepository
+from backend.app.repositories.db_vector_document_repository import DbVectorDocumentRepository
 from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
@@ -37,6 +38,7 @@ from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_executor import SqlExecutor
 from backend.app.services.sql_validator import SqlValidator
 from backend.app.services.vector_retriever import VectorRetriever
+from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.runtime_store_initializer import RuntimeStoreInitializer
 
 
@@ -66,6 +68,7 @@ class AppContainer:
         self.feedback_repository = DbFeedbackRepository(self.runtime_database_connector)
         self.runtime_log_repository = DbRuntimeLogRepository(self.runtime_database_connector)
         self.evaluation_run_repository = DbEvaluationRunRepository(self.runtime_database_connector)
+        self.vector_document_repository = DbVectorDocumentRepository(self.runtime_database_connector)
         self.progress_service = ProgressService()
 
         self.prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
@@ -124,10 +127,15 @@ class AppContainer:
             dimensions=self.settings.vector_dimensions,
             timeout_seconds=self.settings.vector_timeout_seconds,
         )
+        self.vector_corpus_store_service = VectorCorpusStoreService(
+            repository=self.vector_document_repository,
+            vector_retriever=self.vector_retriever,
+        )
         self.retrieval_service = RetrievalService(
             domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
             vector_retriever=self.vector_retriever,
+            vector_corpus_store_service=self.vector_corpus_store_service,
             vector_top_k=self.settings.vector_top_k,
         )
         self.answer_builder = AnswerBuilder(

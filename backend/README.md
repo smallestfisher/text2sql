@@ -29,6 +29,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 向量检索默认使用 `VECTOR_RETRIEVAL_PROVIDER=siliconflow`
 - 默认向量模型为 `VECTOR_MODEL=Qwen/Qwen3-Embedding-8B`
 - 默认向量维度为 `VECTOR_DIMENSIONS=1024`
+- retrieval corpus embedding 会持久化到 runtime 库的 `vector_corpus_documents` 表；当前不需要单独部署向量数据库
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 角色时，问候/闲聊/无关问题会返回闲聊回复而不是 `invalid`；默认 `false`
 - LLM 不可用、调用失败或返回非法 JSON / SQL 时，请求会直接报错，不再静默降级
 
@@ -51,6 +52,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 提供会话仓库、workspace 聚合接口、trace 恢复和 response snapshot
 - 提供查询日志、SQL 审计、反馈、replay、eval case 和管理接口
 - 检索层当前走 `hybrid retrieval` 方向：关键词 / 向量 / 结构化重排联合召回，规则不再承担过强的 few-shot 门控职责
+- 向量检索仍然在应用内存里做 brute-force cosine search，但 corpus 向量现在会增量持久化到 runtime 库，并在启动 / reload 时优先复用
 
 当前阶段的明确边界：
 
@@ -76,6 +78,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 会话、消息和状态快照
 - query log、trace、SQL audit、feedback
 - evaluation runs
+- retrieval corpus 持久化向量 `vector_corpus_documents`
 
 运行时表定义见 [sql/runtime_store.sql](../sql/runtime_store.sql)。
 
@@ -106,6 +109,7 @@ Unknown column '...'
    - `sql_audit_logs.plan_risk_flags_json`
    - `sql_audit_logs.sql_risk_level`
    - `sql_audit_logs.sql_risk_flags_json`
+   - `vector_corpus_documents` 表及 `idx_vector_corpus_documents_source` 索引
 
 ## API
 
@@ -166,8 +170,13 @@ Unknown column '...'
 - `examples/nl2sql_examples.template.json` 现在默认可以为空。
 - 在线样例只应从真实调试链路通过 `materialize-example` 物化进入，不再手写假设样例。
 - example 会参与 RetrievalService 检索，并在命中时以 `retrieved_examples` 形式进入 SQL prompt。
-- `materialize-example` 或 examples 管理接口写入后会立即刷新 retrieval 索引；当前不需要重启服务才能让新样例生效。
+- `materialize-example`、examples 管理接口写入和 `POST /api/admin/metadata/reload` 都会触发 retrieval corpus reload；新样例和受影响向量会增量重建并持久化，当前不需要重启服务才能生效。
 - `eval/evaluation_cases.json` 也只应保留真实问题或真实 trace 物化出的回归样本，不再维护假设 case。
+
+`GET /api/admin/runtime/status` 当前还会带出：
+
+- `vector_retrieval`：当前 query embedding 配置、已加载向量签名、就绪状态
+- `retrieval_corpus`：当前 corpus 文档数，以及最近一次向量 sync 的复用 / 重建摘要
 
 ### Admin Users / Roles
 

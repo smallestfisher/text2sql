@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from backend.app.models.admin import (
     ExampleCollectionResponse,
     ExampleMutationResponse,
@@ -22,6 +24,7 @@ class MetadataService:
         self.metadata_repository = metadata_repository
         self.domain_config_loader = domain_config_loader
         self.audit_repository = audit_repository
+        self._lock = threading.RLock()
 
     def overview(self) -> MetadataOverview:
         summary = self.domain_config_loader.summary()
@@ -46,15 +49,16 @@ class MetadataService:
         payload: dict | ExampleRecord,
         retrieval_service: RetrievalService,
     ) -> ExampleMutationResponse:
-        example = retrieval_service.validate_example(payload)
-        examples = [retrieval_service.validate_example(item) for item in self.metadata_repository.read("examples_template")]
-        if any(item.id == example.id for item in examples):
-            raise ValueError(f"example id already exists: {example.id}")
-        examples.append(example)
-        self.metadata_repository.write(
-            "examples_template",
-            [item.model_dump() for item in examples],
-        )
+        with self._lock:
+            example = retrieval_service.validate_example(payload)
+            examples = [retrieval_service.validate_example(item) for item in self.metadata_repository.read("examples_template")]
+            if any(item.id == example.id for item in examples):
+                raise ValueError(f"example id already exists: {example.id}")
+            examples.append(example)
+            self.metadata_repository.write(
+                "examples_template",
+                [item.model_dump() for item in examples],
+            )
         retrieval_service.reload()
         return ExampleMutationResponse(
             created=True,
@@ -75,30 +79,31 @@ class MetadataService:
         retrieval_service: RetrievalService,
         replace_existing: bool = False,
     ) -> ExampleCollectionResponse:
-        incoming = [retrieval_service.validate_example(item) for item in payloads]
-        incoming_ids = [item.id for item in incoming]
-        if len(set(incoming_ids)) != len(incoming_ids):
-            raise ValueError("example ids must be unique within the bulk payload")
+        with self._lock:
+            incoming = [retrieval_service.validate_example(item) for item in payloads]
+            incoming_ids = [item.id for item in incoming]
+            if len(set(incoming_ids)) != len(incoming_ids):
+                raise ValueError("example ids must be unique within the bulk payload")
 
-        if replace_existing:
-            merged = incoming
-        else:
-            existing = {
-                item.id: item
-                for item in (
-                    retrieval_service.validate_example(item)
-                    for item in self.metadata_repository.read("examples_template")
-                )
-            }
-            for item in incoming:
-                existing[item.id] = item
-            merged = list(existing.values())
+            if replace_existing:
+                merged = incoming
+            else:
+                existing = {
+                    item.id: item
+                    for item in (
+                        retrieval_service.validate_example(item)
+                        for item in self.metadata_repository.read("examples_template")
+                    )
+                }
+                for item in incoming:
+                    existing[item.id] = item
+                merged = list(existing.values())
 
-        merged.sort(key=lambda item: item.id)
-        self.metadata_repository.write(
-            "examples_template",
-            [item.model_dump() for item in merged],
-        )
+            merged.sort(key=lambda item: item.id)
+            self.metadata_repository.write(
+                "examples_template",
+                [item.model_dump() for item in merged],
+            )
         retrieval_service.reload()
         return ExampleCollectionResponse(examples=merged, count=len(merged))
 
@@ -108,21 +113,22 @@ class MetadataService:
         payload: dict | ExampleRecord,
         retrieval_service: RetrievalService,
     ) -> ExampleMutationResponse:
-        example = retrieval_service.validate_example(payload)
-        examples = [retrieval_service.validate_example(item) for item in self.metadata_repository.read("examples_template")]
-        updated = False
-        for index, item in enumerate(examples):
-            if item.id != example_id:
-                continue
-            examples[index] = example.model_copy(update={"id": example_id})
-            updated = True
-            break
-        if not updated:
-            raise KeyError(example_id)
-        self.metadata_repository.write(
-            "examples_template",
-            [item.model_dump() for item in examples],
-        )
+        with self._lock:
+            example = retrieval_service.validate_example(payload)
+            examples = [retrieval_service.validate_example(item) for item in self.metadata_repository.read("examples_template")]
+            updated = False
+            for index, item in enumerate(examples):
+                if item.id != example_id:
+                    continue
+                examples[index] = example.model_copy(update={"id": example_id})
+                updated = True
+                break
+            if not updated:
+                raise KeyError(example_id)
+            self.metadata_repository.write(
+                "examples_template",
+                [item.model_dump() for item in examples],
+            )
         retrieval_service.reload()
         return ExampleMutationResponse(
             updated=True,
@@ -136,15 +142,6 @@ class MetadataService:
         return MetadataDocument(name=name, path=str(path), content=content)
 
     def update_document(self, name: str, content) -> MetadataDocument:
-        path = self.metadata_repository.write(name, content)
+        with self._lock:
+            path = self.metadata_repository.write(name, content)
         return MetadataDocument(name=name, path=str(path), content=content)
-
-    def reload_runtime(self, retrieval_service=None) -> dict:
-        self.domain_config_loader.load.cache_clear()
-        summary = self.domain_config_loader.summary()
-        if retrieval_service is not None:
-            retrieval_service.reload()
-        return {
-            "semantic_version": summary.get("version"),
-            "reloaded": True,
-        }

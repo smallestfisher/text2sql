@@ -91,6 +91,12 @@ class RuntimeStoreInitializer:
         self._ensure_index("feedback_logs", "idx_feedback_logs_trace_created", "trace_id, created_at", migration_errors)
         self._ensure_index("feedback_logs", "idx_feedback_logs_user_created", "user_id, created_at", migration_errors)
         self._ensure_index("evaluation_runs", "idx_evaluation_runs_created_at", "created_at", migration_errors)
+        self._ensure_index(
+            "vector_corpus_documents",
+            "idx_vector_corpus_documents_source",
+            "source_type, source_id",
+            migration_errors,
+        )
 
         schema_result["database"] = database_result.get("database")
         if migration_errors:

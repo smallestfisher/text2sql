@@ -13,6 +13,11 @@ def get_container() -> AppContainer:
     return AppContainer()
 
 
+def reset_container() -> AppContainer:
+    get_container.cache_clear()
+    return get_container()
+
+
 def resolve_request_user_context(
     request: Request,
     container: AppContainer,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -21,10 +22,12 @@ from backend.app.models.feedback import (
     FeedbackRequest,
     FeedbackSummary,
 )
+from backend.app.models.progress import ProgressEvent
 from backend.app.models.trace import TraceRecord
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/query/stream")
@@ -39,24 +42,38 @@ async def chat_query_stream(
         default_user_context=request.user_context,
     )
     trace_id = container.audit_service.new_trace().trace_id
-    queue = container.progress_service.subscribe(trace_id)
+    subscription = container.progress_service.subscribe(trace_id)
 
     async def event_stream():
         future = asyncio.create_task(asyncio.to_thread(container.orchestrator.chat, request, trace_id))
+        emitted_failed_event = False
         try:
             while True:
-                item = await asyncio.to_thread(queue.get)
+                item = await subscription.get()
                 if item is None:
                     break
+                if item.type == "failed":
+                    emitted_failed_event = True
                 payload = item.model_dump(mode="json")
                 yield f"event: {item.type}\n".encode("utf-8")
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
-        finally:
-            container.progress_service.unsubscribe(trace_id, queue)
             try:
                 await future
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.exception("stream chat failed trace_id=%s", trace_id)
+                if not emitted_failed_event:
+                    failure_event = ProgressEvent(
+                        trace_id=trace_id,
+                        type="failed",
+                        stage="failed",
+                        status="error",
+                        detail=str(exc),
+                    )
+                    payload = failure_event.model_dump(mode="json")
+                    yield f"event: {failure_event.type}\n".encode("utf-8")
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+        finally:
+            container.progress_service.unsubscribe(trace_id, subscription)
 
     return StreamingResponse(
         event_stream(),

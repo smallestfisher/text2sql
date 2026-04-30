@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import threading
 
 from backend.app.models.api import ExecutionResponse
 from backend.app.models.auth import UserContext
@@ -21,17 +22,19 @@ class ExecutionCacheService:
         self.ttl_seconds = max(ttl_seconds, 1)
         self.max_entries = max(max_entries, 1)
         self._entries: OrderedDict[str, CacheEntry] = OrderedDict()
+        self._lock = threading.RLock()
 
     def get(self, sql: str, user_context: UserContext | None = None) -> ExecutionResponse | None:
         key = self._cache_key(sql, user_context)
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
-        if entry.expires_at <= datetime.now(tz=timezone.utc):
-            self._entries.pop(key, None)
-            return None
-        self._entries.move_to_end(key)
-        cached = entry.value.model_copy(deep=True)
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            if entry.expires_at <= datetime.now(tz=timezone.utc):
+                self._entries.pop(key, None)
+                return None
+            self._entries.move_to_end(key)
+            cached = entry.value.model_copy(deep=True)
         cached.warnings = list(cached.warnings) + ["execution cache hit"]
         return cached
 
@@ -40,12 +43,14 @@ class ExecutionCacheService:
             return
         key = self._cache_key(sql, user_context)
         expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=self.ttl_seconds)
-        self._entries[key] = CacheEntry(value=execution.model_copy(deep=True), expires_at=expires_at)
-        self._entries.move_to_end(key)
-        self._evict_if_needed()
+        with self._lock:
+            self._entries[key] = CacheEntry(value=execution.model_copy(deep=True), expires_at=expires_at)
+            self._entries.move_to_end(key)
+            self._evict_if_needed()
 
     def clear(self) -> None:
-        self._entries.clear()
+        with self._lock:
+            self._entries.clear()
 
     def _evict_if_needed(self) -> None:
         while len(self._entries) > self.max_entries:

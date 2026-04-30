@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
-from backend.app.api.dependencies import get_container, get_current_user, require_admin_user
+from backend.app.api.dependencies import get_container, get_current_user, require_admin_user, reset_container
 from backend.app.core.container import AppContainer
 from backend.app.models.admin import (
     ExampleCollectionResponse,
@@ -112,7 +112,12 @@ def update_metadata_document(
 
 @router.post("/metadata/reload")
 def reload_metadata(container: AppContainer = Depends(get_container)) -> dict:
-    return container.metadata_service.reload_runtime(retrieval_service=container.retrieval_service)
+    new_container = reset_container()
+    summary = new_container.metadata_service.overview()
+    return {
+        "semantic_version": summary.semantic_version,
+        "reloaded": True,
+    }
 
 
 @router.get("/examples", response_model=ExampleCollectionResponse)

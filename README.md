@@ -18,6 +18,7 @@
 - 不要求真实数据库预建额外分析对象；复杂横表逻辑由 LLM 在 SQL 中展开并由校验器治理
 - 当前检索方向已经明确为 `hybrid retrieval`：关键词 / 向量 / 结构化重排联合召回，而不是继续扩张规则门控
 - 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
+- retrieval corpus 的 embedding 现在会增量持久化到 runtime 库的 `vector_corpus_documents` 表，重启或 metadata reload 时优先复用已有向量，再加载回内存做 brute-force cosine search
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 权限时，问候/闲聊/无关问题不再直接丢弃，而是返回终止型闲聊回复；默认 `false`
 - LLM 不可用、调用失败或返回非法结构时，请求会显式失败，不再静默降级为 `stub/skipped`
 
@@ -51,6 +52,7 @@ npm run dev
 - 运行时库读取 `RUNTIME_DATABASE_URL`
 - 未配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接派生并默认使用 `manager` 数据库
 - 首次启动会尝试自动建库、建表和补增量列
+- runtime 库除了会话、审计和 eval 数据外，现在也承载 retrieval corpus 的持久化向量表 `vector_corpus_documents`
 
 如果你复用了旧的 runtime 库，启动或登录时如果报：
 
@@ -59,6 +61,8 @@ Unknown column '...'
 ```
 
 说明运行时表结构没升级到最新版本。优先用有 `ALTER TABLE` 权限的账号重启服务；如果运行账号没有变更表结构权限，就手动执行 [sql/runtime_store.sql](sql/runtime_store.sql) 并补齐 `RuntimeStoreInitializer` 里定义的增量列。常见缺失列包括 `query_logs.plan_risk_level`、`query_logs.sql_risk_level`、`sql_audit_logs.plan_risk_level`、`sql_audit_logs.sql_risk_level`。
+
+如果你是在旧 runtime 库上升级到当前版本，还需要确认 `vector_corpus_documents` 表和它的索引已经存在；向量检索初始化现在依赖这张表。
 
 ## 文档导航
 

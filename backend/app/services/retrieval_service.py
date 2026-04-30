@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import logging
 import math
 from pathlib import Path
 import re
@@ -11,7 +12,11 @@ from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.vector_retriever import VectorRetriever
+
+
+logger = logging.getLogger(__name__)
 
 
 class RetrievalService:
@@ -24,6 +29,7 @@ class RetrievalService:
         business_knowledge_path: Path = BUSINESS_KNOWLEDGE_PATH,
         join_patterns_path: Path = JOIN_PATTERNS_PATH,
         vector_retriever: VectorRetriever | None = None,
+        vector_corpus_store_service: VectorCorpusStoreService | None = None,
         vector_top_k: int = 3,
         async_vector_index: bool = True,
     ) -> None:
@@ -34,6 +40,7 @@ class RetrievalService:
         self.business_knowledge_path = business_knowledge_path
         self.join_patterns_path = join_patterns_path
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
+        self.vector_corpus_store_service = vector_corpus_store_service
         self.vector_top_k = vector_top_k
         self.async_vector_index = async_vector_index
         self.examples = self._load_examples()
@@ -44,6 +51,16 @@ class RetrievalService:
         self.document_frequency: Counter[str] = Counter()
         self.average_doc_length = 1.0
         self.document_lookup: dict[tuple[str, str], dict] = {}
+        self.last_vector_sync_summary: dict = {
+            "persisted_document_count": 0,
+            "reused_document_count": 0,
+            "rebuilt_document_count": 0,
+            "deleted_document_count": 0,
+            "upserted_document_count": 0,
+            "vector_sync_last_updated_at": None,
+            "embedding_signature": None,
+            "error": None,
+        }
         self._refresh_indexes()
 
     def retrieve(self, query_intent: QueryIntent) -> RetrievalContext:
@@ -106,6 +123,7 @@ class RetrievalService:
             ),
             "example_count": len(self.examples),
             "join_pattern_count": len(self.join_patterns),
+            "vector_sync": self.last_vector_sync_summary,
         }
 
     def validate_example(self, payload: dict | ExampleRecord) -> ExampleRecord:
@@ -135,10 +153,42 @@ class RetrievalService:
             total_length += document["length"]
             self.document_frequency.update(set(document["token_counts"].keys()))
         self.average_doc_length = total_length / len(self.corpus_documents) if self.corpus_documents else 1.0
+        if not self.vector_retriever.enabled:
+            self.last_vector_sync_summary = {
+                "persisted_document_count": 0,
+                "reused_document_count": 0,
+                "rebuilt_document_count": 0,
+                "deleted_document_count": 0,
+                "upserted_document_count": 0,
+                "vector_sync_last_updated_at": None,
+                "embedding_signature": None,
+                "error": None,
+            }
+            self.vector_retriever.load_documents([])
+            return
+        if self.vector_corpus_store_service is None:
+            raise RuntimeError("vector_corpus_store_service is required when vector retrieval is enabled")
+        try:
+            sync_result = self.vector_corpus_store_service.sync(self.corpus_documents)
+        except Exception as exc:
+            logger.exception("vector corpus sync failed")
+            self.last_vector_sync_summary = {
+                "persisted_document_count": 0,
+                "reused_document_count": 0,
+                "rebuilt_document_count": 0,
+                "deleted_document_count": 0,
+                "upserted_document_count": 0,
+                "vector_sync_last_updated_at": None,
+                "embedding_signature": None,
+                "error": str(exc),
+            }
+            self.vector_retriever.load_documents([])
+            return
+        self.last_vector_sync_summary = sync_result.summary()
         if self.async_vector_index:
-            self.vector_retriever.index_documents_async(self.corpus_documents)
+            self.vector_retriever.load_documents_async(sync_result.documents)
         else:
-            self.vector_retriever.index_documents(self.corpus_documents)
+            self.vector_retriever.load_documents(sync_result.documents)
 
     def _build_example_documents(self) -> list[dict]:
         documents: list[dict] = []

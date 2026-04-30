@@ -11,7 +11,7 @@
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
 - 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、角色、反馈和 replay
 - 管理员可以直接在用户管理区域授予或移除 `chitchat` 角色；该角色只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会实际生效
-- 管理员通过 runtime trace 物化 example 后，新样例当前可立即参与后端 retrieval / SQL prompt；通常不需要重启服务
+- 管理员通过 runtime trace 物化 example 后，新样例当前可立即参与后端 retrieval / SQL prompt；受影响向量会增量重建并持久化，通常不需要重启服务
 
 ## 当前交互规则
 

@@ -325,8 +325,9 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
    - feedback
    - runtime log
    - evaluation run
+   - vector corpus document
 7. 初始化 `ProgressService`
-8. 初始化 Prompt / LLM / Intent / Planner / Validator / Executor / Retrieval 等核心 service
+8. 初始化 Prompt / LLM / Intent / Planner / Validator / Executor / Retrieval / VectorCorpusStore 等核心 service
 9. 初始化 SessionWorkspace / ChatResponseRestore / Evaluation 等高层 service
 10. 初始化 `ConversationOrchestrator`
 
@@ -386,7 +387,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 2. 先生成一个 `trace_id`
 3. 向 `ProgressService` 订阅这个 `trace_id` 对应的队列
 4. 在后台线程里跑 `container.orchestrator.chat(request, trace_id)`
-5. 一边消费 progress queue，一边按 SSE 格式 `yield`
+5. 路由层通过 `ProgressService` 的订阅通道等待事件到达，再按 SSE 格式 `yield`
 6. 当收到 `None` 结束标记时结束流
 7. 最后取消订阅并等待后台任务结束
 
@@ -394,6 +395,7 @@ LLM-first 的风险之一是 token 膨胀，所以当前系统坚持：
 
 - orchestrator 仍然是同步主流程
 - 路由层只负责把同步执行“桥接”成异步流
+- 这层现在用事件驱动唤醒，不再靠固定间隔轮询 progress queue
 - 流结束条件不是 HTTP 轮询，而是 `ProgressService.complete(trace_id)`
 
 ### 5.3 Orchestrator 总控链路
@@ -682,6 +684,7 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 - example
 - metric
 - business knowledge
+- join pattern
 - vector retrieval（如果启用）
 
 然后统一 rerank，取 top hits，形成 `RetrievalContext`。
@@ -701,6 +704,19 @@ LLM intent、relevance guard 和会话分类在真实 runtime 中都按默认主
 - 给 SQL prompt 和后续 few-shot 资产治理提供更相关的 evidence
 - 给 trace / debug 留下检索命中依据
 - 避免问题定位时完全靠裸 schema
+
+当前实现里，retrieval corpus 的向量部分已经不再是“启动时全量 embedding 但只放内存”：
+
+- `RetrievalService` 先构建 `example / metric / knowledge / join_pattern` corpus documents
+- `VectorCorpusStoreService` 会把 corpus 与 runtime 库中的 `vector_corpus_documents` 做对比
+- 只对 `new / changed` 文档重建 embedding
+- 重建或复用后的向量再加载回 `VectorRetriever` 内存索引
+- 检索阶段仍然是进程内 brute-force cosine search，没有引入独立向量数据库或 ANN
+
+这意味着当前向量链路是：
+
+- **runtime 库负责持久化 corpus embedding**
+- **应用内存负责实际向量检索**
 
 ### 7.2 PromptBuilder
 
@@ -1180,6 +1196,13 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 - evaluation summary
 - replay 结果查看
 
+其中 `runtime status` 当前会同时暴露：
+
+- business / runtime 数据库连接状态
+- LLM 健康状态
+- vector retrieval 的 query embedding 配置、就绪状态和已加载向量签名
+- retrieval corpus 文档规模，以及最近一次向量 sync 的复用 / 重建摘要
+
 ### 14.2 replay / materialize
 
 管理台的重要作用不是“看个表”，而是把失败样本沉淀成资产：
@@ -1238,7 +1261,7 @@ orchestrator 在完成 `ChatResponse` 后，会把一个安全版本的响应快
 
 当前 SSE 模式仍有边界：
 
-- ProgressService 是进程内 subscriber queue，不是跨进程事件总线
+- ProgressService 是进程内 subscriber channel，不是跨进程事件总线
 - 多 worker / 多实例场景下，需要额外的共享事件机制才可横向扩展
 - 现在更适合单实例或同进程内的工作台执行流
 
@@ -1351,6 +1374,7 @@ runtime 库负责：
 - traces
 - feedback
 - evaluation_runs
+- vector_corpus_documents
 
 这种拆分的好处是：
 

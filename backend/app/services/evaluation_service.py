@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 from pathlib import Path
+import threading
 import uuid
-from collections import Counter
 
 from backend.app.config import EVAL_CASES_PATH
 from backend.app.models.api import PlanRequest
@@ -24,6 +25,7 @@ from backend.app.models.evaluation import (
     RuntimeQueryLogMaterializeCaseRequest,
 )
 from backend.app.models.query_plan import QueryPlan
+from backend.app.utils import atomic_write_text
 
 
 class EvaluationService:
@@ -44,21 +46,24 @@ class EvaluationService:
         self.runtime_log_repository = runtime_log_repository
         self.auth_service = auth_service
         self.response_restore_service = response_restore_service
+        self._cases_lock = threading.RLock()
         self.eval_cases_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.eval_cases_path.exists():
-            self.eval_cases_path.write_text('[]\n', encoding='utf-8')
+            atomic_write_text(self.eval_cases_path, '[]\n')
 
     def list_cases(self) -> EvaluationCaseCollection:
-        cases = self._load_cases()
+        with self._cases_lock:
+            cases = self._load_cases()
         return EvaluationCaseCollection(cases=cases, count=len(cases))
 
     def create_case(self, payload: dict | EvaluationCase) -> EvaluationCase:
-        case = payload if isinstance(payload, EvaluationCase) else EvaluationCase(**payload)
-        cases = self._load_cases()
-        if any(item.id == case.id for item in cases):
-            raise ValueError(f"evaluation case id already exists: {case.id}")
-        cases.append(case)
-        self._save_cases(cases)
+        with self._cases_lock:
+            case = payload if isinstance(payload, EvaluationCase) else EvaluationCase(**payload)
+            cases = self._load_cases()
+            if any(item.id == case.id for item in cases):
+                raise ValueError(f"evaluation case id already exists: {case.id}")
+            cases.append(case)
+            self._save_cases(cases)
         return case
 
     def list_runs(self) -> list[EvaluationRunRecord]:
@@ -259,7 +264,8 @@ class EvaluationService:
         )
 
     def run(self, request: EvaluationRunRequest) -> EvaluationRunRecord:
-        cases = self._load_cases()
+        with self._cases_lock:
+            cases = self._load_cases()
         if request.case_ids:
             case_lookup = {item.id: item for item in cases}
             selected = [case_lookup[item] for item in request.case_ids if item in case_lookup]
@@ -463,9 +469,10 @@ class EvaluationService:
         return "runtime_captured"
 
     def _get_case(self, case_id: str) -> EvaluationCase:
-        for item in self._load_cases():
-            if item.id == case_id:
-                return item
+        with self._cases_lock:
+            for item in self._load_cases():
+                if item.id == case_id:
+                    return item
         raise KeyError(case_id)
 
     def _resolve_replay_user(
@@ -663,9 +670,9 @@ class EvaluationService:
         return [EvaluationCase(**item) for item in payload]
 
     def _save_cases(self, cases: list[EvaluationCase]) -> None:
-        self.eval_cases_path.write_text(
+        atomic_write_text(
+            self.eval_cases_path,
             json.dumps([item.model_dump(mode='json') for item in cases], ensure_ascii=False, indent=2) + "\n",
-            encoding='utf-8',
         )
 
     def _accumulate_dimension(

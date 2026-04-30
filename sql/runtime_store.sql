@@ -115,3 +115,20 @@ CREATE TABLE IF NOT EXISTS evaluation_runs (
   run_json LONGTEXT NOT NULL,
   created_at DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS vector_corpus_documents (
+  document_id VARCHAR(64) PRIMARY KEY,
+  source_type VARCHAR(64) NOT NULL,
+  source_id VARCHAR(191) NOT NULL,
+  summary TEXT NULL,
+  text_content LONGTEXT NOT NULL,
+  metadata_json LONGTEXT NULL,
+  content_hash VARCHAR(64) NOT NULL,
+  embedding_provider VARCHAR(64) NOT NULL,
+  embedding_backend VARCHAR(64) NOT NULL,
+  embedding_model VARCHAR(191) NOT NULL,
+  embedding_dimensions INT NOT NULL,
+  vector_json LONGTEXT NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL
+);

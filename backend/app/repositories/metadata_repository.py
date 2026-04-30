@@ -10,6 +10,7 @@ from backend.app.config import (
     DOMAIN_CONFIG_PATH,
     SESSION_STATE_SCHEMA_PATH,
 )
+from backend.app.utils import atomic_write_text
 
 
 class FileMetadataRepository:
@@ -32,11 +33,12 @@ class FileMetadataRepository:
     def write(self, name: str, content) -> Path:
         path = self._resolve(name)
         if path.suffix == ".json":
-            with path.open("w", encoding="utf-8") as file:
-                json.dump(content, file, ensure_ascii=False, indent=2)
-                file.write("\n")
+            atomic_write_text(
+                path,
+                json.dumps(content, ensure_ascii=False, indent=2) + "\n",
+            )
         else:
-            path.write_text(str(content), encoding="utf-8")
+            atomic_write_text(path, str(content))
         return path
 
     def list_names(self) -> list[str]:

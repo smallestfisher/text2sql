@@ -432,7 +432,7 @@
   - 多维分组：使用 `_by_` 连接
   - 无维度但有指标：`metric_only`
 - 新样例优先通过 `materialize-example` 物化，再补充必要的 `notes`
-- `materialize-example` 写入后当前会立即刷新 retrieval 索引；通常不需要重启服务
+- `materialize-example` 写入后当前会触发 retrieval corpus reload；受影响向量会增量重建并持久化到 runtime 库，通常不需要重启服务
 - 如果一条样例会误导同域其他问题，即使来源真实，也不应该继续保留在 example 集里
 
 ### 9.2 推荐沉淀流程
