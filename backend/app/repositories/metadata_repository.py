@@ -22,6 +22,9 @@ class FileMetadataRepository:
             "query_plan_schema": QUERY_PLAN_SCHEMA_PATH,
             "session_state_schema": SESSION_STATE_SCHEMA_PATH,
         }
+        # Backward-compatible alias for older callers that still access
+        # metadata_repository.documents directly.
+        self.documents = self.paths
 
     def read(self, name: str):
         path = self._resolve(name)
