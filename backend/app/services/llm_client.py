@@ -8,6 +8,11 @@ from openai import OpenAI
 
 from backend.app.core.exceptions import LLMServiceError
 
+try:
+    import sqlglot
+except Exception:  # pragma: no cover - optional dependency
+    sqlglot = None
+
 
 class LLMClient:
     def __init__(
@@ -17,12 +22,14 @@ class LLMClient:
         api_base: str | None = None,
         timeout_seconds: int = 20,
         max_retries: int = 2,
+        repair_max_retries: int | None = None,
     ) -> None:
         self.model_name = model_name
         self.api_key = api_key
         self.api_base = api_base
         self.timeout_seconds = timeout_seconds
         self.max_retries = max(1, max_retries)
+        self.repair_max_retries = max(1, repair_max_retries if repair_max_retries is not None else max_retries)
         self.client = None
         if api_key:
             self.client = OpenAI(api_key=api_key, base_url=api_base)
@@ -233,13 +240,13 @@ class LLMClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False)},
         ]
-        for attempt in range(1, self.max_retries + 1):
+        for attempt in range(1, self.repair_max_retries + 1):
             try:
                 content = self._complete(messages).strip()
                 repaired = self._extract_sql(content)
                 if repaired and self._is_readonly_select(repaired):
                     return repaired
-                if attempt < self.max_retries:
+                if attempt < self.repair_max_retries:
                     messages.append({"role": "assistant", "content": content})
                     messages.append(
                         {
@@ -248,7 +255,7 @@ class LLMClient:
                         }
                     )
             except Exception:
-                if attempt >= self.max_retries:
+                if attempt >= self.repair_max_retries:
                     return None
                 time.sleep(min(0.4 * attempt, 1.0))
         return None
@@ -260,6 +267,7 @@ class LLMClient:
             "api_base": self.api_base,
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
+            "repair_max_retries": self.repair_max_retries,
         }
 
     def _require_enabled(self, task_name: str) -> None:
@@ -294,16 +302,21 @@ class LLMClient:
     def _extract_sql(self, content: str) -> str | None:
         if not content:
             return None
-        fence_match = re.search(r"```(?:sql)?\s*(.*?)```", content, re.DOTALL | re.IGNORECASE)
-        if fence_match:
-            content = fence_match.group(1).strip()
-        statements = [item.strip() for item in re.split(r";\s*", content) if item.strip()]
-        if len(statements) != 1:
-            return None
-        return statements[0] + ";"
+        for candidate in self._sql_candidates(content):
+            normalized = candidate.rstrip(";").strip()
+            if not normalized:
+                continue
+            sql = normalized + ";"
+            if not self._is_readonly_select(sql):
+                continue
+            if not self._is_single_sql_statement(sql):
+                continue
+            return sql
+        return None
 
     def _is_readonly_select(self, sql: str) -> bool:
-        normalized = f" {sql.lower()} "
+        compact = re.sub(r"\s+", " ", self._strip_sql_comments(sql).lower()).strip()
+        normalized = f" {compact} "
         stripped = normalized.strip()
         if not (stripped.startswith("select") or stripped.startswith("with")):
             return False
@@ -311,3 +324,113 @@ class LLMClient:
         if any(keyword in normalized for keyword in forbidden):
             return False
         return " limit " in normalized
+
+    def _sql_candidates(self, content: str) -> list[str]:
+        cleaned = self._strip_reasoning_markup(content).strip()
+        if not cleaned:
+            return []
+
+        candidates: list[str] = []
+        fence_matches = re.findall(r"```(?:sql)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+        candidates.extend(match.strip() for match in fence_matches if match.strip())
+
+        unfenced = re.sub(
+            r"```(?:sql)?\s*(.*?)```",
+            lambda match: match.group(1).strip(),
+            cleaned,
+            flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+        for match in re.finditer(r"(?is)\b(?:with|select)\b", unfenced):
+            remainder = unfenced[match.start():].strip()
+            if not remainder:
+                continue
+            first_statement = self._truncate_first_statement(remainder)
+            if first_statement:
+                candidates.append(first_statement)
+            candidates.extend(self._trimmed_line_candidates(remainder))
+
+        if unfenced:
+            candidates.append(unfenced)
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for candidate in candidates:
+            normalized = candidate.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(normalized)
+        return ordered
+
+    def _trimmed_line_candidates(self, content: str) -> list[str]:
+        lines = [line.rstrip() for line in content.splitlines() if line.strip()]
+        if len(lines) <= 1:
+            return []
+        candidates: list[str] = []
+        for end in range(len(lines) - 1, 0, -1):
+            candidate = "\n".join(lines[:end]).strip()
+            if candidate:
+                candidates.append(candidate)
+        full_content = "\n".join(lines).strip()
+        if full_content:
+            candidates.append(full_content)
+        return candidates
+
+    def _truncate_first_statement(self, content: str) -> str | None:
+        if not content:
+            return None
+        in_single_quote = False
+        in_double_quote = False
+        in_backtick = False
+        escaped = False
+        for index, char in enumerate(content):
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\" and (in_single_quote or in_double_quote):
+                escaped = True
+                continue
+            if in_single_quote:
+                if char == "'":
+                    in_single_quote = False
+                continue
+            if in_double_quote:
+                if char == '"':
+                    in_double_quote = False
+                continue
+            if in_backtick:
+                if char == "`":
+                    in_backtick = False
+                continue
+            if char == "'":
+                in_single_quote = True
+                continue
+            if char == '"':
+                in_double_quote = True
+                continue
+            if char == "`":
+                in_backtick = True
+                continue
+            if char == ";":
+                return content[: index + 1].strip()
+        return None
+
+    def _strip_reasoning_markup(self, content: str) -> str:
+        cleaned = re.sub(r"<think>.*?</think>", " ", content, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = re.sub(r"<analysis>.*?</analysis>", " ", cleaned, flags=re.DOTALL | re.IGNORECASE)
+        return cleaned.strip()
+
+    def _strip_sql_comments(self, sql: str) -> str:
+        without_block_comments = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+        without_line_comments = re.sub(r"(--|#)[^\n]*", " ", without_block_comments)
+        return without_line_comments
+
+    def _is_single_sql_statement(self, sql: str) -> bool:
+        if sqlglot is None:
+            statements = [item.strip() for item in re.split(r";\s*", sql) if item.strip()]
+            return len(statements) == 1
+        try:
+            statements = sqlglot.parse(sql, read="mysql")
+        except Exception:
+            return False
+        return len(statements) == 1

@@ -98,6 +98,8 @@
   - 语义配置 manifest
 - `semantic/domain_config/*`
   - `domain_config` 的分片内容，最终由 `DomainConfigLoader` 合并
+- `semantic/domain_config/base/prompt_assets.json`
+  - 分类、relevance、intent、SQL 生成的静态 prompt 资产
 - `sql/runtime_store.sql`
   - runtime 库表结构定义
 
@@ -107,6 +109,12 @@
 - `metrics/*`
 - `query_profiles/*`
 - `semantic_graph/*`
+
+其中当前 `query_profiles/*` 不只描述字段边界，还会承载：
+
+- `exclusive_source_groups`
+- `support_tables`
+- `post_process_rules`
 
 ---
 
@@ -307,8 +315,10 @@
 它会在 retrieval 结果已经出来之后，对 `QueryPlan` 做一层 retrieval-aware compile，当前主要包括：
 
 - 当 `subject_domain = unknown` 时，基于 retrieval 命中补 domain
-- 基于 example / join pattern 命中补 support tables
+- 基于 example / join pattern 命中补 retrieval table hints
 - 再交给 `SemanticRuntime.sanitize_query_plan()` 收口
+
+`support table`、显式 source 互斥和少量 post-process 规则，当前主要由 `query_profiles` 驱动，而不是在 compiler 里硬编码。
 
 ### 7.7 QueryPlanValidator
 
@@ -372,6 +382,12 @@
 - `join_patterns`
 
 这也是当前 few-shot 和业务知识进入 SQL 生成的真实入口。
+
+静态指令本身当前来自：
+
+- `semantic/domain_config/base/prompt_assets.json`
+
+也就是说，`PromptBuilder` 现在主要负责“选哪些上下文进入 prompt”，而不是在 Python 里硬编码大段业务说明。
 
 ---
 
@@ -453,6 +469,13 @@
 
 如果 LLM 不可用或返回非法结果，主链路会显式失败，不再静默降级。
 
+当前生成与 repair 的重试预算已经拆开：
+
+- `LLM_MAX_RETRIES`
+  - 控制分类 / intent / SQL 首轮生成
+- `SQL_REPAIR_MAX_RETRIES`
+  - 控制通用 SQL repair fallback
+
 ### 10.3 SqlValidator
 
 [backend/app/services/sql_validator.py](/home/y/llm/new/backend/app/services/sql_validator.py)
@@ -467,6 +490,12 @@ SQL validator 当前会校验：
 - 风险级别和风险 flags
 
 当前只允许一次 repair，不做无限循环自修。
+
+这里的 repair 是通用 fallback：
+
+- 输入是 `original_prompt + 原 SQL + validator/executor 反馈`
+- 目标是修正 shape、过滤、LIMIT、只读约束等问题
+- 当前主链路已经不再保留业务特化 repair 分支
 
 ### 10.4 SqlExecutor
 

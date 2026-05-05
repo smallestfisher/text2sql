@@ -54,6 +54,19 @@
         "prefer_metric_tables": true,
         "use_domain_tables_when_metric_tables_missing": true
       },
+      "exclusive_source_groups": [
+        ["daily_inventory", "oms_inventory"]
+      ],
+      "support_tables": [
+        {
+          "table": "product_attributes",
+          "when_table_fields": true,
+          "exclude_table_fields": [
+            "id",
+            "product_ID"
+          ]
+        }
+      ],
       "default_sort": [
         {
           "field": "biz_date",

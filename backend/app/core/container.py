@@ -78,6 +78,7 @@ class AppContainer:
             api_base=self.settings.openai_api_base,
             timeout_seconds=self.settings.llm_timeout_seconds,
             max_retries=self.settings.llm_max_retries,
+            repair_max_retries=self.settings.sql_repair_max_retries,
         )
         self.intent_service = IntentService(
             llm_client=self.llm_client,

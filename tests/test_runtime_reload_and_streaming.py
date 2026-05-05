@@ -11,6 +11,7 @@ from backend.app.api import dependencies
 from backend.app.api.routes.chat import chat_query_stream
 from backend.app.models.api import PlanRequest
 from backend.app.services.progress_service import ProgressService
+from backend.app.services.llm_client import LLMClient
 from backend.app.services.vector_retriever import VectorRetriever
 from backend.app.utils import atomic_write_text
 
@@ -97,6 +98,48 @@ class StreamingRouteTests(unittest.TestCase):
             payload = asyncio.run(run_case())
         self.assertIn("event: failed", payload)
         self.assertIn("boom", payload)
+
+
+class LLMClientSqlExtractionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = LLMClient()
+
+    def test_extract_sql_from_think_block_and_fenced_sql(self) -> None:
+        content = """
+<think>
+先分析表和字段，再输出 SQL。
+</think>
+```sql
+SELECT factory_code, SUM(qty) AS total_qty
+FROM inventory
+GROUP BY factory_code
+LIMIT 20;
+```
+"""
+
+        sql = self.client._extract_sql(content)
+
+        self.assertEqual(
+            sql,
+            "SELECT factory_code, SUM(qty) AS total_qty\nFROM inventory\nGROUP BY factory_code\nLIMIT 20;",
+        )
+
+    def test_extract_sql_ignores_prefix_and_trailing_explanation(self) -> None:
+        content = """
+下面是 SQL：
+SELECT biz_month, SUM(input_qty) AS total_input
+FROM production_actuals
+GROUP BY biz_month
+LIMIT 50
+说明：按月份汇总实际投入。
+"""
+
+        sql = self.client._extract_sql(content)
+
+        self.assertEqual(
+            sql,
+            "SELECT biz_month, SUM(input_qty) AS total_input\nFROM production_actuals\nGROUP BY biz_month\nLIMIT 50;",
+        )
 
 
 if __name__ == "__main__":

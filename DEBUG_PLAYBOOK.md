@@ -18,7 +18,9 @@
 2. `semantic/business_knowledge.json`
 3. `examples/nl2sql_examples.template.json`
 4. `semantic/join_patterns.json`
-5. PromptBuilder / retrieval / validator
+5. `semantic/domain_config/base/prompt_assets.json`
+6. `semantic/domain_config/query_profiles/*.json`
+7. PromptBuilder / retrieval / validator
 
 不要一上来就加本地 SQL 模板或单题规则分支。
 
@@ -284,6 +286,12 @@
 - `QueryPlanCompiler`
 - `QueryPlanValidator`
 
+当前要特别注意：
+
+- support table 补全优先看 `query_profiles.support_tables`
+- 显式 `source_table` 互斥优先看 `query_profiles.exclusive_source_groups`
+- 少量 plan 后处理优先看 `query_profiles.post_process_rules`
+
 ### 6.4 SQL 生成
 
 先看：
@@ -302,6 +310,7 @@
 优先修：
 
 - `PromptBuilder`
+- `semantic/domain_config/base/prompt_assets.json`
 - `semantic/tables.json`
 - `semantic/business_knowledge.json`
 - `examples`
@@ -327,6 +336,12 @@
 - `SqlValidator`
 - `SqlAstValidator`
 - Query Plan shape contract
+
+补充说明：
+
+- 当前 repair 是通用 fallback，不是业务特化补丁
+- repair 重试次数由 `SQL_REPAIR_MAX_RETRIES` 控制
+- 如果问题本质是业务理解错、example 没命中、知识资产不够，不要指望 repair 兜底
 
 ### 6.6 Execution
 
@@ -460,6 +475,8 @@
 
 - `semantic/business_knowledge.json`
 - demand 相关 example
+- `semantic/domain_config/base/prompt_assets.json`
+- `semantic/domain_config/query_profiles/demand.json`
 - PromptBuilder 的上下文构造
 - validator 的结构约束
 

@@ -55,6 +55,41 @@
         "prefer_metric_tables": true,
         "use_domain_tables_when_metric_tables_missing": true
       },
+      "exclusive_source_groups": [
+        ["p_demand", "v_demand"]
+      ],
+      "support_tables": [
+        {
+          "table": "product_attributes",
+          "when_metrics": [
+            "product_count"
+          ],
+          "when_table_fields": true,
+          "exclude_table_fields": [
+            "id",
+            "product_ID"
+          ]
+        }
+      ],
+      "post_process_rules": [
+        {
+          "name": "scalar_product_count_with_month_filter",
+          "when_metrics": [
+            "product_count"
+          ],
+          "when_any_filter_fields": [
+            "demand_month",
+            "biz_month"
+          ],
+          "clear_dimensions_if_subset": [
+            "biz_month",
+            "PM_VERSION"
+          ],
+          "clear_sort_if_all_fields": [
+            "biz_month"
+          ]
+        }
+      ],
       "default_sort": [
         {
           "field": "biz_month",

@@ -382,5 +382,49 @@
     "sql": "SELECT oms_inventory.report_month AS biz_month, SUM(oms_inventory.glass_qty) AS inventory_glass_qty, SUM(oms_inventory.panel_qty) AS inventory_panel_qty FROM oms_inventory WHERE oms_inventory.report_month BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m') AND DATE_FORMAT(CURDATE(), '%Y-%m') GROUP BY oms_inventory.report_month ORDER BY oms_inventory.report_month LIMIT 200;",
     "result_shape": "biz_month",
     "notes": "真实问题样例。当前校验目标是 OMS 库存趋势必须走 oms_inventory，按 biz_month 展示，并在非库龄场景下默认同时返回 glass_qty 与 panel_qty 两套库存口径。"
+  },
+  {
+    "id": "inventory_oms_latest_ttl_age_distribution_001",
+    "question": "最新OMS库存，TtL物量，对应库龄分布情况，库龄分为<3M、3-6M、6-12M、>12M",
+    "normalized_question": "最新oms库存，ttl物量，对应库龄分布情况，库龄分为<3m、3-6m、6-12m、>12m",
+    "intent": "查询最新一期 OMS 库存 TTL 物量的四档库龄分布，不额外按产品分类拆分。",
+    "scenario": "real_debug_case",
+    "coverage_tags": [
+      "real",
+      "inventory",
+      "oms_inventory",
+      "latest_month",
+      "ttl_volume",
+      "age_distribution"
+    ],
+    "subject_domain": "inventory",
+    "question_type": "new",
+    "tables": [
+      "oms_inventory"
+    ],
+    "entities": [],
+    "metrics": [
+      "inventory_qty"
+    ],
+    "dimensions": [],
+    "filters": [
+      {
+        "field": "source_table",
+        "op": "=",
+        "value": "oms_inventory"
+      },
+      {
+        "field": "biz_month",
+        "op": "latest_n",
+        "value": {
+          "count": 1,
+          "source_table": "oms_inventory"
+        }
+      }
+    ],
+    "join_path": [],
+    "sql": "SELECT SUM(ONE_AGE_panel_qty + TWO_AGE_panel_qty + THREE_AGE_panel_qty) AS lt_3m_qty, SUM(FOUR_AGE_panel_qty) AS m3_6m_qty, SUM(FIVE_AGE_panel_qty) AS m6_12m_qty, SUM(SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty) AS gt_12m_qty FROM oms_inventory WHERE report_month = (SELECT MAX(report_month) FROM oms_inventory) LIMIT 200;",
+    "result_shape": "single_row_age_bucket_distribution",
+    "notes": "真实调试样例。该问题验证最新 OMS 库存默认取最新 report_month，并把原始 8 个库龄列归并成 <3M、3-6M、6-12M、>12M 四个库龄桶。"
   }
 ]

@@ -4,8 +4,7 @@ from typing import Any
 
 from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.intent import StructuredIntent
-from backend.app.models.query_plan import QueryPlan
-from backend.app.models.query_plan import SortItem
+from backend.app.models.query_plan import FilterItem, QueryPlan, SortItem
 from backend.app.models.session_state import SessionState
 from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.intent_service import IntentService
@@ -194,44 +193,10 @@ class QueryPlanner:
         classification = planning_trace["classification"]
         warnings = planning_trace["warnings"]
 
-        matched_entities = query_intent.matched_entities
-        matched_metrics = query_intent.matched_metrics
-        filters = query_intent.filters
-        time_context = query_intent.time_context
-        version_context = query_intent.version_context
-        analysis_mode = query_intent.analysis_mode
-        sort = list(query_intent.requested_sort)
-        limit = query_intent.requested_limit or self.semantic_runtime.default_limit(classification.subject_domain)
-        requested_dimensions = list(query_intent.requested_dimensions)
-
-        if classification.question_type == "follow_up" and session_state is not None:
-            context_delta = classification.context_delta or self.semantic_runtime.build_context_delta(query_intent)
-            merged = self.semantic_runtime.merge_with_session(
-                session_state=session_state,
-                query_intent=query_intent,
-                context_delta=context_delta,
-            )
-            matched_entities = merged.matched_entities
-            matched_metrics = merged.matched_metrics
-            filters = merged.filters
-            time_context = merged.time_context
-            version_context = merged.version_context
-            analysis_mode = merged.analysis_mode
-            sort = list(merged.requested_sort)
-            limit = merged.requested_limit or limit
-            requested_dimensions = list(merged.requested_dimensions)
-
         query_plan = self.build_plan_from_intent(
             classification=classification,
-            matched_metrics=matched_metrics,
-            matched_entities=matched_entities,
-            filters=filters,
-            time_context=time_context,
-            version_context=version_context,
-            analysis_mode=analysis_mode,
-            sort=sort,
-            limit=limit,
-            requested_dimensions=requested_dimensions,
+            query_intent=query_intent,
+            session_state=session_state,
         )
         return query_intent, classification, query_plan, warnings
 

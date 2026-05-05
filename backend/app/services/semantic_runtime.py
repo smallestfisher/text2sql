@@ -686,13 +686,13 @@ class SemanticRuntime:
         profile = self.query_profiles.get(query_plan.subject_domain, {})
         compiled = query_plan.model_copy(deep=True)
 
-        compiled = self._apply_explicit_source_table(compiled)
+        compiled = self._apply_explicit_source_table(compiled, profile)
 
         compiled = self._inject_time_filters(compiled, profile)
         compiled = self._inject_version_filter(compiled, profile)
         compiled = self._inject_default_sort(compiled, profile)
-        compiled = self._augment_dimension_tables(compiled)
-        compiled = self._normalize_scalar_demand_product_count(compiled)
+        compiled = self._augment_dimension_tables(compiled, profile)
+        compiled = self._apply_post_process_rules(compiled, profile)
 
         drop_dimensions = set(profile.get("drop_dimensions", []))
         if drop_dimensions:
@@ -735,55 +735,45 @@ class SemanticRuntime:
 
         return compiled
 
-    def _augment_dimension_tables(self, query_plan: QueryPlan) -> QueryPlan:
+    def _augment_dimension_tables(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
-        if not self._needs_product_attributes(compiled):
-            return compiled
-
         ordered_tables = list(compiled.tables)
-        for table_name in ["product_attributes"]:
+        for rule in self._support_table_rules(profile):
+            table_name = str(rule.get("table", "")).strip()
+            if not table_name or table_name in ordered_tables:
+                continue
+            if not self._support_table_rule_matches(compiled, rule):
+                continue
             if table_name not in ordered_tables:
                 ordered_tables.append(table_name)
         compiled.tables = ordered_tables
         return compiled
 
-    def _needs_product_attributes(self, query_plan: QueryPlan) -> bool:
-        filter_fields = {item.field for item in query_plan.filters}
-        if query_plan.subject_domain == "demand" and (
-            "product_count" in query_plan.metrics
-            or "IS_OXIDE" in filter_fields
-        ):
-            return True
-
-        referenced_fields = set(query_plan.dimensions).union(filter_fields)
-        return bool(referenced_fields.intersection(self._product_attribute_support_fields()))
-
-    def _product_attribute_support_fields(self) -> set[str]:
-        return {
-            field_name
-            for field_name in self.table_fields("product_attributes")
-            if field_name not in {"id", "product_ID"}
-        }
-
-    def _normalize_scalar_demand_product_count(self, query_plan: QueryPlan) -> QueryPlan:
+    def _apply_post_process_rules(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
-        if compiled.subject_domain != "demand":
-            return compiled
-        if "product_count" not in compiled.metrics:
-            return compiled
-
-        filter_fields = {item.field for item in compiled.filters}
-        has_month_filter = bool({"demand_month", "biz_month"}.intersection(filter_fields))
-        if not has_month_filter:
-            return compiled
-
-        if set(compiled.dimensions).issubset({"biz_month", "PM_VERSION"}):
-            compiled.dimensions = []
-        if all(item.field == "biz_month" for item in compiled.sort):
-            compiled.sort = []
+        for rule in self._post_process_rules(profile):
+            if not self._post_process_rule_matches(compiled, rule):
+                continue
+            clear_dimensions_if_subset = {
+                str(item)
+                for item in rule.get("clear_dimensions_if_subset", [])
+                if item
+            }
+            if clear_dimensions_if_subset and set(compiled.dimensions).issubset(clear_dimensions_if_subset):
+                compiled.dimensions = []
+            clear_sort_if_all_fields = {
+                str(item)
+                for item in rule.get("clear_sort_if_all_fields", [])
+                if item
+            }
+            if clear_sort_if_all_fields and compiled.sort and all(
+                item.field in clear_sort_if_all_fields
+                for item in compiled.sort
+            ):
+                compiled.sort = []
         return compiled
 
-    def _apply_explicit_source_table(self, query_plan: QueryPlan) -> QueryPlan:
+    def _apply_explicit_source_table(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
         explicit_source = next(
             (
@@ -803,10 +793,11 @@ class SemanticRuntime:
         if allowed_domain_tables and explicit_source not in allowed_domain_tables:
             return compiled
 
-        exclusive_source_groups = (
-            {"p_demand", "v_demand"},
-            {"daily_inventory", "oms_inventory"},
-        )
+        exclusive_source_groups = [
+            {str(item) for item in group if item}
+            for group in profile.get("exclusive_source_groups", [])
+            if isinstance(group, list)
+        ]
         competing_tables = next(
             (group for group in exclusive_source_groups if explicit_source in group),
             set(),
@@ -818,6 +809,97 @@ class SemanticRuntime:
         ]
         compiled.tables = [explicit_source, *other_tables]
         return compiled
+
+    def _support_table_rules(self, profile: dict) -> list[dict]:
+        rules = profile.get("support_tables", [])
+        return rules if isinstance(rules, list) else []
+
+    def _support_table_rule_matches(self, query_plan: QueryPlan, rule: dict) -> bool:
+        if not isinstance(rule, dict):
+            return False
+        table_name = str(rule.get("table", "")).strip()
+        if not table_name or not self.is_known_table(table_name):
+            return False
+
+        matched = False
+        required_metrics = {
+            str(item)
+            for item in rule.get("when_metrics", [])
+            if item
+        }
+        if required_metrics and required_metrics.intersection(set(query_plan.metrics)):
+            matched = True
+
+        referenced_fields = set(query_plan.dimensions).union(item.field for item in query_plan.filters)
+        explicit_fields = {
+            str(item)
+            for item in rule.get("when_fields", [])
+            if item
+        }
+        if explicit_fields and explicit_fields.intersection(referenced_fields):
+            matched = True
+
+        if bool(rule.get("when_table_fields")):
+            table_fields = self._support_table_rule_field_candidates(table_name, rule)
+            if table_fields.intersection(referenced_fields):
+                matched = True
+
+        return matched
+
+    def _support_table_rule_field_candidates(self, table_name: str, rule: dict) -> set[str]:
+        excluded_fields = {
+            str(item)
+            for item in rule.get("exclude_table_fields", [])
+            if item
+        }
+        return {
+            field_name
+            for field_name in self.table_fields(table_name)
+            if field_name not in excluded_fields
+        }
+
+    def _post_process_rules(self, profile: dict) -> list[dict]:
+        rules = profile.get("post_process_rules", [])
+        return rules if isinstance(rules, list) else []
+
+    def _post_process_rule_matches(self, query_plan: QueryPlan, rule: dict) -> bool:
+        if not isinstance(rule, dict):
+            return False
+        has_trigger = False
+        metrics = set(query_plan.metrics)
+        filter_fields = {item.field for item in query_plan.filters}
+
+        required_metrics = {
+            str(item)
+            for item in rule.get("when_metrics", [])
+            if item
+        }
+        if required_metrics:
+            has_trigger = True
+            if not required_metrics.issubset(metrics):
+                return False
+
+        any_filter_fields = {
+            str(item)
+            for item in rule.get("when_any_filter_fields", [])
+            if item
+        }
+        if any_filter_fields:
+            has_trigger = True
+            if not any_filter_fields.intersection(filter_fields):
+                return False
+
+        all_filter_fields = {
+            str(item)
+            for item in rule.get("when_all_filter_fields", [])
+            if item
+        }
+        if all_filter_fields:
+            has_trigger = True
+            if not all_filter_fields.issubset(filter_fields):
+                return False
+
+        return has_trigger
 
     def resolve_join_path(self, tables: list[str]) -> list[str]:
         if len(tables) < 2:
@@ -1399,7 +1481,7 @@ class SemanticRuntime:
             return compiled
         if compiled.dimensions:
             return compiled
-        if compiled.analysis_mode == "compare" and not compiled.dimensions:
+        if compiled.analysis_mode in {"compare", "distribution"} and not compiled.dimensions:
             return compiled
         default_sort = profile.get("default_sort", [])
         if not default_sort:

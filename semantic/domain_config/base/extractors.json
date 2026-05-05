@@ -347,6 +347,13 @@
         ]
       },
       {
+        "mode": "distribution",
+        "pattern": "分布|分布情况",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
         "mode": "compare",
         "pattern": "对比|比较|对照|gap|达成率|差异|差额",
         "flags": [

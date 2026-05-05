@@ -199,7 +199,7 @@ class IntentNormalizer:
         return candidates[0]
 
     def _normalize_analysis_mode(self, analysis_mode: str | None) -> str | None:
-        if analysis_mode in {"trend", "compare", "ranking", "summary"}:
+        if analysis_mode in {"trend", "compare", "ranking", "summary", "distribution"}:
             return analysis_mode
         return None
 

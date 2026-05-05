@@ -8,15 +8,6 @@ from backend.app.models.query_plan import QueryPlan
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.sql_ast_validator import SqlAstValidator
 
-try:
-    import sqlglot
-    from sqlglot import exp
-    from sqlglot.errors import ParseError
-except Exception:  # pragma: no cover - optional dependency
-    sqlglot = None
-    exp = None
-    ParseError = Exception
-
 
 @dataclass
 class SqlValidationResult:
@@ -104,7 +95,7 @@ class SqlValidator:
         allowed_sources = set(physical_sources)
         allowed_sources.update(inspection.cte_names)
 
-        used_sources = inspection.sources
+        used_sources = list(dict.fromkeys(inspection.sources))
         unknown_sources = [source for source in used_sources if source not in allowed_sources]
         if unknown_sources:
             errors.append(f"sql references unknown sources: {', '.join(unknown_sources)}")
@@ -120,6 +111,7 @@ class SqlValidator:
                 filter_item.field
                 for filter_item in query_plan.filters
                 if filter_item.field
+                and self._is_sql_enforceable_filter_field(filter_item.field)
                 and not self._filter_is_covered(
                     query_plan,
                     filter_item.field,
@@ -169,19 +161,6 @@ class SqlValidator:
             version_errors = self._validate_version_context(query_plan, filter_scope)
             errors.extend(version_errors)
 
-            demand_version_projection_errors = self._validate_demand_version_projection(
-                query_plan,
-                sql,
-            )
-            errors.extend(demand_version_projection_errors)
-
-            demand_month_errors = self._validate_horizontal_demand_month_mapping(
-                query_plan,
-                sql,
-                used_sources,
-            )
-            errors.extend(demand_month_errors)
-
             limit_errors = self._validate_limit_consistency(query_plan, inspection.limit_value, inspection.has_limit)
             errors.extend(limit_errors)
 
@@ -191,20 +170,8 @@ class SqlValidator:
             select_dimension_errors = self._validate_selected_dimensions(query_plan, inspection)
             errors.extend(select_dimension_errors)
 
-            monthly_demand_shape_errors = self._validate_demand_monthly_shape(query_plan, inspection)
-            errors.extend(monthly_demand_shape_errors)
-
-            demand_product_attribute_errors = self._validate_demand_product_attribute_filters(
-                query_plan,
-                sql,
-            )
-            errors.extend(demand_product_attribute_errors)
-
-            demand_product_count_errors = self._validate_demand_product_count_shape(
-                query_plan,
-                sql,
-            )
-            errors.extend(demand_product_count_errors)
+            unexpected_group_by_errors = self._validate_unexpected_group_by_fields(query_plan, inspection)
+            errors.extend(unexpected_group_by_errors)
 
         if required_filter_fields:
             if query_plan is None:
@@ -278,6 +245,9 @@ class SqlValidator:
         if not sql_fragment:
             return False
         return re.search(rf"\b{re.escape(field)}\b", sql_fragment, re.IGNORECASE) is not None
+
+    def _is_sql_enforceable_filter_field(self, logical_field: str) -> bool:
+        return logical_field not in {"source_table", "demand_source"}
 
     def _contains_any_field_reference(self, sql_fragment: str, fields: set[str]) -> bool:
         return any(self._contains_field_reference(sql_fragment, field) for field in fields)
@@ -441,111 +411,6 @@ class SqlValidator:
             return [f"sql limit {sql_limit} exceeds query plan limit {query_plan.limit}"]
         return []
 
-    def _validate_demand_version_projection(
-        self,
-        query_plan: QueryPlan,
-        sql: str,
-    ) -> list[str]:
-        version_field = query_plan.version_context.field if query_plan.version_context else None
-        if version_field != "PM_VERSION":
-            return []
-
-        if not {"p_demand", "v_demand"}.intersection(set(query_plan.tables)):
-            return []
-
-        if sqlglot is None or exp is None:
-            return []
-
-        try:
-            statement = sqlglot.parse_one(sql, read="mysql")
-        except ParseError:
-            return []
-
-        if statement is None:
-            return []
-
-        outer_from = statement.args.get("from")
-        if outer_from is None:
-            return []
-
-        outer_sources = {
-            table.name.lower()
-            for table in outer_from.find_all(exp.Table)
-            if getattr(table, "name", None)
-        }
-        if "demand_unpivot" not in outer_sources:
-            return []
-
-        outer_where = statement.find(exp.Where)
-        if outer_where is None:
-            return []
-
-        outer_where_fields = {
-            column.name.upper()
-            for column in outer_where.find_all(exp.Column)
-            if getattr(column, "name", None)
-        }
-        if version_field.upper() not in outer_where_fields:
-            return []
-
-        demand_cte = next(
-            (
-                cte
-                for cte in statement.find_all(exp.CTE)
-                if getattr(cte, "alias_or_name", "").lower() == "demand_unpivot"
-            ),
-            None,
-        )
-        if demand_cte is None:
-            return []
-
-        select_nodes = list(demand_cte.this.find_all(exp.Select))
-        if not select_nodes:
-            return []
-
-        missing_projection = False
-        for select_node in select_nodes:
-            projected_fields = {
-                expression.alias_or_name.upper()
-                for expression in select_node.expressions
-                if getattr(expression, "alias_or_name", None)
-            }
-            if version_field.upper() not in projected_fields:
-                missing_projection = True
-                break
-
-        if missing_projection:
-            return [
-                "demand_unpivot is filtered by PM_VERSION outside the CTE, but the CTE does not project PM_VERSION in every UNION branch"
-            ]
-        return []
-
-    def _validate_horizontal_demand_month_mapping(
-        self,
-        query_plan: QueryPlan,
-        sql: str,
-        used_sources: list[str],
-    ) -> list[str]:
-        has_demand_month_filter = any(item.field == "demand_month" for item in query_plan.filters)
-        if not has_demand_month_filter:
-            return []
-
-        demand_sources = {"p_demand", "v_demand"}
-        if not demand_sources.intersection(set(query_plan.tables) | set(used_sources)):
-            return []
-
-        raw_month_date_math_patterns = (
-            r"date_add\s*\(\s*(?:`?\w+`?\.)?`?month`?\s*,\s*interval",
-            r"adddate\s*\(\s*(?:`?\w+`?\.)?`?month`?\s*,",
-            r"timestampadd\s*\(\s*month\s*,\s*[^,]+,\s*(?:`?\w+`?\.)?`?month`?\s*\)",
-        )
-        lowered_sql = sql.lower()
-        if any(re.search(pattern, lowered_sql, re.IGNORECASE) for pattern in raw_month_date_math_patterns):
-            return [
-                "horizontal demand month mapping must not use date math on raw MONTH when target demand_month is compact YYYYMM; convert MONTH to a real date first and format back to YYYYMM, or map REQUIREMENT_QTY directly to base MONTH"
-            ]
-        return []
-
     def _validate_selected_dimensions(
         self,
         query_plan: QueryPlan,
@@ -566,100 +431,36 @@ class SqlValidator:
             ]
         return []
 
-    def _validate_demand_monthly_shape(
+    def _validate_unexpected_group_by_fields(
         self,
         query_plan: QueryPlan,
         inspection,
     ) -> list[str]:
-        if query_plan.subject_domain != 'demand':
+        if not query_plan.dimensions:
             return []
-        if query_plan.dimensions != ['demand_month']:
+        if not any(
+            function in self.ast_validator.AGGREGATE_FUNCTIONS
+            for function in inspection.outer_functions
+        ):
             return []
-        if 'demand_qty' not in query_plan.metrics:
+        actual_group_by_fields = {field.lower() for field in inspection.group_by_fields}
+        if not actual_group_by_fields:
             return []
-
-        select_fields = {field.lower() for field in inspection.select_fields}
-        group_by_fields = {field.lower() for field in inspection.group_by_fields}
-        demand_month_candidates = {field.lower() for field in self._field_candidates(query_plan, 'demand_month')}
-        if not demand_month_candidates:
-            demand_month_candidates = {'demand_month'}
-
-        errors: list[str] = []
-        if not demand_month_candidates.intersection(select_fields):
-            errors.append('monthly demand sql must project demand_month')
-        if inspection.functions and not demand_month_candidates.intersection(group_by_fields):
-            errors.append('monthly demand sql must group by demand_month')
-
-        forbidden_dimension_candidates = set()
-        for field in ('FGCODE', 'customer', 'PM_VERSION'):
-            forbidden_dimension_candidates.update(item.lower() for item in self._field_candidates(query_plan, field))
-        if forbidden_dimension_candidates.intersection(select_fields):
-            logger.warning(
-                "monthly demand outer select rejected forbidden=%s select_fields=%s group_by_fields=%s dimensions=%s metrics=%s",
-                sorted(forbidden_dimension_candidates.intersection(select_fields)),
-                inspection.select_fields,
-                inspection.group_by_fields,
-                query_plan.dimensions,
-                query_plan.metrics,
-            )
-            errors.append('monthly demand sql must not project FGCODE, customer, or PM_VERSION in outer select')
-        if forbidden_dimension_candidates.intersection(group_by_fields):
-            logger.warning(
-                "monthly demand group by rejected forbidden=%s select_fields=%s group_by_fields=%s dimensions=%s metrics=%s",
-                sorted(forbidden_dimension_candidates.intersection(group_by_fields)),
-                inspection.select_fields,
-                inspection.group_by_fields,
-                query_plan.dimensions,
-                query_plan.metrics,
-            )
-            errors.append('monthly demand sql must not group by FGCODE, customer, or PM_VERSION')
-        return errors
-
-    def _validate_demand_product_attribute_filters(
-        self,
-        query_plan: QueryPlan,
-        sql: str,
-    ) -> list[str]:
-        if query_plan.subject_domain != "demand":
-            return []
-
-        attribute_filter_fields = {
-            item.field
-            for item in query_plan.filters
-            if item.field.startswith("IS_")
-        }
-        if not attribute_filter_fields:
-            return []
-
-        errors: list[str] = []
-        for field_name in sorted(attribute_filter_fields):
-            wrong_table_pattern = rf"\b(?:p_demand|v_demand|product_mapping)\.{re.escape(field_name)}\b"
-            if re.search(wrong_table_pattern, sql, re.IGNORECASE):
-                errors.append(
-                    f"{field_name} must be filtered on product_attributes, not on demand or mapping tables"
-                )
-        return errors
-
-    def _validate_demand_product_count_shape(
-        self,
-        query_plan: QueryPlan,
-        sql: str,
-    ) -> list[str]:
-        if query_plan.subject_domain != "demand":
-            return []
-        if "product_count" not in query_plan.metrics:
-            return []
-
-        errors: list[str] = []
-        if not re.search(r"count\s*\(\s*distinct\b", sql, re.IGNORECASE):
-            errors.append("product_count query must use COUNT(DISTINCT ...)")
-        has_demand_month_filter = any(item.field == "demand_month" for item in query_plan.filters)
-        if has_demand_month_filter:
-            if not re.search(r"\bdemand_unpivot\b", sql, re.IGNORECASE):
-                errors.append("product_count query with demand_month filter must use demand_unpivot")
-            if re.search(r"\b(?:p_demand|v_demand)\.MONTH\s*=\s*'20\d{4}'", sql, re.IGNORECASE):
-                errors.append("product_count query must not filter raw MONTH = 'YYYYMM'; horizontal demand tables must be expanded to demand_month first")
-        return errors
+        allowed_group_by_fields: set[str] = set()
+        for field in query_plan.dimensions:
+            allowed_group_by_fields.update(self._field_candidates(query_plan, field))
+        allowed_group_by_fields = {field.lower() for field in allowed_group_by_fields}
+        unexpected = [
+            field
+            for field in actual_group_by_fields
+            if field not in allowed_group_by_fields
+        ]
+        if unexpected:
+            return [
+                "sql groups by fields outside query plan dimensions: "
+                + ", ".join(sorted(set(unexpected)))
+            ]
+        return []
 
     def _build_risk_warnings(self, inspection, used_sources: list[str]) -> list[str]:
         warnings: list[str] = []

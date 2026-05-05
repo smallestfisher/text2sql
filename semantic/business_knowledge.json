@@ -20,7 +20,9 @@
       "notes": [
         "p_demand 和 v_demand 是横向需求表，目标需求月份不能简单理解成 base MONTH 本身。",
         "需求月份映射规则是：offset 0 对应 REQUIREMENT_QTY，offset 1 对应 NEXT_REQUIREMENT，offset 2 对应 LAST_REQUIREMENT，offset 3 到 6 分别对应 MONTH4 到 MONTH7。",
-        "如果问题包含最新 N 版，应先按 PM_VERSION 取最新 N 个版本，再对目标需求月份聚合。"
+        "如果问题包含最新 N 版，应先按 PM_VERSION 取最新 N 个版本，再对目标需求月份聚合。",
+        "如果外层还要按 PM_VERSION 过滤，或者要与 latest_versions 做 IN/JOIN，比对用的需求展开 CTE 需要在每个 UNION 分支都显式投影 PM_VERSION。",
+        "当真实表的 MONTH 以紧凑 YYYYMM 编码存储时，不要直接对原始 MONTH 做日期加减；应先转成真实日期再格式化回 YYYYMM，或者在 base MONTH 场景直接保留 MONTH。"
       ]
     },
     {
@@ -52,8 +54,20 @@
       "notes": [
         "oms_inventory 也是库存口径来源之一。",
         "当问题明确说 OMS 库存时，应优先使用 oms_inventory 作为主事实表，不要再把 daily_inventory 一起作为并列事实表引入。",
+        "当问题只是泛化地问 OMS 库存/库存物量，而没有显式指定 glass、panel 或库龄桶时，默认同时返回 glass_qty 与 panel_qty 两套库存口径。",
         "oms_inventory 的常规库存字段优先看 panel_qty 或 glass_qty；只有用户明确提到库龄段时，才应考虑 ONE_AGE_panel_qty 到 EUGHT_AGE_panel_qty 这类库龄字段。",
         "当库存问题涉及产品属性或分类时，通常需要和 product_attributes 关联。"
+      ]
+    },
+    {
+      "id": "inventory_oms_age_bucket_distribution",
+      "domains": ["inventory"],
+      "tables": ["oms_inventory"],
+      "keywords": ["OMS库存", "TTL物量", "库龄分布", "<3M", "3-6M", "6-12M", ">12M"],
+      "notes": [
+        "当问题要求 OMS 库龄分布，且没有显式要求按产品分类、客户、型号等维度拆分时，不要自行追加 common_categories、customer、product_ID 等维度。",
+        "当问题写“最新 OMS 库存”且没有显式月份时，默认取 oms_inventory.report_month 的最新月份。",
+        "如果库龄桶写成 <3M、3-6M、6-12M、>12M，则分别对应：<3M = ONE_AGE_panel_qty + TWO_AGE_panel_qty + THREE_AGE_panel_qty；3-6M = FOUR_AGE_panel_qty；6-12M = FIVE_AGE_panel_qty；>12M = SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty。"
       ]
     },
     {
@@ -84,6 +98,7 @@
       "notes": [
         "问句同时出现审批版、实际、Gap、达成率，且语义是投入时，应同时查询审批投入和实际投入，再计算差异与达成率，不能只返回单侧事实值。",
         "审批侧来源是 monthly_plan_approved；实际侧来源是 production_actuals，且实际投入必须过滤 act_type=投入。",
+        "如果问题按工厂对比，审批侧工厂通常来自 monthly_plan_approved.factory_code，实际侧工厂通常来自 production_actuals.FACTORY，对齐后再做聚合或关联。",
         "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或从 PLAN_date 映射月份；实际侧应使用 DATE_FORMAT(work_date, '%Y-%m') 或等价方式映射月份。",
         "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 或显式 panel 口径时，审批侧改用 target_in_panel_qty，对应实际侧 Panel_qty。",
         "Gap 默认定义为 实际投入 - 审批投入；达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
@@ -96,6 +111,7 @@
       "keywords": ["production_actuals", "act_type", "投入", "产出", "报废", "物量", "panel", "Panel_qty", "型号", "top"],
       "notes": [
         "production_actuals.act_type 的中文枚举是 投入、产出、报废，问句里出现这些词时应优先落为 act_type 过滤条件。",
+        "当问题在 production_actuals 这类日事实表上使用逻辑月份筛选时，应把月份展开成整月 work_date 过滤或等价的月表达式过滤，不要错误收窄成单日。",
         "在工厂语境下，物量口径不是统一的：当 FACTORY=MDL 时默认指 panel 数量；其他工厂默认指 GLS 数量。",
         "如果问句显式提到 panel量 或 panel数量，应优先使用 Panel_qty；如果没有显式写 panel，且工厂不是 MDL，则优先使用 GLS_qty。",
         "像“26年MDL工厂top10投入型号及其物量”这类问题，应基于 production_actuals，按 product_ID 分组，过滤 FACTORY=MDL 且 act_type=投入，并按 SUM(Panel_qty) 降序取前 10。"

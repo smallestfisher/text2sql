@@ -8,6 +8,8 @@
 - `semantic/business_knowledge.json` 是主业务知识来源
 - `semantic/join_patterns.json` 是稳定多表关联经验的主来源
 - `semantic/domain_config.json` 仍然保留，但现在只是语义配置的 manifest 入口；真实内容按职责拆在 `semantic/domain_config/`
+- `semantic/domain_config/base/prompt_assets.json` 是分类、相关性、intent、SQL 生成的静态 prompt 资产入口，`PromptBuilder` 不再在代码里硬编码大段业务提示
+- `semantic/domain_config/query_profiles/*.json` 现在除了字段白名单外，也承载 source 互斥、support table 补全、post-process 这类运行时约束
 - SQL、分类、相关性判断 prompt 目前统一以中文自然语言指令为主
 - PromptBuilder 只选择当前问题相关的 schema、业务知识和少量真实 few-shot，避免 token 膨胀
 - `examples/nl2sql_examples.template.json` 保留真实 few-shot 资产；命中后会以 `retrieved_examples` 形式进入 SQL prompt
@@ -21,6 +23,7 @@
 - retrieval corpus 的 embedding 现在会增量持久化到 runtime 库的 `vector_corpus_documents` 表，重启或 metadata reload 时优先复用已有向量，再加载回内存做 brute-force cosine search
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 权限时，问候/闲聊/无关问题不再直接丢弃，而是返回终止型闲聊回复；默认 `false`
 - LLM 不可用、调用失败或返回非法结构时，请求会显式失败，不再静默降级为 `stub/skipped`
+- SQL 生成重试和 SQL repair 重试现在已经分开配置：`LLM_MAX_RETRIES` 控制首轮生成，`SQL_REPAIR_MAX_RETRIES` 控制通用 repair fallback
 
 ## 快速启动
 
