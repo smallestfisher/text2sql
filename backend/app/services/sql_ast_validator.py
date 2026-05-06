@@ -86,6 +86,10 @@ class SqlAstValidator:
         "HAVING",
     }
 
+    def __init__(self) -> None:
+        if sqlglot is None:
+            raise RuntimeError("sqlglot is required for SQL AST validation")
+
     def health(self) -> dict:
         return {
             "backend": "sqlglot" if sqlglot is not None else "regex",

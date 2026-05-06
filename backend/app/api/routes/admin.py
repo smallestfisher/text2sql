@@ -233,6 +233,11 @@ def runtime_status(container: AppContainer = Depends(get_container)) -> dict:
     }
 
 
+@router.post("/runtime/vector/prewarm")
+def prewarm_runtime_vector_index(container: AppContainer = Depends(get_container)) -> dict:
+    return container.retrieval_service.prewarm_vector_index(async_sync=False)
+
+
 @router.get("/runtime/sessions", response_model=RuntimeSessionCollectionResponse)
 def list_runtime_sessions(
     limit: int = 50,

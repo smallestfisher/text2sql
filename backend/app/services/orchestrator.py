@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import logging
 
+from backend.app.core.cancellation import CancellationToken
+from backend.app.core.exceptions import ClientCancelledError
 from backend.app.logging_config import clear_trace_id, set_trace_id
 from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
 from backend.app.models.progress import ProgressEvent
 from backend.app.models.session_state import SessionState
+from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
+from backend.app.services.conversation_persistence_service import ConversationPersistenceService
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
@@ -15,7 +19,6 @@ from backend.app.services.query_plan_compiler import QueryPlanCompiler
 from backend.app.services.query_plan_validator import QueryPlanValidator
 from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.retrieval_service import RetrievalService
-from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
 from backend.app.services.sql_executor import SqlExecutor
@@ -42,6 +45,7 @@ class ConversationOrchestrator:
         audit_service: AuditService,
         progress_service: ProgressService,
         runtime_log_repository: DbRuntimeLogRepository,
+        conversation_persistence_service: ConversationPersistenceService,
         domain_config: dict,
     ) -> None:
         self.query_planner = query_planner
@@ -58,19 +62,37 @@ class ConversationOrchestrator:
         self.audit_service = audit_service
         self.progress_service = progress_service
         self.runtime_log_repository = runtime_log_repository
+        self.conversation_persistence_service = conversation_persistence_service
         self.domain_config = domain_config
 
-    def chat(self, request: PlanRequest, trace_id: str | None = None) -> ChatResponse:
+    def chat(
+        self,
+        request: PlanRequest,
+        trace_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ChatResponse:
         trace = self.audit_service.new_trace(trace_id=trace_id)
         set_trace_id(trace.trace_id)
+
+        warnings: list[str] = []
+        session_state = request.session_state
+        query_intent = None
+        classification = None
+        query_plan = None
+        retrieval = None
+        sql = None
+        execution = None
+        plan_validation: ValidationResponse | None = None
+        sql_validation: ValidationResponse | None = None
+
         try:
-            warnings: list[str] = []
             logger.info(
                 "chat start trace_id=%s session_id=%s question=%s",
                 trace.trace_id,
                 request.session_id,
                 request.question,
             )
+            self._raise_if_cancelled(cancellation_token, stage="request accepted")
             self._publish_progress(
                 trace.trace_id,
                 event_type="accepted",
@@ -79,18 +101,38 @@ class ConversationOrchestrator:
                 detail="request accepted",
             )
 
-            session_state = request.session_state
-            self._publish_progress(trace.trace_id, event_type="stage", stage="load_session", status="running", detail="loading session state")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="load_session",
+                status="running",
+                detail="loading session state",
+            )
             if request.session_id and session_state is None:
                 session_state = self.session_service.resolve_state(request.session_id)
+            self._raise_if_cancelled(cancellation_token, stage="load session")
             self.audit_service.append_step(trace, "load_session", "completed", "session state resolved")
-            self._publish_progress(trace.trace_id, event_type="stage", stage="load_session", status="completed", detail="session state resolved")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="load_session",
+                status="completed",
+                detail="session state resolved",
+            )
 
-            self._publish_progress(trace.trace_id, event_type="stage", stage="planning", status="running", detail="building query plan")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="planning",
+                status="running",
+                detail="building query plan",
+            )
             planning_trace = self.query_planner.build_planning_trace(
                 question=request.question,
                 session_state=session_state,
+                cancellation_token=cancellation_token,
             )
+            self._raise_if_cancelled(cancellation_token, stage="planning")
             query_intent = planning_trace["query_intent"]
             classification = planning_trace["classification"]
             planning_warnings = planning_trace["warnings"]
@@ -101,6 +143,8 @@ class ConversationOrchestrator:
             llm_diff = planning_trace["llm_diff"]
             normalized_diff = planning_trace["normalized_diff"]
             semantic_diff = planning_trace["semantic_diff"]
+            warnings.extend(planning_warnings)
+
             logger.info(
                 "parser trace trace_id=%s domain=%s metrics=%s entities=%s dimensions=%s filters=%s time_grain=%s version=%s follow_up_cue=%s explicit_slots=%s",
                 trace.trace_id,
@@ -153,7 +197,6 @@ class ConversationOrchestrator:
                 classification=classification,
                 session_state=session_state,
             )
-            warnings.extend(planning_warnings)
             logger.info(
                 "classification trace_id=%s type=%s domain=%s inherit=%s need_clarification=%s semantic_diff=%s",
                 trace.trace_id,
@@ -192,11 +235,18 @@ class ConversationOrchestrator:
                     },
                 },
             )
-            self._publish_progress(trace.trace_id, event_type="stage", stage="planning", status="completed", detail=classification.question_type)
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="planning",
+                status="completed",
+                detail=classification.question_type,
+            )
             self._sync_classification_with_query_plan(classification, query_plan)
             terminal_reason = self._terminal_skip_reason(classification, query_plan)
             if terminal_reason is not None:
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
+                self._raise_if_cancelled(cancellation_token, stage="terminal response")
                 return self._finalize_terminal_response(
                     trace=trace,
                     request=request,
@@ -209,8 +259,15 @@ class ConversationOrchestrator:
                     terminal_reason=terminal_reason,
                 )
 
-            self._publish_progress(trace.trace_id, event_type="stage", stage="retrieval", status="running", detail="retrieving examples and knowledge")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="retrieval",
+                status="running",
+                detail="retrieving examples and knowledge",
+            )
             retrieval = self.retrieval_service.retrieve(query_intent)
+            self._raise_if_cancelled(cancellation_token, stage="retrieval")
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
             logger.info(
                 "retrieval trace_id=%s hits=%s metrics=%s",
@@ -225,9 +282,16 @@ class ConversationOrchestrator:
                 f"{len(retrieval.hits)} hits",
                 metadata=retrieval_summary,
             )
-            self._publish_progress(trace.trace_id, event_type="stage", stage="retrieval", status="completed", detail=f"{len(retrieval.hits)} hits")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="retrieval",
+                status="completed",
+                detail=f"{len(retrieval.hits)} hits",
+            )
 
             query_plan = self.query_plan_compiler.compile(query_plan=query_plan, retrieval=retrieval)
+            self._raise_if_cancelled(cancellation_token, stage="compile plan")
             logger.info(
                 "plan trace_id=%s tables=%s metrics=%s dimensions=%s",
                 trace.trace_id,
@@ -240,9 +304,7 @@ class ConversationOrchestrator:
                 "compile_plan",
                 "completed",
                 "query plan compiled",
-                metadata={
-                    "compiled_plan": query_plan.model_dump(mode="json")
-                },
+                metadata={"compiled_plan": query_plan.model_dump(mode="json")},
             )
 
             plan_result = self.query_plan_validator.validate_detailed(
@@ -270,10 +332,18 @@ class ConversationOrchestrator:
                     "warnings": plan_warnings,
                 },
             )
+            plan_validation = ValidationResponse(
+                valid=not plan_errors,
+                errors=plan_errors,
+                warnings=warnings,
+                risk_level=plan_result.risk_level,
+                risk_flags=plan_result.risk_flags,
+            )
             self._sync_classification_with_query_plan(classification, query_plan)
             terminal_reason = self._terminal_skip_reason(classification, query_plan)
             if terminal_reason is not None:
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
+                self._raise_if_cancelled(cancellation_token, stage="terminal response")
                 return self._finalize_terminal_response(
                     trace=trace,
                     request=request,
@@ -284,26 +354,34 @@ class ConversationOrchestrator:
                     warnings=warnings,
                     retrieval=retrieval,
                     terminal_reason=terminal_reason,
-                    plan_validation=ValidationResponse(
-                        valid=not plan_errors,
-                        errors=plan_errors,
-                        warnings=warnings,
-                        risk_level=plan_result.risk_level,
-                        risk_flags=plan_result.risk_flags,
-                    ),
+                    plan_validation=plan_validation,
                 )
 
             llm_sql = None
             sql_hint_metadata = {"mode": "not_started", "used": False}
             sql_prompt = None
             if not plan_errors:
-                self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status="running", detail="generating sql")
-                sql_prompt = self.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question=request.question)
+                self._publish_progress(
+                    trace.trace_id,
+                    event_type="stage",
+                    stage="sql_generation",
+                    status="running",
+                    detail="generating sql",
+                )
+                sql_prompt = self.prompt_builder.build_sql_prompt(
+                    query_plan,
+                    retrieval=retrieval,
+                    question=request.question,
+                )
                 prompt_context_metadata = {
                     "context_budget": sql_prompt.get("context_budget"),
                     "context_summary": sql_prompt.get("context_summary"),
                 }
-                llm_sql = self.llm_client.generate_sql_hint(sql_prompt)
+                llm_sql = self.llm_client.generate_sql_hint(
+                    sql_prompt,
+                    cancellation_token=cancellation_token,
+                )
+                self._raise_if_cancelled(cancellation_token, stage="sql generation")
                 if llm_sql:
                     sql_hint_metadata = {"mode": "live", "used": True}
                     self.audit_service.append_step(
@@ -314,7 +392,6 @@ class ConversationOrchestrator:
                         metadata={**sql_hint_metadata, **prompt_context_metadata},
                     )
 
-            sql = None
             if not plan_errors:
                 sql = llm_sql
             logger.info(
@@ -332,9 +409,21 @@ class ConversationOrchestrator:
                     "sql_visible": bool(sql),
                 },
             )
-            self._publish_progress(trace.trace_id, event_type="stage", stage="sql_generation", status=("completed" if sql else "skipped"), detail=("sql generated" if sql else "sql unavailable"))
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="sql_generation",
+                status=("completed" if sql else "skipped"),
+                detail=("sql generated" if sql else "sql unavailable"),
+            )
 
-            self._publish_progress(trace.trace_id, event_type="stage", stage="sql_validation", status="running", detail="validating sql")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="sql_validation",
+                status="running",
+                detail="validating sql",
+            )
             required_filter_fields: list[str] = []
             logger.info(
                 "sql validation input trace_id=%s sql_present=%s sql_preview=%s query_plan_tables=%s query_plan_dimensions=%s query_plan_metrics=%s",
@@ -365,7 +454,8 @@ class ConversationOrchestrator:
                     sql=sql,
                     errors=sql_errors,
                     warnings=sql_warnings,
-                ) if sql_errors else None
+                    cancellation_token=cancellation_token,
+                )
                 if repaired_sql and sql_errors:
                     logger.info(
                         "sql repair candidate trace_id=%s sql_preview=%s errors=%s",
@@ -387,7 +477,15 @@ class ConversationOrchestrator:
                         sql_warnings = repaired_sql_result.warnings
                         sql_risk_level = repaired_sql_result.risk_level
                         sql_risk_flags = repaired_sql_result.risk_flags
+            self._raise_if_cancelled(cancellation_token, stage="sql validation")
 
+            sql_validation = ValidationResponse(
+                valid=not sql_errors,
+                errors=sql_errors,
+                warnings=sql_warnings,
+                risk_level=sql_risk_level,
+                risk_flags=sql_risk_flags,
+            )
             self.audit_service.append_step(
                 trace,
                 "validate_sql",
@@ -411,13 +509,27 @@ class ConversationOrchestrator:
                 len(sql_errors),
                 len(sql_warnings),
             )
-            self._publish_progress(trace.trace_id, event_type="stage", stage="sql_validation", status=("completed" if not sql_errors else "failed"), detail=("sql valid" if not sql_errors else "sql validation failed"), metadata={"errors": sql_errors, "warnings": sql_warnings})
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="sql_validation",
+                status=("completed" if not sql_errors else "failed"),
+                detail=("sql valid" if not sql_errors else "sql validation failed"),
+                metadata={"errors": sql_errors, "warnings": sql_warnings},
+            )
 
             if not (plan_errors or sql_errors):
-                self._publish_progress(trace.trace_id, event_type="stage", stage="execution", status="running", detail="executing sql")
+                self._publish_progress(
+                    trace.trace_id,
+                    event_type="stage",
+                    stage="execution",
+                    status="running",
+                    detail="executing sql",
+                )
             execution = None if (plan_errors or sql_errors) else self.sql_executor.execute(
                 sql=sql,
                 user_context=request.user_context,
+                cancellation_token=cancellation_token,
             )
             if (
                 execution is not None
@@ -431,6 +543,7 @@ class ConversationOrchestrator:
                     sql=sql,
                     errors=execution.errors,
                     warnings=execution.warnings,
+                    cancellation_token=cancellation_token,
                 )
                 if repaired_sql:
                     repaired_sql_result = self.sql_validator.validate_detailed(
@@ -443,6 +556,7 @@ class ConversationOrchestrator:
                         repaired_execution = self.sql_executor.execute(
                             sql=repaired_sql,
                             user_context=request.user_context,
+                            cancellation_token=cancellation_token,
                         )
                         if repaired_execution.executed:
                             warnings.append("llm sql repaired after execution failure")
@@ -452,7 +566,15 @@ class ConversationOrchestrator:
                             sql_warnings = repaired_sql_result.warnings
                             sql_risk_level = repaired_sql_result.risk_level
                             sql_risk_flags = repaired_sql_result.risk_flags
+                            sql_validation = ValidationResponse(
+                                valid=True,
+                                errors=[],
+                                warnings=sql_warnings,
+                                risk_level=sql_risk_level,
+                                risk_flags=sql_risk_flags,
+                            )
                             execution = repaired_execution
+            self._raise_if_cancelled(cancellation_token, stage="execution")
             self.audit_service.append_step(
                 trace,
                 "execute",
@@ -473,22 +595,21 @@ class ConversationOrchestrator:
                 execution.row_count if execution else None,
                 execution.elapsed_ms if execution else None,
             )
-            self._publish_progress(trace.trace_id, event_type="stage", stage="execution", status=("completed" if execution else "skipped"), detail=(execution.status if execution else "execution skipped"), metadata={"row_count": execution.row_count if execution else None})
-
-            self._publish_progress(trace.trace_id, event_type="stage", stage="answer_building", status="running", detail="building answer")
-            plan_validation = ValidationResponse(
-                valid=not plan_errors,
-                errors=plan_errors,
-                warnings=warnings,
-                risk_level=plan_result.risk_level,
-                risk_flags=plan_result.risk_flags,
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="execution",
+                status=("completed" if execution else "skipped"),
+                detail=(execution.status if execution else "execution skipped"),
+                metadata={"row_count": execution.row_count if execution else None},
             )
-            sql_validation = ValidationResponse(
-                valid=not sql_errors,
-                errors=sql_errors,
-                warnings=sql_warnings,
-                risk_level=sql_risk_level,
-                risk_flags=sql_risk_flags,
+
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="answer_building",
+                status="running",
+                detail="building answer",
             )
             answer = self.answer_builder.build(
                 classification=classification,
@@ -498,20 +619,23 @@ class ConversationOrchestrator:
                 sql_validation=sql_validation,
                 user_context=request.user_context,
             )
+            self._raise_if_cancelled(cancellation_token, stage="answer building")
+            self._publish_progress(
+                trace.trace_id,
+                event_type="stage",
+                stage="answer_building",
+                status="completed",
+                detail=answer.status if answer else "unknown",
+            )
 
-            self._publish_progress(trace.trace_id, event_type="stage", stage="answer_building", status="completed", detail=answer.status if answer else "unknown")
             next_session_state = self.session_state_service.build_next_state(
                 query_plan=query_plan,
                 previous_state=session_state,
                 sql=sql,
             )
-
             if request.session_id:
-                self.session_service.append_user_message(request.session_id, request.question, trace.trace_id)
-                assistant_text = answer.summary
-                self.session_service.append_assistant_message(request.session_id, assistant_text, trace.trace_id)
                 next_session_state.session_id = request.session_id
-                self.session_service.update_state(request.session_id, next_session_state, trace_id=trace.trace_id)
+
             response = ChatResponse(
                 classification=classification,
                 query_intent=query_intent,
@@ -526,16 +650,10 @@ class ConversationOrchestrator:
                 next_session_state=next_session_state,
             )
             self._append_response_snapshot(trace, response)
-            self._persist_runtime_artifacts(
+            self._persist_success_artifacts(
                 trace=trace,
                 request=request,
-                retrieval=retrieval,
-                classification=classification,
-                answer=answer,
-                plan_validation=plan_validation,
-                sql_validation=sql_validation,
-                execution=execution,
-                sql=sql,
+                response=response,
                 warnings=warnings + sql_warnings,
             )
             logger.info(
@@ -545,10 +663,58 @@ class ConversationOrchestrator:
                 plan_validation.valid,
                 sql_validation.valid,
             )
-            self._publish_progress(trace.trace_id, event_type="completed", stage="completed", status=answer.status if answer else "ok", detail=answer.summary if answer else None, metadata={"response": response.model_dump(mode="json")})
+            self._publish_progress(
+                trace.trace_id,
+                event_type="completed",
+                stage="completed",
+                status=answer.status if answer else "ok",
+                detail=answer.summary if answer else None,
+                metadata={"response": response.model_dump(mode="json")},
+            )
             return response
+        except ClientCancelledError as exc:
+            self.audit_service.append_step(trace, "cancelled", "cancelled", str(exc))
+            self._persist_failure_artifacts(
+                trace=trace,
+                request=request,
+                warnings=warnings + [str(exc)],
+                answer_status="cancelled",
+                classification=classification,
+                retrieval=retrieval,
+                plan_validation=plan_validation,
+                sql_validation=sql_validation,
+                execution=execution,
+                sql=sql,
+            )
+            self._publish_progress(
+                trace.trace_id,
+                event_type="failed",
+                stage="failed",
+                status="cancelled",
+                detail=str(exc),
+            )
+            raise
         except Exception as exc:
-            self._publish_progress(trace.trace_id, event_type="failed", stage="failed", status="error", detail=str(exc))
+            self.audit_service.append_step(trace, "failed", "failed", str(exc))
+            self._persist_failure_artifacts(
+                trace=trace,
+                request=request,
+                warnings=warnings + [str(exc)],
+                answer_status="error",
+                classification=classification,
+                retrieval=retrieval,
+                plan_validation=plan_validation,
+                sql_validation=sql_validation,
+                execution=execution,
+                sql=sql,
+            )
+            self._publish_progress(
+                trace.trace_id,
+                event_type="failed",
+                stage="failed",
+                status="error",
+                detail=str(exc),
+            )
             raise
         finally:
             self.progress_service.complete(trace.trace_id)
@@ -639,12 +805,6 @@ class ConversationOrchestrator:
         )
         next_session_state = self._preserved_session_state(session_state, request.session_id)
 
-        if request.session_id:
-            self.session_service.append_user_message(request.session_id, request.question, trace.trace_id)
-            self.session_service.append_assistant_message(request.session_id, answer.summary, trace.trace_id)
-            next_session_state.session_id = request.session_id
-            self.session_service.update_state(request.session_id, next_session_state, trace_id=trace.trace_id)
-
         response = ChatResponse(
             classification=classification,
             query_intent=query_intent,
@@ -667,16 +827,10 @@ class ConversationOrchestrator:
             metadata={"response": response.model_dump(mode="json")},
         )
         self._append_response_snapshot(trace, response)
-        self._persist_runtime_artifacts(
+        self._persist_success_artifacts(
             trace=trace,
             request=request,
-            retrieval=retrieval,
-            classification=classification,
-            answer=answer,
-            plan_validation=plan_validation,
-            sql_validation=sql_validation,
-            execution=None,
-            sql=None,
+            response=response,
             warnings=warnings + sql_validation.warnings,
         )
         logger.info(
@@ -699,58 +853,47 @@ class ConversationOrchestrator:
             return preserved
         return SessionState(session_id=session_id or "session_pending")
 
-    def _persist_runtime_artifacts(
+    def _persist_success_artifacts(
         self,
         *,
         trace,
         request: PlanRequest,
-        retrieval,
-        classification,
-        answer,
-        plan_validation: ValidationResponse,
-        sql_validation: ValidationResponse,
-        execution,
-        sql: str | None,
+        response: ChatResponse,
         warnings: list[str],
     ) -> None:
-        try:
-            self.audit_service.finalize(trace, warnings=warnings)
-        except Exception:
-            logger.exception("failed to persist audit trace trace_id=%s", trace.trace_id)
+        self.conversation_persistence_service.persist_success(
+            trace=trace,
+            request=request,
+            response=response,
+            warnings=warnings,
+        )
 
-        if retrieval is not None:
-            try:
-                self.runtime_log_repository.log_retrieval(trace.trace_id, retrieval)
-            except Exception:
-                logger.exception("failed to persist retrieval log trace_id=%s", trace.trace_id)
-
-        try:
-            self.runtime_log_repository.log_sql_audit(
-                trace_id=trace.trace_id,
-                sql=sql,
-                plan_validation=plan_validation,
-                sql_validation=sql_validation,
-                execution=execution,
-            )
-        except Exception:
-            logger.exception("failed to persist sql audit trace_id=%s", trace.trace_id)
-
-        try:
-            self.runtime_log_repository.log_query(
-                trace_id=trace.trace_id,
-                session_id=request.session_id,
-                user_id=request.user_context.user_id if request.user_context else None,
-                question=request.question,
-                question_type=classification.question_type,
-                subject_domain=classification.subject_domain,
-                answer_status=answer.status if answer else None,
-                plan_validation=plan_validation,
-                sql_validation=sql_validation,
-                execution=execution,
-                warnings=warnings,
-            )
-        except Exception:
-            logger.exception("failed to persist query log trace_id=%s", trace.trace_id)
+    def _persist_failure_artifacts(
+        self,
+        *,
+        trace,
+        request: PlanRequest,
+        warnings: list[str],
+        answer_status: str,
+        classification,
+        retrieval,
+        plan_validation: ValidationResponse | None,
+        sql_validation: ValidationResponse | None,
+        execution,
+        sql: str | None,
+    ) -> None:
+        self.conversation_persistence_service.persist_failure(
+            trace=trace,
+            request=request,
+            warnings=warnings,
+            answer_status=answer_status,
+            classification=classification,
+            retrieval=retrieval,
+            plan_validation=plan_validation,
+            sql_validation=sql_validation,
+            execution=execution,
+            sql=sql,
+        )
 
     def _append_response_snapshot(self, trace, response: ChatResponse) -> None:
         payload = response.model_dump(mode="json", exclude={"trace", "sql"})
@@ -770,3 +913,13 @@ class ConversationOrchestrator:
                 "response": payload,
             },
         )
+
+    def _raise_if_cancelled(
+        self,
+        cancellation_token: CancellationToken | None,
+        *,
+        stage: str,
+    ) -> None:
+        if cancellation_token is None:
+            return
+        cancellation_token.raise_if_cancelled(stage=stage)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from backend.app.core.cancellation import CancellationToken
 from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.query_plan import ContextDelta
 from backend.app.models.session_state import SessionState
@@ -35,6 +36,7 @@ class QuestionClassifier:
         question: str,
         query_intent: QueryIntent,
         session_state: SessionState | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> tuple[QuestionClassification, list[str]]:
         warnings: list[str] = []
         normalized_question = query_intent.normalized_question
@@ -71,6 +73,7 @@ class QuestionClassifier:
             original_question=question,
             query_intent=query_intent,
             session_state=session_state,
+            cancellation_token=cancellation_token,
         )
         if relevance_hint is not None and self._relevance_hint_is_out_of_scope(relevance_hint):
             reason = relevance_hint.get("reason")
@@ -187,6 +190,7 @@ class QuestionClassifier:
             base_classification=baseline_classification,
             candidate_scores=score_details,
             ambiguous=score_gap < 0.12,
+            cancellation_token=cancellation_token,
         )
 
         candidate = self._apply_llm_hint(
@@ -373,6 +377,7 @@ class QuestionClassifier:
         original_question: str,
         query_intent: QueryIntent,
         session_state: SessionState | None,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict | None:
         if not self._should_run_relevance_guard(query_intent, session_state):
             return None
@@ -381,7 +386,10 @@ class QuestionClassifier:
             query_intent=query_intent,
             session_state=session_state,
         )
-        return self.llm_client.check_question_relevance(prompt_payload)
+        return self.llm_client.check_question_relevance(
+            prompt_payload,
+            cancellation_token=cancellation_token,
+        )
 
     def _should_run_relevance_guard(
         self,
@@ -429,6 +437,7 @@ class QuestionClassifier:
         base_classification: QuestionClassification,
         candidate_scores: dict[str, float],
         ambiguous: bool,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict:
         allowed_question_types = self._allowed_question_types(query_intent, session_state)
         arbitration_context = self._classification_arbitration_context(
@@ -449,7 +458,10 @@ class QuestionClassifier:
             candidate_scores=candidate_scores,
             arbitration_context=arbitration_context,
         )
-        return self.llm_client.generate_classification_hint(prompt_payload)
+        return self.llm_client.generate_classification_hint(
+            prompt_payload,
+            cancellation_token=cancellation_token,
+        )
 
     def _decision_source(
         self,
@@ -576,8 +588,10 @@ class QuestionClassifier:
         if isinstance(payload, dict):
             try:
                 return ContextDelta(**payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise ValueError(f"classification context_delta is invalid: {exc}") from exc
+        if payload is not None:
+            raise ValueError("classification context_delta must be a JSON object")
         return self._build_context_delta(query_intent)
 
     def _resolve_llm_subject_domain(

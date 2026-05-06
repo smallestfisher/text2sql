@@ -64,33 +64,47 @@ class StructuredIntent(BaseModel):
             source="llm",
             normalized_question=normalized_question,
             subject_domain=cls._parse_subject_domain(payload.get("subject_domain")),
-            metrics=cls._parse_string_list(payload.get("metrics")),
-            entities=cls._parse_string_list(payload.get("entities")),
-            dimensions=cls._parse_string_list(payload.get("dimensions")),
+            metrics=cls._parse_string_list(payload.get("metrics"), field_name="metrics"),
+            entities=cls._parse_string_list(payload.get("entities"), field_name="entities"),
+            dimensions=cls._parse_string_list(payload.get("dimensions"), field_name="dimensions"),
             filters=filters,
             time_context=time_context,
             version_context=version_context,
-            analysis_mode=cls._parse_optional_string(payload.get("analysis_mode")),
-            question_type=cls._parse_optional_string(payload.get("question_type")),
-            inherit_context=payload.get("inherit_context") if isinstance(payload.get("inherit_context"), bool) else None,
+            analysis_mode=cls._parse_optional_string(payload.get("analysis_mode"), field_name="analysis_mode"),
+            question_type=cls._parse_optional_string(payload.get("question_type"), field_name="question_type"),
+            inherit_context=cls._parse_optional_bool(payload.get("inherit_context"), field_name="inherit_context"),
             confidence=cls._parse_confidence(payload.get("confidence")),
-            reason=cls._parse_optional_string(payload.get("reason")),
+            reason=cls._parse_optional_string(payload.get("reason"), field_name="reason"),
             raw_payload=dict(payload),
         )
 
     @staticmethod
-    def _parse_string_list(value: Any) -> list[str]:
-        if not isinstance(value, list):
+    def _parse_string_list(value: Any, *, field_name: str) -> list[str]:
+        if value is None:
             return []
+        if not isinstance(value, list):
+            raise ValueError(f"{field_name} must be a JSON array")
+        if any(not isinstance(item, str) for item in value if item is not None):
+            raise ValueError(f"{field_name} must only contain strings")
         items = [item.strip() for item in value if isinstance(item, str) and item.strip()]
         return list(dict.fromkeys(items))
 
     @staticmethod
-    def _parse_optional_string(value: Any) -> str | None:
-        if not isinstance(value, str):
+    def _parse_optional_string(value: Any, *, field_name: str) -> str | None:
+        if value is None:
             return None
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must be a string")
         stripped = value.strip()
         return stripped or None
+
+    @staticmethod
+    def _parse_optional_bool(value: Any, *, field_name: str) -> bool | None:
+        if value is None:
+            return None
+        if not isinstance(value, bool):
+            raise ValueError(f"{field_name} must be a boolean")
+        return value
 
     @staticmethod
     def _parse_subject_domain(value: Any) -> SubjectDomain:
@@ -102,47 +116,57 @@ class StructuredIntent(BaseModel):
             "dimension",
             "unknown",
         }
+        if value is None:
+            return "unknown"
         if isinstance(value, str) and value in allowed:
             return value  # type: ignore[return-value]
-        return "unknown"
+        raise ValueError("subject_domain must be one of the allowed domain names")
 
     @staticmethod
     def _parse_filters(value: Any) -> list[FilterItem]:
-        if not isinstance(value, list):
+        if value is None:
             return []
+        if not isinstance(value, list):
+            raise ValueError("filters must be a JSON array")
         filters: list[FilterItem] = []
-        for item in value:
+        for index, item in enumerate(value):
             if not isinstance(item, dict):
-                continue
+                raise ValueError(f"filters[{index}] must be a JSON object")
             try:
                 filters.append(FilterItem.model_validate(item))
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError(f"filters[{index}] is invalid: {exc}") from exc
         return filters
 
     @staticmethod
     def _parse_time_context(value: Any) -> TimeContext:
-        if not isinstance(value, dict):
+        if value is None:
             return TimeContext()
+        if not isinstance(value, dict):
+            raise ValueError("time_context must be a JSON object")
         try:
             return TimeContext.model_validate(value)
-        except Exception:
-            return TimeContext()
+        except Exception as exc:
+            raise ValueError(f"time_context is invalid: {exc}") from exc
 
     @staticmethod
     def _parse_version_context(value: Any) -> VersionContext | None:
-        if not isinstance(value, dict):
+        if value is None:
             return None
+        if not isinstance(value, dict):
+            raise ValueError("version_context must be a JSON object")
         try:
             return VersionContext.model_validate(value)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise ValueError(f"version_context is invalid: {exc}") from exc
 
     @staticmethod
     def _parse_confidence(value: Any) -> float | None:
+        if value is None:
+            return None
         if isinstance(value, (int, float)):
             return max(0.0, min(1.0, float(value)))
-        return None
+        raise ValueError("confidence must be a number")
 
     def to_query_intent(self, base_query_intent: QueryIntent | None = None) -> QueryIntent:
         base = base_query_intent

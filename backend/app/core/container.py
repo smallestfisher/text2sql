@@ -21,6 +21,7 @@ from backend.app.services.intent_service import IntentService
 from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
+from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
@@ -37,6 +38,7 @@ from backend.app.services.session_workspace_service import SessionWorkspaceServi
 from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_executor import SqlExecutor
 from backend.app.services.sql_validator import SqlValidator
+from backend.app.services.conversation_persistence_service import ConversationPersistenceService
 from backend.app.services.vector_retriever import VectorRetriever
 from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.runtime_store_initializer import RuntimeStoreInitializer
@@ -47,7 +49,11 @@ class AppContainer:
         self.settings = settings
         self.domain_config_loader = DomainConfigLoader()
         self.domain_config = self.domain_config_loader.load()
-        self.semantic_runtime = SemanticRuntime(self.domain_config)
+        self.metadata_registry = MetadataRegistry()
+        self.semantic_runtime = SemanticRuntime(
+            self.domain_config,
+            metadata_registry=self.metadata_registry,
+        )
         self.business_database_connector = DatabaseConnector(
             database_url=self.settings.business_database_url,
             timeout_seconds=self.settings.sql_timeout_seconds,
@@ -60,6 +66,15 @@ class AppContainer:
             max_result_rows=self.settings.execution_max_rows,
             slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
         )
+        self._require_database_connection(
+            self.business_database_connector,
+            connector_name="business database",
+            verify_readonly_session_settings=True,
+        )
+        self._require_database_connection(
+            self.runtime_database_connector,
+            connector_name="runtime database",
+        )
         self.runtime_store_initializer = RuntimeStoreInitializer(self.runtime_database_connector)
         self.runtime_store_initializer.ensure_schema()
         self.auth_repository = DbAuthRepository(self.runtime_database_connector)
@@ -70,8 +85,12 @@ class AppContainer:
         self.evaluation_run_repository = DbEvaluationRunRepository(self.runtime_database_connector)
         self.vector_document_repository = DbVectorDocumentRepository(self.runtime_database_connector)
         self.progress_service = ProgressService()
+        self.conversation_persistence_service = ConversationPersistenceService(self.runtime_database_connector)
 
-        self.prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
+        self.prompt_builder = PromptBuilder(
+            semantic_runtime=self.semantic_runtime,
+            metadata_registry=self.metadata_registry,
+        )
         self.llm_client = LLMClient(
             model_name=self.settings.llm_model,
             api_key=self.settings.openai_api_key,
@@ -120,14 +139,21 @@ class AppContainer:
             token_secret=self.settings.auth_token_secret,
             token_ttl_seconds=self.settings.auth_token_ttl_seconds,
         )
+        vector_provider = (
+            self.settings.vector_retrieval_provider
+            if self.settings.enable_vector_retrieval
+            else "disabled"
+        )
         self.vector_retriever = VectorRetriever(
-            provider=self.settings.vector_retrieval_provider,
+            provider=vector_provider,
             api_key=self.settings.vector_api_key,
             api_base=self.settings.vector_api_base,
             model_name=self.settings.vector_model,
             dimensions=self.settings.vector_dimensions,
             timeout_seconds=self.settings.vector_timeout_seconds,
         )
+        if self.settings.enable_vector_retrieval and not self.vector_retriever.enabled:
+            raise RuntimeError("ENABLE_VECTOR_RETRIEVAL is true but vector embedding client is not configured")
         self.vector_corpus_store_service = VectorCorpusStoreService(
             repository=self.vector_document_repository,
             vector_retriever=self.vector_retriever,
@@ -135,14 +161,17 @@ class AppContainer:
         self.retrieval_service = RetrievalService(
             domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
+            metadata_registry=self.metadata_registry,
             vector_retriever=self.vector_retriever,
             vector_corpus_store_service=self.vector_corpus_store_service,
             vector_top_k=self.settings.vector_top_k,
+            async_vector_index=False,
+            prewarm_vector_index=self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
         )
         self.answer_builder = AnswerBuilder(
             enable_chitchat_mode=self.settings.enable_chitchat_mode,
         )
-        self.metadata_repository = FileMetadataRepository()
+        self.metadata_repository = FileMetadataRepository(self.metadata_registry)
         self.session_service = SessionService(self.session_repository)
         self.audit_service = AuditService(self.audit_repository)
         self.chat_response_restore_service = ChatResponseRestoreService(
@@ -181,6 +210,7 @@ class AppContainer:
             audit_service=self.audit_service,
             progress_service=self.progress_service,
             runtime_log_repository=self.runtime_log_repository,
+            conversation_persistence_service=self.conversation_persistence_service,
             domain_config=self.domain_config,
         )
         self.evaluation_service = EvaluationService(
@@ -190,4 +220,20 @@ class AppContainer:
             runtime_log_repository=self.runtime_log_repository,
             auth_service=self.auth_service,
             response_restore_service=self.chat_response_restore_service,
+        )
+
+    def _require_database_connection(
+        self,
+        database_connector: DatabaseConnector,
+        *,
+        connector_name: str,
+        verify_readonly_session_settings: bool = False,
+    ) -> None:
+        health = database_connector.test_connection(
+            verify_readonly_session_settings=verify_readonly_session_settings,
+        )
+        if health.get("connected"):
+            return
+        raise RuntimeError(
+            f"{connector_name} is not ready: {health.get('error') or 'database connector is not configured'}"
         )

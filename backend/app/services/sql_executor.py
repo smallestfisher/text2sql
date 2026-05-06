@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from backend.app.core.cancellation import CancellationToken
 from backend.app.models.api import ExecutionResponse
 from backend.app.models.auth import UserContext
 from backend.app.services.database_connector import DatabaseConnector
@@ -19,7 +20,14 @@ class SqlExecutor:
         self.max_sql_length = max_sql_length
         self.execution_cache = execution_cache
 
-    def execute(self, sql: str | None, user_context: UserContext | None = None) -> ExecutionResponse:
+    def execute(
+        self,
+        sql: str | None,
+        user_context: UserContext | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ExecutionResponse:
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled(stage="sql execution")
         if sql is None:
             return ExecutionResponse(
                 executed=False,
@@ -55,6 +63,8 @@ class SqlExecutor:
                 return cached
 
         execution = self.database_connector.execute_readonly(sql)
+        if cancellation_token is not None:
+            cancellation_token.raise_if_cancelled(stage="sql execution")
         if self.execution_cache is not None:
             self.execution_cache.put(sql, execution, user_context=user_context)
         return execution

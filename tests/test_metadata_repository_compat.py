@@ -11,6 +11,8 @@ class MetadataRepositoryCompatTests(unittest.TestCase):
 
         self.assertIs(repository.documents, repository.paths)
         self.assertIn("examples_template", repository.documents)
+        self.assertIn("tables_metadata", repository.documents)
+        self.assertIn("join_patterns", repository.documents)
 
 
 if __name__ == "__main__":

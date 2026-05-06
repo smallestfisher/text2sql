@@ -6,6 +6,7 @@ import time
 
 from openai import OpenAI
 
+from backend.app.core.cancellation import CancellationToken
 from backend.app.core.exceptions import LLMServiceError
 
 try:
@@ -24,6 +25,8 @@ class LLMClient:
         max_retries: int = 2,
         repair_max_retries: int | None = None,
     ) -> None:
+        if sqlglot is None:
+            raise RuntimeError("sqlglot is required for LLM SQL validation helpers")
         self.model_name = model_name
         self.api_key = api_key
         self.api_base = api_base
@@ -38,7 +41,11 @@ class LLMClient:
     def enabled(self) -> bool:
         return self.client is not None
 
-    def generate_classification_hint(self, prompt_payload: dict) -> dict:
+    def generate_classification_hint(
+        self,
+        prompt_payload: dict,
+        cancellation_token: CancellationToken | None = None,
+    ) -> dict:
         self._require_enabled("classification generation")
 
         system_prompt = (
@@ -53,8 +60,10 @@ class LLMClient:
             {"role": "user", "content": user_prompt},
         ]
         for attempt in range(1, self.max_retries + 1):
+            self._raise_if_cancelled(cancellation_token, stage="classification generation")
             try:
                 content = self._complete(messages)
+                self._raise_if_cancelled(cancellation_token, stage="classification generation")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
@@ -78,7 +87,11 @@ class LLMClient:
 
         raise LLMServiceError("llm returned invalid JSON during classification generation")
 
-    def generate_intent(self, prompt_payload: dict) -> dict:
+    def generate_intent(
+        self,
+        prompt_payload: dict,
+        cancellation_token: CancellationToken | None = None,
+    ) -> dict:
         self._require_enabled("intent generation")
 
         system_prompt = (
@@ -92,8 +105,10 @@ class LLMClient:
             {"role": "user", "content": user_prompt},
         ]
         for attempt in range(1, self.max_retries + 1):
+            self._raise_if_cancelled(cancellation_token, stage="intent generation")
             try:
                 content = self._complete(messages)
+                self._raise_if_cancelled(cancellation_token, stage="intent generation")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
@@ -117,7 +132,11 @@ class LLMClient:
 
         raise LLMServiceError("llm returned invalid JSON during intent generation")
 
-    def check_question_relevance(self, prompt_payload: dict) -> dict:
+    def check_question_relevance(
+        self,
+        prompt_payload: dict,
+        cancellation_token: CancellationToken | None = None,
+    ) -> dict:
         self._require_enabled("relevance guard")
 
         system_prompt = (
@@ -132,8 +151,10 @@ class LLMClient:
             {"role": "user", "content": user_prompt},
         ]
         for attempt in range(1, self.max_retries + 1):
+            self._raise_if_cancelled(cancellation_token, stage="relevance guard")
             try:
                 content = self._complete(messages)
+                self._raise_if_cancelled(cancellation_token, stage="relevance guard")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
@@ -157,7 +178,11 @@ class LLMClient:
 
         raise LLMServiceError("llm returned invalid JSON during relevance guard")
 
-    def generate_sql_hint(self, prompt_payload: dict) -> str:
+    def generate_sql_hint(
+        self,
+        prompt_payload: dict,
+        cancellation_token: CancellationToken | None = None,
+    ) -> str:
         self._require_enabled("sql generation")
 
         system_prompt = (
@@ -171,8 +196,10 @@ class LLMClient:
             {"role": "user", "content": user_prompt},
         ]
         for attempt in range(1, self.max_retries + 1):
+            self._raise_if_cancelled(cancellation_token, stage="sql generation")
             try:
                 content = self._complete(messages).strip()
+                self._raise_if_cancelled(cancellation_token, stage="sql generation")
                 sql = self._extract_sql(content)
                 if sql and self._is_readonly_select(sql):
                     return sql
@@ -202,6 +229,7 @@ class LLMClient:
         repair_focus: str | None = None,
         extra_constraints: list[str] | None = None,
         extra_context: dict | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> str | None:
         if not self.enabled:
             return None
@@ -241,8 +269,10 @@ class LLMClient:
             {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False)},
         ]
         for attempt in range(1, self.repair_max_retries + 1):
+            self._raise_if_cancelled(cancellation_token, stage="sql repair")
             try:
                 content = self._complete(messages).strip()
+                self._raise_if_cancelled(cancellation_token, stage="sql repair")
                 repaired = self._extract_sql(content)
                 if repaired and self._is_readonly_select(repaired):
                     return repaired
@@ -259,6 +289,16 @@ class LLMClient:
                     return None
                 time.sleep(min(0.4 * attempt, 1.0))
         return None
+
+    def _raise_if_cancelled(
+        self,
+        cancellation_token: CancellationToken | None,
+        *,
+        stage: str,
+    ) -> None:
+        if cancellation_token is None:
+            return
+        cancellation_token.raise_if_cancelled(stage=stage)
 
     def health(self) -> dict:
         return {
@@ -426,9 +466,6 @@ class LLMClient:
         return without_line_comments
 
     def _is_single_sql_statement(self, sql: str) -> bool:
-        if sqlglot is None:
-            statements = [item.strip() for item in re.split(r";\s*", sql) if item.strip()]
-            return len(statements) == 1
         try:
             statements = sqlglot.parse(sql, read="mysql")
         except Exception:

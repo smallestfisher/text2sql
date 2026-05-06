@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 
-from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
+from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -15,10 +14,13 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 class PromptBuilder:
     BUSINESS_NOTES_MAX_CHARS = 2400
 
-    def __init__(self, semantic_runtime: SemanticRuntime | None = None) -> None:
+    def __init__(
+        self,
+        semantic_runtime: SemanticRuntime | None = None,
+        metadata_registry: MetadataRegistry | None = None,
+    ) -> None:
         self.semantic_runtime = semantic_runtime
-        self._tables_metadata = self._load_tables_metadata()
-        self._business_knowledge = self._load_business_knowledge()
+        self.metadata_registry = metadata_registry or MetadataRegistry()
 
     def build_classification_prompt(
         self,
@@ -150,7 +152,8 @@ class PromptBuilder:
             if table_name in self._tables_metadata
         }
         field_resolution = self._field_resolution(query_plan)
-        shape_contract = self._shape_contract(query_plan)
+        time_resolution = self._time_resolution(query_plan)
+        shape_contract = self._shape_contract(query_plan, time_resolution=time_resolution)
         retrieved_examples = self._select_retrieved_examples(query_plan, retrieval)
         sql_preferences = self._prompt_asset_strings("sql_generation", "base_preferences")
         if shape_contract["required_projection"]:
@@ -180,6 +183,7 @@ class PromptBuilder:
             "tables_metadata_count": len(source_schemas),
             "business_notes_chars": len(business_notes),
             "business_notes_source": business_notes_source,
+            "time_resolution_count": len(time_resolution),
             "few_shot_used": bool(retrieved_examples),
             "retrieved_example_count": len(retrieved_examples),
             "retrieved_example_ids": [item["id"] for item in retrieved_examples],
@@ -194,6 +198,7 @@ class PromptBuilder:
             "allowed_sources": selected_sources,
             "allowed_fields": sorted(self._sql_allowed_fields(query_plan)),
             "field_resolution": field_resolution,
+            "time_resolution": time_resolution,
             "shape_contract": shape_contract,
             "tables_metadata": source_schemas,
             "business_notes": business_notes,
@@ -211,32 +216,29 @@ class PromptBuilder:
         }
 
     def _load_tables_metadata(self) -> dict:
-        try:
-            return json.loads(TABLES_METADATA_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        return self.metadata_registry.tables_metadata
 
     def _load_examples(self) -> dict[str, ExampleRecord]:
-        try:
-            payload = json.loads(EXAMPLES_TEMPLATE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        payload = self.metadata_registry.examples_template
         examples: dict[str, ExampleRecord] = {}
-        for item in payload if isinstance(payload, list) else []:
+        for index, item in enumerate(payload if isinstance(payload, list) else []):
             try:
                 example = ExampleRecord(**item)
-            except Exception:
-                continue
+            except Exception as exc:
+                raise RuntimeError(f"invalid example record at index {index}: {exc}") from exc
             examples[example.id] = example
         return examples
 
     def _load_business_knowledge(self) -> list[dict]:
-        try:
-            payload = json.loads(BUSINESS_KNOWLEDGE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            return []
-        entries = payload.get("entries", [])
-        return entries if isinstance(entries, list) else []
+        return self.metadata_registry.business_knowledge_entries
+
+    @property
+    def _tables_metadata(self) -> dict:
+        return self._load_tables_metadata()
+
+    @property
+    def _business_knowledge(self) -> list[dict]:
+        return self._load_business_knowledge()
 
     def _business_notes_for_plan(
         self,
@@ -601,18 +603,19 @@ class PromptBuilder:
         qualified = self._qualify_columns(query_plan, metric_columns)
         return qualified or metric_columns
 
-    def _shape_contract(self, query_plan: QueryPlan) -> dict:
+    def _shape_contract(self, query_plan: QueryPlan, time_resolution: dict | None = None) -> dict:
         required_projection = list(query_plan.dimensions)
         aggregate_metrics = list(query_plan.metrics)
         dimension_hints: list[str] = []
         logical_dimension_examples: dict[str, list[str]] = {}
+        time_resolution = time_resolution or {}
         for field in required_projection:
-            examples = self._logical_dimension_examples(query_plan, field)
+            examples = self._logical_dimension_examples(field, time_resolution)
             if examples:
                 logical_dimension_examples[field] = examples
                 if field == "biz_month":
                     dimension_hints.append(
-                        "若 biz_month 来自月表字段，可直接投影真实月份列并别名成 biz_month；若来自日报字段，需在外层 SELECT 中显式写出月表达式，例如 DATE_FORMAT(<date_col>, '%Y-%m') AS biz_month，并在外层 GROUP BY 中使用相同表达式或别名。"
+                        "如果需要把逻辑月份 biz_month 映射到真实字段，优先参考 time_resolution.biz_month.candidates 里的 projection_example，并保持最终外层 SELECT 与 GROUP BY 使用同一表达式或别名。"
                     )
         return {
             "required_projection": required_projection,
@@ -622,43 +625,190 @@ class PromptBuilder:
             "dimension_hints": dimension_hints,
         }
 
-    def _logical_dimension_examples(self, query_plan: QueryPlan, logical_field: str) -> list[str]:
+    def _logical_dimension_examples(self, logical_field: str, time_resolution: dict) -> list[str]:
+        candidates = time_resolution.get(logical_field, {}).get("candidates", [])
+        examples: list[str] = []
+        for candidate in candidates:
+            example = candidate.get("projection_example")
+            if isinstance(example, str) and example and example not in examples:
+                examples.append(example)
+        return examples
+
+    def _time_resolution(self, query_plan: QueryPlan) -> dict:
+        if self.semantic_runtime is None:
+            return {}
+        resolution: dict[str, dict] = {}
+        for logical_field in ["biz_date", "biz_month"]:
+            candidates = self._time_resolution_candidates(query_plan, logical_field)
+            if candidates:
+                resolution[logical_field] = {
+                    "candidates": candidates,
+                }
+        return resolution
+
+    def _time_resolution_candidates(self, query_plan: QueryPlan, logical_field: str) -> list[dict]:
+        if self.semantic_runtime is None:
+            return []
+        if logical_field == "biz_date":
+            candidates: list[dict] = []
+            for candidate in self.semantic_runtime.resolve_time_field_candidates(
+                query_plan.subject_domain,
+                query_plan.tables,
+                logical_field,
+            ):
+                field_expr = candidate["qualified_field"]
+                payload = {
+                    "field": field_expr,
+                    "grain": candidate.get("grain"),
+                    "format": candidate.get("format"),
+                }
+                day_filter_example = self._day_filter_example(query_plan, field_expr, candidate.get("format"))
+                if day_filter_example:
+                    payload["day_filter_example"] = day_filter_example
+                month_range_example = self._month_range_filter_example(
+                    query_plan,
+                    field_expr,
+                    candidate.get("format"),
+                )
+                if month_range_example:
+                    payload["month_range_filter_example"] = month_range_example
+                candidates.append(payload)
+            return candidates
+
         if logical_field != "biz_month":
             return []
-        examples: list[str] = []
+
+        candidates = []
+        sample_month = self._example_compact_month(query_plan)
+        for candidate in self.semantic_runtime.resolve_time_field_candidates(
+            query_plan.subject_domain,
+            query_plan.tables,
+            logical_field,
+        ):
+            field_expr = candidate["qualified_field"]
+            projection_expr = self._month_projection_expression(field_expr, candidate.get("format")) or field_expr
+            payload = {
+                "field": field_expr,
+                "grain": candidate.get("grain"),
+                "format": candidate.get("format"),
+                "projection_example": f"{projection_expr} AS biz_month",
+            }
+            if sample_month:
+                month_literal = self.semantic_runtime.format_time_literal(sample_month, candidate.get("format")) or sample_month
+                payload["month_filter_example"] = f"{field_expr} = '{month_literal}'"
+            candidates.append(payload)
+
+        for candidate in self.semantic_runtime.resolve_time_field_candidates(
+            query_plan.subject_domain,
+            query_plan.tables,
+            "biz_date",
+        ):
+            field_expr = candidate["qualified_field"]
+            projection_expr = self._month_projection_expression(field_expr, candidate.get("format"))
+            if not projection_expr:
+                continue
+            payload = {
+                "field": field_expr,
+                "grain": candidate.get("grain"),
+                "format": candidate.get("format"),
+                "projection_example": f"{projection_expr} AS biz_month",
+            }
+            if sample_month:
+                payload["month_filter_example"] = f"{projection_expr} = '{sample_month}'"
+            month_range_example = self._month_range_filter_example(
+                query_plan,
+                field_expr,
+                candidate.get("format"),
+            )
+            if month_range_example:
+                payload["month_range_filter_example"] = month_range_example
+            candidates.append(payload)
+        return candidates
+
+    def _month_projection_expression(self, field_expression: str, field_format: str | None) -> str | None:
+        normalized_format = str(field_format or "").strip().upper()
+        if normalized_format == "YYYYMM":
+            return field_expression
+        if normalized_format == "YYYY-MM":
+            return f"REPLACE({field_expression}, '-', '')"
+        if normalized_format == "YYYYMMDD":
+            return f"SUBSTRING({field_expression}, 1, 6)"
+        if normalized_format == "YYYY-MM-DD":
+            return f"REPLACE(SUBSTRING({field_expression}, 1, 7), '-', '')"
+        return None
+
+    def _example_compact_month(self, query_plan: QueryPlan) -> str:
+        if self.semantic_runtime is not None:
+            for item in query_plan.filters:
+                if item.field not in {"biz_month", "demand_month"}:
+                    continue
+                candidate_values = [item.value]
+                if item.op == "between" and isinstance(item.value, list):
+                    candidate_values = list(item.value)
+                for candidate_value in candidate_values:
+                    compact_month = self.semantic_runtime.compact_month_value(str(candidate_value))
+                    if compact_month:
+                        return compact_month
+            time_context = query_plan.time_context
+            if time_context and time_context.range:
+                for candidate_value in [time_context.range.start, time_context.range.end]:
+                    compact_month = self.semantic_runtime.compact_month_value(candidate_value)
+                    if compact_month:
+                        return compact_month
+        return "202604"
+
+    def _example_iso_day(self, query_plan: QueryPlan) -> str:
+        if self.semantic_runtime is not None:
+            for item in query_plan.filters:
+                if item.field != "biz_date":
+                    continue
+                candidate_values = [item.value]
+                if item.op == "between" and isinstance(item.value, list):
+                    candidate_values = list(reversed(item.value))
+                for candidate_value in candidate_values:
+                    iso_day = self.semantic_runtime.format_time_literal(str(candidate_value), "YYYY-MM-DD")
+                    if iso_day:
+                        return iso_day
+            time_context = query_plan.time_context
+            if time_context and time_context.range:
+                for candidate_value in [time_context.range.end, time_context.range.start]:
+                    iso_day = self.semantic_runtime.format_time_literal(candidate_value, "YYYY-MM-DD")
+                    if iso_day:
+                        return iso_day
+            sample_month = self._example_compact_month(query_plan)
+            month_range = self.semantic_runtime.month_range_literals(sample_month, "YYYY-MM-DD")
+            if month_range:
+                return month_range[1]
+        return "2026-04-30"
+
+    def _day_filter_example(
+        self,
+        query_plan: QueryPlan,
+        field_expression: str,
+        field_format: str | None,
+    ) -> str | None:
         if self.semantic_runtime is None:
-            return examples
-        month_format = self._biz_month_date_format(query_plan)
-        physical_candidates = self._physical_candidates(query_plan, logical_field)
-        for candidate in physical_candidates:
-            if candidate.endswith(".report_month") or candidate == "report_month":
-                examples.append(f"{candidate} AS biz_month")
-            elif candidate.endswith(".plan_month") or candidate == "plan_month":
-                examples.append(f"{candidate} AS biz_month")
-        date_candidates = self._physical_candidates(query_plan, "biz_date")
-        for candidate in date_candidates:
-            if self._looks_like_date_column(candidate):
-                examples.append(f"DATE_FORMAT({candidate}, '{month_format}') AS biz_month")
-        unique_examples: list[str] = []
-        for item in examples:
-            if item not in unique_examples:
-                unique_examples.append(item)
-        return unique_examples
+            return None
+        iso_day = self._example_iso_day(query_plan)
+        literal = self.semantic_runtime.format_time_literal(iso_day, field_format)
+        if not literal:
+            return None
+        return f"{field_expression} = '{literal}'"
 
-    def _looks_like_date_column(self, candidate: str) -> bool:
-        normalized = candidate.lower().split(".")[-1]
-        return normalized in {"report_date", "work_date", "plan_date"}
-
-    def _biz_month_date_format(self, query_plan: QueryPlan) -> str:
-        compact_month_values = [
-            str(item.value)
-            for item in query_plan.filters
-            if item.field == "biz_month"
-            and isinstance(item.value, str)
-        ]
-        if any(re.fullmatch(r"20\d{4}", value) for value in compact_month_values):
-            return "%Y%m"
-        return "%Y-%m"
+    def _month_range_filter_example(
+        self,
+        query_plan: QueryPlan,
+        field_expression: str,
+        field_format: str | None,
+    ) -> str | None:
+        if self.semantic_runtime is None:
+            return None
+        compact_month = self._example_compact_month(query_plan)
+        literals = self.semantic_runtime.month_range_literals(compact_month, field_format)
+        if not literals:
+            return None
+        start_literal, end_literal = literals
+        return f"{field_expression} BETWEEN '{start_literal}' AND '{end_literal}'"
 
     def _has_latest_n_filter(self, query_plan: QueryPlan) -> bool:
         return any(item.op == "latest_n" for item in query_plan.filters)

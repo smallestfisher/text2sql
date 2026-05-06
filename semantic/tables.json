@@ -17,6 +17,12 @@
       "MONTH7 (需求起始月份第7个月 需求数量)"
     ],
     "MAIN_KEY": "PM_VERSION,FGCODE,SBU_DESC,CUSTOMER",
+    "time_fields": {
+      "MONTH": {
+        "grain": "month",
+        "format": "YYYYMM"
+      }
+    },
     "month_col": "MONTH",
     "version_col": "PM_VERSION",
     "relationships": {
@@ -42,6 +48,12 @@
       "MONTH7 (需求起始月份第7个月 需求数量)"
     ],
     "MAIN_KEY": "PM_VERSION,FGCODE,SBU_DESC,BU_DESC,CUSTOMER",
+    "time_fields": {
+      "MONTH": {
+        "grain": "month",
+        "format": "YYYYMM"
+      }
+    },
     "month_col": "MONTH",
     "version_col": "PM_VERSION",
     "relationships": {
@@ -64,6 +76,12 @@
       "HOLD_Qty (Hold库存量)"
     ],
     "MAIN_KEY": "report_date,factory_code,ERP_FACTORY,ERP_LOCATION,product_ID,PRODUCTION_TYPE,GRADE,CHECKINCODE",
+    "time_fields": {
+      "report_date": {
+        "grain": "day",
+        "format": "YYYYMMDD"
+      }
+    },
     "date_col": "report_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID"
@@ -79,6 +97,12 @@
       "target_qty (计划投入量)"
     ],
     "MAIN_KEY": "PLAN_date,factory_code,product_ID",
+    "time_fields": {
+      "PLAN_date": {
+        "grain": "day",
+        "format": "YYYYMMDD"
+      }
+    },
     "date_col": "PLAN_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID, product_mapping.FGCODE"
@@ -98,6 +122,16 @@
       "target_Out_panel_qty (目标产出panel量)"
     ],
     "MAIN_KEY": "plan_month,PLAN_date,factory_code,product_ID",
+    "time_fields": {
+      "plan_month": {
+        "grain": "month",
+        "format": "YYYYMM"
+      },
+      "PLAN_date": {
+        "grain": "day",
+        "format": "YYYYMMDD"
+      }
+    },
     "month_col": "plan_month",
     "date_col": "PLAN_date",
     "relationships": {
@@ -131,6 +165,12 @@
       "EUGHT_AGE_panel_qty (36月以上库龄库存panel量)"
     ],
     "MAIN_KEY": "report_month,product_ID,SBU_DESC,BU_DESC,CUSTOMER,ERP_FACTORY,ERP_LOCATION,LGORT_DL,LGORT_LX,GRADE_FL,GRADE",
+    "time_fields": {
+      "report_month": {
+        "grain": "month",
+        "format": "YYYYMM"
+      }
+    },
     "month_col": "report_month",
     "relationships": {
       "product_ID": "product_attributes.product_ID"
@@ -180,6 +220,12 @@
       "defect_qty (不良数)"
     ],
     "MAIN_KEY": "work_date,FACTORY,product_ID,act_type",
+    "time_fields": {
+      "work_date": {
+        "grain": "day",
+        "format": "YYYYMMDD"
+      }
+    },
     "date_col": "work_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID, product_mapping.FGCODE"
@@ -198,6 +244,12 @@
       "FINANCIAL_qty (财务业绩)"
     ],
     "MAIN_KEY": "report_month,SBU_DESC,BU_DESC,CUSTOMER,FGCODE",
+    "time_fields": {
+      "report_month": {
+        "grain": "month",
+        "format": "YYYYMM"
+      }
+    },
     "month_col": "report_month",
     "relationships": {
       "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
@@ -214,6 +266,12 @@
       "plan_qty (日计划投入)"
     ],
     "MAIN_KEY": "PM_VERSION,plan_date,factory,product_ID",
+    "time_fields": {
+      "plan_date": {
+        "grain": "day",
+        "format": "YYYYMMDD"
+      }
+    },
     "date_col": "plan_date",
     "version_col": "PM_VERSION",
     "relationships": {
@@ -221,4 +279,3 @@
     }
   }
 }
-

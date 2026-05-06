@@ -8,7 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from backend.app.api.dependencies import get_container, get_current_user, resolve_request_user_context
+from backend.app.core.cancellation import CancellationToken
 from backend.app.core.container import AppContainer
+from backend.app.core.exceptions import ClientCancelledError
 from backend.app.models.admin import (
     RuntimeQueryLogCollectionResponse,
     RuntimeRetrievalLogRecord,
@@ -30,6 +32,28 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
+async def _watch_client_disconnect(
+    http_request: Request,
+    trace_id: str,
+    cancellation_token: CancellationToken,
+    container: AppContainer,
+) -> None:
+    disconnect_checker = getattr(http_request, "is_disconnected", None)
+    if not callable(disconnect_checker):
+        return
+    while not cancellation_token.cancelled:
+        try:
+            disconnected = await disconnect_checker()
+        except Exception as exc:
+            logger.warning("disconnect check failed trace_id=%s error=%s", trace_id, exc)
+            return
+        if disconnected:
+            cancellation_token.cancel("client disconnected")
+            container.progress_service.complete(trace_id)
+            return
+        await asyncio.sleep(0.25)
+
+
 @router.post("/query/stream")
 async def chat_query_stream(
     request: PlanRequest,
@@ -43,9 +67,25 @@ async def chat_query_stream(
     )
     trace_id = container.audit_service.new_trace().trace_id
     subscription = container.progress_service.subscribe(trace_id)
+    cancellation_token = CancellationToken()
 
     async def event_stream():
-        future = asyncio.create_task(asyncio.to_thread(container.orchestrator.chat, request, trace_id))
+        future = asyncio.create_task(
+            asyncio.to_thread(
+                container.orchestrator.chat,
+                request,
+                trace_id,
+                cancellation_token,
+            )
+        )
+        disconnect_task = asyncio.create_task(
+            _watch_client_disconnect(
+                http_request=http_request,
+                trace_id=trace_id,
+                cancellation_token=cancellation_token,
+                container=container,
+            )
+        )
         emitted_failed_event = False
         try:
             while True:
@@ -59,6 +99,8 @@ async def chat_query_stream(
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
             try:
                 await future
+            except ClientCancelledError:
+                pass
             except Exception as exc:
                 logger.exception("stream chat failed trace_id=%s", trace_id)
                 if not emitted_failed_event:
@@ -73,6 +115,9 @@ async def chat_query_stream(
                     yield f"event: {failure_event.type}\n".encode("utf-8")
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
         finally:
+            cancellation_token.cancel("stream closed")
+            disconnect_task.cancel()
+            await asyncio.gather(disconnect_task, return_exceptions=True)
             container.progress_service.unsubscribe(trace_id, subscription)
 
     return StreamingResponse(

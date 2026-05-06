@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from collections import Counter
-import json
 import logging
 import math
-from pathlib import Path
 import re
+import threading
 
-from backend.app.config import BUSINESS_KNOWLEDGE_PATH, EXAMPLES_TEMPLATE_PATH, JOIN_PATTERNS_PATH, TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
+from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.vector_retriever import VectorRetriever
@@ -24,25 +23,23 @@ class RetrievalService:
         self,
         domain_config: dict,
         semantic_runtime: SemanticRuntime | None = None,
-        examples_path: Path = EXAMPLES_TEMPLATE_PATH,
-        tables_metadata_path: Path = TABLES_METADATA_PATH,
-        business_knowledge_path: Path = BUSINESS_KNOWLEDGE_PATH,
-        join_patterns_path: Path = JOIN_PATTERNS_PATH,
+        metadata_registry: MetadataRegistry | None = None,
         vector_retriever: VectorRetriever | None = None,
         vector_corpus_store_service: VectorCorpusStoreService | None = None,
         vector_top_k: int = 3,
         async_vector_index: bool = True,
+        prewarm_vector_index: bool = False,
     ) -> None:
         self.domain_config = domain_config
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
-        self.examples_path = examples_path
-        self.tables_metadata_path = tables_metadata_path
-        self.business_knowledge_path = business_knowledge_path
-        self.join_patterns_path = join_patterns_path
+        self.metadata_registry = metadata_registry or MetadataRegistry()
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
         self.vector_corpus_store_service = vector_corpus_store_service
         self.vector_top_k = vector_top_k
         self.async_vector_index = async_vector_index
+        if self.vector_retriever.provider != "disabled" and not self.vector_retriever.enabled:
+            raise RuntimeError("vector retrieval is enabled but vector embedding client is not configured")
+        self.prewarm_vector_index_on_reload = prewarm_vector_index
         self.examples = self._load_examples()
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
@@ -60,10 +57,14 @@ class RetrievalService:
             "vector_sync_last_updated_at": None,
             "embedding_signature": None,
             "error": None,
+            "pending_rebuild": bool(self.vector_retriever.enabled),
         }
-        self._refresh_indexes()
+        self._refresh_indexes(prewarm_vectors=False)
+        if prewarm_vector_index:
+            self.prewarm_vector_index(async_sync=False)
 
     def retrieve(self, query_intent: QueryIntent) -> RetrievalContext:
+        self._ensure_vector_ready()
         domains = [query_intent.subject_domain] if query_intent.subject_domain != "unknown" else []
         retrieval_terms = self._build_retrieval_terms(query_intent)
         query_tokens = self._query_tokens(query_intent, retrieval_terms)
@@ -85,12 +86,37 @@ class RetrievalService:
             hit_count_by_channel=self._count_hits_by_channel(top_hits),
         )
 
-    def reload(self) -> None:
+    def reload(self, *, prewarm_vectors: bool | None = None) -> None:
+        self.metadata_registry.reload()
         self.examples = self._load_examples()
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
         self.join_patterns = self._load_join_patterns()
-        self._refresh_indexes()
+        should_prewarm = self.prewarm_vector_index_on_reload if prewarm_vectors is None else prewarm_vectors
+        self._refresh_indexes(prewarm_vectors=False)
+        if should_prewarm:
+            self.prewarm_vector_index(async_sync=False)
+
+    def prewarm_vector_index(self, *, async_sync: bool = False) -> dict:
+        if async_sync:
+            thread = threading.Thread(
+                target=self.prewarm_vector_index,
+                kwargs={"async_sync": False},
+                daemon=True,
+                name="vector-prewarm",
+            )
+            thread.start()
+            return {
+                "accepted": True,
+                "vector_enabled": self.vector_retriever.enabled,
+                "pending_rebuild": bool(self.last_vector_sync_summary.get("pending_rebuild")),
+            }
+        self._sync_vector_index()
+        return {
+            "accepted": True,
+            "vector_enabled": self.vector_retriever.enabled,
+            "pending_rebuild": bool(self.last_vector_sync_summary.get("pending_rebuild")),
+        }
 
     def summarize_retrieval(self, retrieval: RetrievalContext) -> dict:
         return {
@@ -132,11 +158,10 @@ class RetrievalService:
         return ExampleRecord(**payload)
 
     def _load_examples(self) -> list[ExampleRecord]:
-        with self.examples_path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
+        payload = self.metadata_registry.examples_template
         return [self.validate_example(item) for item in payload]
 
-    def _refresh_indexes(self) -> None:
+    def _refresh_indexes(self, *, prewarm_vectors: bool) -> None:
         self.corpus_documents = (
             self._build_example_documents()
             + self._build_metric_documents()
@@ -153,6 +178,12 @@ class RetrievalService:
             total_length += document["length"]
             self.document_frequency.update(set(document["token_counts"].keys()))
         self.average_doc_length = total_length / len(self.corpus_documents) if self.corpus_documents else 1.0
+        if prewarm_vectors:
+            self._sync_vector_index()
+            return
+        self._mark_vector_index_pending()
+
+    def _mark_vector_index_pending(self) -> None:
         if not self.vector_retriever.enabled:
             self.last_vector_sync_summary = {
                 "persisted_document_count": 0,
@@ -163,8 +194,26 @@ class RetrievalService:
                 "vector_sync_last_updated_at": None,
                 "embedding_signature": None,
                 "error": None,
+                "pending_rebuild": False,
             }
             self.vector_retriever.load_documents([])
+            return
+        self.last_vector_sync_summary = {
+            "persisted_document_count": 0,
+            "reused_document_count": 0,
+            "rebuilt_document_count": 0,
+            "deleted_document_count": 0,
+            "upserted_document_count": 0,
+            "vector_sync_last_updated_at": None,
+            "embedding_signature": self.vector_retriever.embedding_signature(),
+            "error": None,
+            "pending_rebuild": True,
+        }
+        self.vector_retriever.load_documents([])
+
+    def _sync_vector_index(self) -> None:
+        if not self.vector_retriever.enabled:
+            self._mark_vector_index_pending()
             return
         if self.vector_corpus_store_service is None:
             raise RuntimeError("vector_corpus_store_service is required when vector retrieval is enabled")
@@ -172,6 +221,7 @@ class RetrievalService:
             sync_result = self.vector_corpus_store_service.sync(self.corpus_documents)
         except Exception as exc:
             logger.exception("vector corpus sync failed")
+            self.vector_retriever.load_documents([])
             self.last_vector_sync_summary = {
                 "persisted_document_count": 0,
                 "reused_document_count": 0,
@@ -181,14 +231,23 @@ class RetrievalService:
                 "vector_sync_last_updated_at": None,
                 "embedding_signature": None,
                 "error": str(exc),
+                "pending_rebuild": True,
             }
-            self.vector_retriever.load_documents([])
-            return
+            raise RuntimeError(f"vector corpus sync failed: {exc}") from exc
         self.last_vector_sync_summary = sync_result.summary()
-        if self.async_vector_index:
-            self.vector_retriever.load_documents_async(sync_result.documents)
-        else:
-            self.vector_retriever.load_documents(sync_result.documents)
+        self.last_vector_sync_summary["pending_rebuild"] = False
+        self.vector_retriever.load_documents(sync_result.documents)
+
+    def _ensure_vector_ready(self) -> None:
+        if not self.vector_retriever.enabled:
+            return
+        if self.last_vector_sync_summary.get("pending_rebuild"):
+            raise RuntimeError("vector retrieval is enabled but vector index is pending rebuild")
+        error = self.last_vector_sync_summary.get("error")
+        if error:
+            raise RuntimeError(f"vector retrieval is unavailable: {error}")
+        if not self.vector_retriever.ready:
+            raise RuntimeError("vector retrieval is enabled but vector index is not ready")
 
     def _build_example_documents(self) -> list[dict]:
         documents: list[dict] = []
@@ -285,27 +344,14 @@ class RetrievalService:
         }
 
     def _load_tables_metadata(self) -> dict:
-        with self.tables_metadata_path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
+        payload = self.metadata_registry.tables_metadata
         return payload if isinstance(payload, dict) else {}
 
     def _load_business_knowledge(self) -> list[dict]:
-        try:
-            with self.business_knowledge_path.open("r", encoding="utf-8") as file:
-                payload = json.load(file)
-        except Exception:
-            return []
-        entries = payload.get("entries", [])
-        return entries if isinstance(entries, list) else []
+        return self.metadata_registry.business_knowledge_entries
 
     def _load_join_patterns(self) -> list[dict]:
-        try:
-            with self.join_patterns_path.open("r", encoding="utf-8") as file:
-                payload = json.load(file)
-        except Exception:
-            return []
-        patterns = payload.get("patterns", [])
-        return patterns if isinstance(patterns, list) else []
+        return self.metadata_registry.join_patterns
 
     def _build_knowledge_documents(self) -> list[dict]:
         documents: list[dict] = []
@@ -345,9 +391,15 @@ class RetrievalService:
                 continue
             columns = payload.get("columns", [])
             relationships = payload.get("relationships", {})
+            time_fields = payload.get("time_fields", {})
             relationship_text = " ".join(
                 f"{field} {target}"
                 for field, target in relationships.items()
+            )
+            time_field_text = " ".join(
+                f"{field_name} grain={metadata.get('grain')} format={metadata.get('format')}"
+                for field_name, metadata in time_fields.items()
+                if isinstance(metadata, dict)
             )
             documents.append(
                 self._build_document(
@@ -358,6 +410,7 @@ class RetrievalService:
                         "kind": "table_metadata",
                         "table": table_name,
                         "main_key": payload.get("MAIN_KEY"),
+                        "time_fields": time_fields,
                         "date_col": payload.get("date_col"),
                         "month_col": payload.get("month_col"),
                         "version_col": payload.get("version_col"),
@@ -367,6 +420,7 @@ class RetrievalService:
                         payload.get("description", ""),
                         " ".join(columns),
                         str(payload.get("MAIN_KEY", "")),
+                        time_field_text,
                         relationship_text,
                     ],
                 )

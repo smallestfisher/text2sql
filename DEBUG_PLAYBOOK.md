@@ -15,6 +15,7 @@
 遇到准确率问题，优先修这些地方：
 
 1. `semantic/tables.json`
+   - 先看 `time_fields.grain/format` 是否准确，很多时间筛选、月份映射、最新值判断都直接依赖这里
 2. `semantic/business_knowledge.json`
 3. `examples/nl2sql_examples.template.json`
 4. `semantic/join_patterns.json`
@@ -143,6 +144,9 @@
 - `latest_trace` 和消息上挂的 `trace_id` 对不上：优先查 query log / trace artifact 拼接
 - `trace_artifacts` 缺某一轮：优先查该轮 `trace / query_log / sql_audit` 是否有缺口
 
+当前 `workspace` 不再做 partial fallback。  
+如果缺少 `query_log`、`trace`、`sql_audit`，或者 response restore 失败，请直接修 runtime 工件，而不是期待工作台先拼一个残缺结果。
+
 ---
 
 ## 5. 一条查询的真实分层
@@ -243,6 +247,7 @@
 - `GET /api/admin/runtime/status`
   - `vector_retrieval`
   - `retrieval_corpus`
+- `POST /api/admin/runtime/vector/prewarm`
 
 重点看：
 
@@ -251,6 +256,8 @@
 - `vector_sync.error`
 - `persisted_document_count`
 - `rebuilt_document_count`
+
+如果 `vector_enabled=true` 但这里不健康，当前版本不再悄悄退回“无向量命中”模式；相关请求或 reload 会直接失败。
 
 ### 6.3 Query Plan
 
@@ -316,6 +323,11 @@
 - `examples`
 - `join_patterns`
 
+额外检查：
+
+- `tables_metadata` 里目标表的 `time_fields.format` 是否正确
+- SQL prompt 里的 `time_resolution` 是否给出了正确的投影/过滤示例
+
 ### 6.5 SQL 校验 / Repair
 
 先看：
@@ -336,6 +348,7 @@
 - `SqlValidator`
 - `SqlAstValidator`
 - Query Plan shape contract
+- `semantic/tables.json` 里的 `time_fields.format`
 
 补充说明：
 
@@ -389,7 +402,7 @@
 1. 在工作台复现，拿到 `session_id`、`trace_id`
 2. 先看工作台右侧结果卡和详情
 3. 打开 `GET /api/admin/runtime/status`
-   - 确认 DB、LLM、vector channel 都健康
+   - 确认 business DB、runtime DB、LLM、vector channel、sql AST validator 都健康
 4. 打开 `GET /api/admin/runtime/query-logs?limit=...`
 5. 看：
    - `GET /api/admin/runtime/query-logs/{trace_id}`
@@ -441,7 +454,8 @@
 当前行为要点：
 
 - 写入 example 后会触发 retrieval corpus reload
-- 受影响向量会增量重建并持久化到 runtime 库
+- 如果启用了向量检索，reload 会同步重建向量索引
+- 如果重建失败，当前操作直接报错，不再静默降级成空向量通道
 - 通常不需要重启服务
 
 ### 8.4 Eval

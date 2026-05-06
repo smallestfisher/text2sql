@@ -3,6 +3,7 @@ from __future__ import annotations
 from backend.app.models.classification import QueryIntent
 from backend.app.models.intent import StructuredIntent
 from backend.app.models.session_state import SessionState
+from backend.app.core.cancellation import CancellationToken
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
 
@@ -22,13 +23,17 @@ class IntentService:
         question: str,
         query_intent: QueryIntent,
         session_state: SessionState | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict:
         prompt_payload = self.prompt_builder.build_intent_prompt(
             question=question,
             query_intent=query_intent,
             session_state=session_state,
         )
-        hint = self.llm_client.generate_intent(prompt_payload)
+        hint = self.llm_client.generate_intent(
+            prompt_payload,
+            cancellation_token=cancellation_token,
+        )
         intent = StructuredIntent.from_llm_payload(
             normalized_question=query_intent.normalized_question,
             payload=hint,

@@ -3,11 +3,9 @@ from __future__ import annotations
 from collections import Counter
 from collections import deque
 import calendar
-import json
 import re
 from datetime import date
 
-from backend.app.config import TABLES_METADATA_PATH
 from backend.app.models.classification import QueryIntent
 from backend.app.models.query_plan import ContextDelta
 from backend.app.models.query_plan import FilterItem
@@ -17,11 +15,17 @@ from backend.app.models.query_plan import TimeContext
 from backend.app.models.query_plan import TimeRange
 from backend.app.models.query_plan import VersionContext
 from backend.app.models.session_state import SessionState
+from backend.app.services.metadata_registry import MetadataRegistry
 
 
 class SemanticRuntime:
-    def __init__(self, domain_config: dict) -> None:
+    def __init__(
+        self,
+        domain_config: dict,
+        metadata_registry: MetadataRegistry | None = None,
+    ) -> None:
         self.domain_config = domain_config
+        self.metadata_registry = metadata_registry or MetadataRegistry()
         self.metric_catalog = {
             item["name"]: item for item in domain_config.get("metrics", [])
         }
@@ -47,6 +51,11 @@ class SemanticRuntime:
         self.tables_metadata = self._load_tables_metadata()
         self.table_field_catalog = {
             table_name: self._extract_table_fields(payload)
+            for table_name, payload in self.tables_metadata.items()
+            if isinstance(payload, dict)
+        }
+        self.table_time_field_catalog = {
+            table_name: self._extract_table_time_fields(payload)
             for table_name, payload in self.tables_metadata.items()
             if isinstance(payload, dict)
         }
@@ -284,6 +293,125 @@ class SemanticRuntime:
 
     def table_fields(self, table_name: str) -> list[str]:
         return list(self.table_field_catalog.get(table_name, []))
+
+    def table_time_fields(self, table_name: str) -> dict[str, dict]:
+        return {
+            field_name: dict(metadata)
+            for field_name, metadata in self.table_time_field_catalog.get(table_name, {}).items()
+        }
+
+    def table_time_field(self, table_name: str, field_name: str) -> dict | None:
+        if not field_name:
+            return None
+        metadata = self.table_time_field_catalog.get(table_name, {}).get(field_name)
+        if metadata is None:
+            return None
+        return dict(metadata)
+
+    def resolve_time_field_candidates(
+        self,
+        domain_name: str,
+        table_names: list[str],
+        logical_field: str,
+    ) -> list[dict]:
+        resolved_fields = self.resolve_field_candidates(domain_name, table_names, logical_field)
+        candidates: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for table_name in table_names:
+            for field_name, metadata in self.table_time_field_catalog.get(table_name, {}).items():
+                if field_name not in resolved_fields:
+                    continue
+                key = (table_name, field_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(
+                    {
+                        "table": table_name,
+                        "field": field_name,
+                        "qualified_field": f"{table_name}.{field_name}",
+                        "grain": metadata.get("grain"),
+                        "format": metadata.get("format"),
+                    }
+                )
+        return candidates
+
+    def compact_month_value(self, value: str | None) -> str | None:
+        return self._compact_month_value(value)
+
+    def format_time_literal(self, value: str | None, target_format: str | None) -> str | None:
+        if not value or not target_format:
+            return None
+        normalized_format = str(target_format).strip().upper()
+        compact_day_match = re.fullmatch(r"(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])", value)
+        iso_day_match = re.fullmatch(r"(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])", value)
+        compact_month_match = re.fullmatch(r"(20\d{2})(0[1-9]|1[0-2])", value)
+        iso_month_match = re.fullmatch(r"(20\d{2})-(0[1-9]|1[0-2])", value)
+
+        if normalized_format == "YYYYMM":
+            if compact_month_match:
+                return value
+            if iso_month_match:
+                return f"{iso_month_match.group(1)}{iso_month_match.group(2)}"
+            if compact_day_match:
+                return f"{compact_day_match.group(1)}{compact_day_match.group(2)}"
+            if iso_day_match:
+                return f"{iso_day_match.group(1)}{iso_day_match.group(2)}"
+            return None
+
+        if normalized_format == "YYYY-MM":
+            if compact_month_match:
+                return f"{compact_month_match.group(1)}-{compact_month_match.group(2)}"
+            if iso_month_match:
+                return value
+            if compact_day_match:
+                return f"{compact_day_match.group(1)}-{compact_day_match.group(2)}"
+            if iso_day_match:
+                return f"{iso_day_match.group(1)}-{iso_day_match.group(2)}"
+            return None
+
+        if normalized_format == "YYYYMMDD":
+            if compact_day_match:
+                return value
+            if iso_day_match:
+                return (
+                    f"{iso_day_match.group(1)}"
+                    f"{iso_day_match.group(2)}"
+                    f"{iso_day_match.group(3)}"
+                )
+            return None
+
+        if normalized_format == "YYYY-MM-DD":
+            if compact_day_match:
+                return (
+                    f"{compact_day_match.group(1)}-"
+                    f"{compact_day_match.group(2)}-"
+                    f"{compact_day_match.group(3)}"
+                )
+            if iso_day_match:
+                return value
+            return None
+
+        return None
+
+    def month_range_literals(
+        self,
+        value: str | None,
+        target_format: str | None,
+    ) -> tuple[str, str] | None:
+        compact_month = self._compact_month_value(value)
+        if not compact_month or not target_format:
+            return None
+        year = int(compact_month[:4])
+        month = int(compact_month[4:6])
+        end_day = calendar.monthrange(year, month)[1]
+        start_iso = f"{year:04d}-{month:02d}-01"
+        end_iso = f"{year:04d}-{month:02d}-{end_day:02d}"
+        start_literal = self.format_time_literal(start_iso, target_format)
+        end_literal = self.format_time_literal(end_iso, target_format)
+        if not start_literal or not end_literal:
+            return None
+        return start_literal, end_literal
 
     def resolve_field_candidates(
         self,
@@ -1490,10 +1618,7 @@ class SemanticRuntime:
         return compiled
 
     def _load_tables_metadata(self) -> dict:
-        try:
-            return json.loads(TABLES_METADATA_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        return self.metadata_registry.tables_metadata
 
     def _build_field_semantics_catalog(self, raw_items: list[dict] | None) -> dict[str, dict]:
         catalog: dict[str, dict] = {}
@@ -1549,6 +1674,35 @@ class SemanticRuntime:
             if column_name and column_name not in fields:
                 fields.append(column_name)
         return fields
+
+    def _extract_table_time_fields(self, payload: dict) -> dict[str, dict]:
+        fields = set(self._extract_table_fields(payload))
+        raw_time_fields = payload.get("time_fields", {})
+        normalized: dict[str, dict] = {}
+        if isinstance(raw_time_fields, dict):
+            for raw_field_name, raw_metadata in raw_time_fields.items():
+                field_name = str(raw_field_name).strip()
+                if not field_name or field_name not in fields or not isinstance(raw_metadata, dict):
+                    continue
+                grain = str(raw_metadata.get("grain", "")).strip().lower() or None
+                value_format = str(raw_metadata.get("format", "")).strip().upper() or None
+                normalized[field_name] = {
+                    "grain": grain,
+                    "format": value_format,
+                }
+
+        legacy_mappings = [
+            ("date_col", "day"),
+            ("month_col", "month"),
+        ]
+        for key, grain in legacy_mappings:
+            field_name = str(payload.get(key, "")).strip()
+            if field_name and field_name in fields and field_name not in normalized:
+                normalized[field_name] = {
+                    "grain": grain,
+                    "format": None,
+                }
+        return normalized
 
     def _unique_strings(self, items: list[str]) -> list[str]:
         result: list[str] = []

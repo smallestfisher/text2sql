@@ -99,7 +99,7 @@
         "问句同时出现审批版、实际、Gap、达成率，且语义是投入时，应同时查询审批投入和实际投入，再计算差异与达成率，不能只返回单侧事实值。",
         "审批侧来源是 monthly_plan_approved；实际侧来源是 production_actuals，且实际投入必须过滤 act_type=投入。",
         "如果问题按工厂对比，审批侧工厂通常来自 monthly_plan_approved.factory_code，实际侧工厂通常来自 production_actuals.FACTORY，对齐后再做聚合或关联。",
-        "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或从 PLAN_date 映射月份；实际侧应使用 DATE_FORMAT(work_date, '%Y-%m') 或等价方式映射月份。",
+        "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或按 PLAN_date 的 YYYYMMDD 格式映射到 YYYYMM；实际侧应按 work_date 的 YYYYMMDD 格式映射到 YYYYMM，例如 SUBSTRING(work_date, 1, 6)。",
         "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 或显式 panel 口径时，审批侧改用 target_in_panel_qty，对应实际侧 Panel_qty。",
         "Gap 默认定义为 实际投入 - 审批投入；达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
       ]

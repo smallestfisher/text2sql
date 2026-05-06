@@ -21,3 +21,8 @@ class ResourceNotFoundError(AppError):
 class LLMServiceError(AppError):
     def __init__(self, message: str = "llm service unavailable", status_code: int = 503) -> None:
         super().__init__(message=message, status_code=status_code)
+
+
+class ClientCancelledError(AppError):
+    def __init__(self, message: str = "client cancelled request") -> None:
+        super().__init__(message=message, status_code=499)

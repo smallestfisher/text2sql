@@ -34,18 +34,7 @@ class DatabaseConnector:
 
     def execute_readonly(self, sql: str) -> ExecutionResponse:
         if not self.connected:
-            return ExecutionResponse(
-                executed=False,
-                status="not_configured",
-                sql=sql,
-                row_count=0,
-                columns=[],
-                rows=[],
-                errors=[],
-                warnings=["database connector is not configured"],
-                elapsed_ms=None,
-                error_category="configuration",
-            )
+            raise RuntimeError("database connector is not configured")
 
         started = time.perf_counter()
         warnings: list[str] = []
@@ -53,11 +42,20 @@ class DatabaseConnector:
             with self.engine.connect() as connection:
                 if self.timeout_seconds > 0:
                     try:
-                        connection.exec_driver_sql(
-                            f"SET SESSION MAX_EXECUTION_TIME={self.timeout_seconds * 1000}"
+                        self._apply_session_max_execution_time(connection)
+                    except SQLAlchemyError as exc:
+                        return ExecutionResponse(
+                            executed=False,
+                            status="db_error",
+                            sql=sql,
+                            row_count=0,
+                            columns=[],
+                            rows=[],
+                            errors=[f"failed to apply session max execution time: {exc}"],
+                            warnings=warnings,
+                            elapsed_ms=int((time.perf_counter() - started) * 1000),
+                            error_category="configuration",
                         )
-                    except SQLAlchemyError:
-                        warnings.append("failed to apply session max execution time")
                 result = connection.execute(text(sql))
                 fetched_rows = result.fetchmany(self.max_result_rows + 1)
                 truncated = len(fetched_rows) > self.max_result_rows
@@ -142,7 +140,7 @@ class DatabaseConnector:
                 error_category="database",
             )
 
-    def test_connection(self) -> dict:
+    def test_connection(self, *, verify_readonly_session_settings: bool = False) -> dict:
         if not self.connected:
             return {
                 "connected": False,
@@ -154,6 +152,8 @@ class DatabaseConnector:
             }
         try:
             with self.engine.connect() as connection:
+                if verify_readonly_session_settings and self.timeout_seconds > 0:
+                    self._apply_session_max_execution_time(connection)
                 connection.execute(text("SELECT 1"))
             return {
                 "connected": True,
@@ -237,3 +237,8 @@ class DatabaseConnector:
             raise RuntimeError("database connector is not configured")
         with self.engine.begin() as connection:
             yield connection
+
+    def _apply_session_max_execution_time(self, connection) -> None:
+        connection.exec_driver_sql(
+            f"SET SESSION MAX_EXECUTION_TIME={self.timeout_seconds * 1000}"
+        )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.app.core.cancellation import CancellationToken
 from backend.app.models.classification import QuestionClassification, QueryIntent
 from backend.app.models.intent import StructuredIntent
 from backend.app.models.query_plan import FilterItem, QueryPlan, SortItem
@@ -42,6 +43,7 @@ class QueryPlanner:
         self,
         question: str,
         session_state: SessionState | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict[str, Any]:
         parser_query_intent = self.parser.parse(question=question, session_state=session_state)
         parser_intent = StructuredIntent.from_query_intent(parser_query_intent)
@@ -49,6 +51,7 @@ class QueryPlanner:
             question=question,
             query_intent=parser_query_intent,
             session_state=session_state,
+            cancellation_token=cancellation_token,
         )
         normalized_intent = self._normalize_intent(question=question, llm_intent=llm_intent)
         query_intent, intent_selection = self._select_effective_query_intent(
@@ -59,6 +62,7 @@ class QueryPlanner:
             question=question,
             query_intent=query_intent,
             session_state=session_state,
+            cancellation_token=cancellation_token,
         )
         warnings: list[str] = list(classifier_warnings)
         if classification.need_clarification:
@@ -115,11 +119,13 @@ class QueryPlanner:
         question: str,
         query_intent: QueryIntent,
         session_state: SessionState | None,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict[str, Any]:
         return self.intent_service.generate_intent(
             question=question,
             query_intent=query_intent,
             session_state=session_state,
+            cancellation_token=cancellation_token,
         )
 
     def _normalize_intent(self, *, question: str, llm_intent: dict[str, Any]) -> dict[str, Any]:
@@ -170,11 +176,15 @@ class QueryPlanner:
         }
 
     def classify(
-        self, question: str, session_state: SessionState | None = None
+        self,
+        question: str,
+        session_state: SessionState | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> tuple[QueryIntent, QuestionClassification, list[str]]:
         planning_trace = self.build_planning_trace(
             question=question,
             session_state=session_state,
+            cancellation_token=cancellation_token,
         )
         return (
             planning_trace["query_intent"],
@@ -183,11 +193,15 @@ class QueryPlanner:
         )
 
     def create_plan(
-        self, question: str, session_state: SessionState | None = None
+        self,
+        question: str,
+        session_state: SessionState | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> tuple[QueryIntent, QuestionClassification, QueryPlan, list[str]]:
         planning_trace = self.build_planning_trace(
             question=question,
             session_state=session_state,
+            cancellation_token=cancellation_token,
         )
         query_intent = planning_trace["query_intent"]
         classification = planning_trace["classification"]

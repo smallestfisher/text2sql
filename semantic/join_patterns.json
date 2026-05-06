@@ -49,7 +49,7 @@
       "tables": ["monthly_plan_approved", "production_actuals"],
       "keywords": ["审批版", "实际", "投入", "Gap", "达成率", "factory", "biz_month"],
       "join_path": [
-        "monthly_plan_approved.plan_month = DATE_FORMAT(production_actuals.work_date, '%Y-%m')",
+        "monthly_plan_approved.plan_month = SUBSTRING(production_actuals.work_date, 1, 6)",
         "monthly_plan_approved.factory_code = production_actuals.FACTORY"
       ],
       "notes": [

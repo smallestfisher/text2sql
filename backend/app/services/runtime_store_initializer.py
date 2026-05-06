@@ -16,14 +16,18 @@ class RuntimeStoreInitializer:
 
     def ensure_schema(self) -> dict:
         if not self.database_connector.connected:
-            return {"executed": False, "error": "database connector is not configured"}
+            raise RuntimeError("runtime database connector is not configured")
         database_result = self.database_connector.ensure_database_exists()
         if not database_result.get("executed"):
-            return database_result
+            raise RuntimeError(
+                f"failed to ensure runtime database exists: {database_result.get('error') or database_result}"
+            )
         sql_script = self.schema_path.read_text(encoding="utf-8")
         schema_result = self.database_connector.execute_script(sql_script)
         if not schema_result.get("executed"):
-            return schema_result
+            raise RuntimeError(
+                f"failed to initialize runtime schema: {schema_result.get('error') or schema_result}"
+            )
 
         migration_errors: list[str] = []
         self._ensure_column(
@@ -100,8 +104,7 @@ class RuntimeStoreInitializer:
 
         schema_result["database"] = database_result.get("database")
         if migration_errors:
-            schema_result["executed"] = False
-            schema_result["error"] = "; ".join(migration_errors)
+            raise RuntimeError("; ".join(migration_errors))
         return schema_result
 
     def _ensure_column(

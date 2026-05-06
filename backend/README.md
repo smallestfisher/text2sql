@@ -28,12 +28,17 @@ uvicorn backend.app.main:app --reload --app-dir .
 - LLM 模型名通过 `LLM_MODEL` 配置
 - `LLM_MAX_RETRIES` 控制分类 / intent / SQL 首轮生成的重试次数
 - `SQL_REPAIR_MAX_RETRIES` 控制 SQL repair fallback 的独立重试次数
-- 向量检索默认使用 `VECTOR_RETRIEVAL_PROVIDER=siliconflow`
+- 当前默认就启用向量检索；仍然保留 `ENABLE_VECTOR_RETRIEVAL` 用于环境级开关
+- 默认向量 provider 是 `VECTOR_RETRIEVAL_PROVIDER=siliconflow`
 - 默认向量模型为 `VECTOR_MODEL=Qwen/Qwen3-Embedding-8B`
 - 默认向量维度为 `VECTOR_DIMENSIONS=1024`
 - retrieval corpus embedding 会持久化到 runtime 库的 `vector_corpus_documents` 表；当前不需要单独部署向量数据库
+- `PREWARM_VECTOR_RETRIEVAL=true` 默认开启，会在启动时同步预热向量索引；也可以运行时调用 `POST /api/admin/runtime/vector/prewarm`
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 角色时，问候/闲聊/无关问题会返回闲聊回复而不是 `invalid`；默认 `false`
 - LLM 不可用、调用失败或返回非法 JSON / SQL 时，请求会直接报错，不再静默降级
+- 容器启动时会显式校验 business DB 连通性和只读会话超时设置、runtime DB 连通性、metadata 文件可读性，以及 `sqlglot` 依赖；任一失败都会直接阻断启动
+- LLM 结构化输出如果字段类型或 shape 非法，例如 `metrics`、`filters`、`time_context`、`context_delta`，请求会直接失败，不再自动忽略坏字段
+- `workspace` 恢复链路现在要求 `query_log`、`trace`、`sql_audit` 和可恢复 response 都齐全；缺件时直接报错，不再拼装部分结果
 
 ## 当前范围
 
@@ -56,7 +61,7 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 提供会话仓库、workspace 聚合接口、trace 恢复和 response snapshot
 - 提供查询日志、SQL 审计、反馈、replay、eval case 和管理接口
 - 检索层当前走 `hybrid retrieval` 方向：关键词 / 向量 / 结构化重排联合召回，规则不再承担过强的 few-shot 门控职责
-- 向量检索仍然在应用内存里做 brute-force cosine search，但 corpus 向量现在会增量持久化到 runtime 库，并在启动 / reload 时优先复用
+- 向量检索仍然在应用内存里做 brute-force cosine search，但 corpus 向量会增量持久化到 runtime 库；是否预热由显式开关或 `POST /api/admin/runtime/vector/prewarm` 决定
 
 当前阶段的明确边界：
 
@@ -91,6 +96,8 @@ uvicorn backend.app.main:app --reload --app-dir .
 - 建表
 - 补增量列
 - 补常用索引
+
+如果以上任一步失败，当前版本会直接启动失败，不再以半初始化状态继续运行。
 
 ### 老 runtime 库升级提示
 
@@ -140,6 +147,7 @@ Unknown column '...'
 - `GET /api/admin/metadata/documents/{name}`
 - `PUT /api/admin/metadata/documents/{name}`
 - `POST /api/admin/metadata/reload`
+- `POST /api/admin/runtime/vector/prewarm`
 
 ### Admin Examples / Trace / Feedback
 
@@ -173,13 +181,15 @@ Unknown column '...'
 - `examples/nl2sql_examples.template.json` 现在默认可以为空。
 - 在线样例只应从真实调试链路通过 `materialize-example` 物化进入，不再手写假设样例。
 - example 会参与 RetrievalService 检索，并在命中时以 `retrieved_examples` 形式进入 SQL prompt。
-- `materialize-example`、examples 管理接口写入和 `POST /api/admin/metadata/reload` 都会触发 retrieval corpus reload；新样例和受影响向量会增量重建并持久化，当前不需要重启服务才能生效。
+- `materialize-example`、examples 管理接口写入和 `POST /api/admin/metadata/reload` 都会触发 retrieval corpus reload。
+- 如果向量检索已启用，reload 之后会同步重建向量索引；失败会直接报错，也可以手动调用 `POST /api/admin/runtime/vector/prewarm`。
 - `eval/evaluation_cases.json` 也只应保留真实问题或真实 trace 物化出的回归样本，不再维护假设 case。
 
 `GET /api/admin/runtime/status` 当前还会带出：
 
 - `vector_retrieval`：当前 query embedding 配置、已加载向量签名、就绪状态
 - `retrieval_corpus`：当前 corpus 文档数，以及最近一次向量 sync 的复用 / 重建摘要
+- `business_database`：当前连接性检查结果；服务启动时还会额外校验只读会话超时设置是否能成功下发
 
 ### Admin Users / Roles
 

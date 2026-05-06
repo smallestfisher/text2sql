@@ -87,7 +87,7 @@
 当前主链路直接读取这些文件：
 
 - `semantic/tables.json`
-  - 真实表结构、字段说明、关系和部分时间/版本语义
+  - 真实表结构、字段说明、关系，以及 `time_fields.format` 这类会被 `SemanticRuntime`、`PromptBuilder`、`SqlValidator` 直接消费的物理时间元数据
 - `semantic/business_knowledge.json`
   - 结构化业务知识
 - `examples/nl2sql_examples.template.json`
@@ -155,6 +155,16 @@
 
 这些依赖同一份元数据的对象一起刷新，而不是只刷新其中一部分。
 
+当前容器初始化同时也是一层 fail-fast 启动门：
+
+- business DB 必须可连通，且只读会话的 `MAX_EXECUTION_TIME` 必须能成功下发
+- runtime DB 必须可连通
+- runtime schema 初始化必须成功
+- metadata 文件必须存在且 JSON 结构合法
+- `sqlglot` 依赖必须可用
+
+任何一项失败，服务都不会继续启动。
+
 ---
 
 ## 5. 主 API 入口
@@ -218,10 +228,12 @@
 1. 解析请求和用户上下文
 2. 先生成一个 `trace_id`
 3. 向 `ProgressService` 订阅这个 `trace_id`
-4. 在后台线程里执行 `container.orchestrator.chat(request, trace_id)`
-5. 持续等待进度事件并按 SSE 格式向前端输出
-6. 如果后台任务异常且还没发出 `failed`，路由层补发一个 `failed`
-7. 最后取消订阅
+4. 为这次请求创建 `CancellationToken`
+5. 在后台线程里执行 `container.orchestrator.chat(request, trace_id, cancellation_token)`
+6. 路由层异步监听客户端断连；一旦断开，就触发 token cancel，并主动结束当前进度订阅
+7. 持续等待进度事件并按 SSE 格式向前端输出
+8. 如果后台任务异常且还没发出 `failed`，路由层补发一个 `failed`
+9. 最后取消订阅
 
 这里的 `ProgressService` 是**进程内事件通道**，不是跨进程消息总线。  
 当前实现是事件驱动唤醒，不靠固定间隔轮询。
@@ -244,7 +256,7 @@
 12. 必要时做一次 SQL repair
 13. 执行 SQL
 14. 生成 answer 和 `next_session_state`
-15. 落库 runtime artifacts
+15. 以单个 runtime DB 事务落库 runtime artifacts
 16. 发布 `completed` 或 `failed`
 
 ---
@@ -381,6 +393,8 @@
 - `business_notes`
 - `join_patterns`
 
+另外，`PromptBuilder` 会通过共享的 `MetadataRegistry` 读取表元数据，并基于 `time_fields` 生成结构化 `time_resolution`，把真实时间字段的粒度、存储格式和推荐 SQL 写法显式传给模型。
+
 这也是当前 few-shot 和业务知识进入 SQL 生成的真实入口。
 
 静态指令本身当前来自：
@@ -399,9 +413,11 @@
 
 当前向量通道的边界很明确：
 
+- 仍然保留 `ENABLE_VECTOR_RETRIEVAL` 显式开关，但当前默认值就是启用
 - 只有远端 embedding client 配置成功时，vector retrieval 才算启用
 - 已移除 `local-hash` 这类本地 embedding fallback
-- 未配置远端 client 时，vector channel 直接关闭
+- 如果 `ENABLE_VECTOR_RETRIEVAL=true` 但远端 client 未配置成功，容器会直接启动失败
+- 只有显式把 `ENABLE_VECTOR_RETRIEVAL=false` 关掉时，vector channel 才会关闭
 
 ### 9.2 VectorCorpusStoreService
 
@@ -434,12 +450,15 @@
 
 - runtime 库负责持久化 corpus 向量
 - 应用内存负责实际 brute-force cosine search
+- 容器启动时如果启用了 `PREWARM_VECTOR_RETRIEVAL`，会同步完成向量预热后才算启动成功
+- metadata reload 后，如果预热开关仍为开启，也会同步完成重新预热
+- 仍然可以手动调用 `POST /api/admin/runtime/vector/prewarm`
 
 如果向量同步失败：
 
-- 应用不会因为没有向量而整条主链路崩掉
-- `RetrievalService` 会记录 `vector_sync.error`
-- vector channel 会被置为空 corpus
+- 当前请求会直接失败
+- 启动阶段失败时，服务不会继续正常启动
+- 运行阶段失败时，不再静默降级成空向量命中
 
 ---
 
@@ -456,6 +475,8 @@
 - 只选命中的业务知识
 - 只选命中的 join pattern
 
+对于时间字段，它不再只靠列名猜测，而是会结合 `semantic/tables.json.time_fields` 给出格式驱动的 `biz_date` / `biz_month` 投影和过滤示例。
+
 ### 10.2 LLMClient
 
 [backend/app/services/llm_client.py](/home/y/llm/new/backend/app/services/llm_client.py)
@@ -468,6 +489,14 @@
 - SQL repair
 
 如果 LLM 不可用或返回非法结果，主链路会显式失败，不再静默降级。
+
+这里的“非法结果”不只指整段 JSON / SQL 解析失败，也包括结构化字段 shape 不合法，例如：
+
+- `metrics / entities / dimensions` 不是字符串数组
+- `filters` 里有非法 operator 或非法对象
+- `time_context / version_context / context_delta` 结构不合法
+
+当前实现不会再自动丢弃这些坏字段继续跑，而是直接报错，让问题暴露在 trace 和日志里。
 
 当前生成与 repair 的重试预算已经拆开：
 
@@ -486,6 +515,7 @@ SQL validator 当前会校验：
 - 表和字段范围
 - Query Plan shape contract
 - 时间/版本约束
+- 真实时间字段格式和时间字面量是否一致
 - LIMIT
 - 风险级别和风险 flags
 
@@ -596,6 +626,17 @@ SQL 执行使用业务查询库连接。
 - latest_query_logs
 - trace_artifacts
 
+当前恢复链路是严格聚合，不再做“缺一块也先凑个结果”的 partial fallback。
+
+也就是说，如果某个 trace 缺：
+
+- query log
+- trace
+- sql audit
+- 或者无法从这些工件恢复 response
+
+`workspace` 会直接报错，要求先修复 runtime 工件缺口。
+
 其中 `trace_artifacts` 是按 trace 维度整理的聚合项，方便前端在同一会话里切换不同轮次的结果。
 
 所以前端主界面虽然长得像聊天界面，本质上更接近：
@@ -631,6 +672,7 @@ SQL 执行使用业务查询库连接。
 需要注意：
 
 - 通过 examples 管理接口写入时，会触发当前容器内的 retrieval reload
+- 如果启用了向量检索，reload 会同步重建向量索引；失败则当前操作直接报错
 - `POST /api/admin/metadata/reload` 会直接重建整个缓存容器
 
 ### 14.3 Replay / Materialize / Eval

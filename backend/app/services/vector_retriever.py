@@ -54,6 +54,11 @@ class VectorRetriever:
     def enabled(self) -> bool:
         return self.provider != "disabled" and self.client is not None
 
+    @property
+    def ready(self) -> bool:
+        with self._documents_lock:
+            return self._ready
+
     def health(self) -> dict:
         with self._documents_lock:
             ready = self._ready
@@ -176,13 +181,13 @@ class VectorRetriever:
         except Exception as exc:
             with self._documents_lock:
                 self._last_search_error = str(exc)
-            return []
+            raise RuntimeError(f"vector query embedding failed: {exc}") from exc
         if documents and loaded_embedding_signature and not self._same_signature(loaded_embedding_signature, query_signature):
             with self._documents_lock:
                 self._last_search_error = (
                     "query embedding signature does not match loaded corpus signature"
                 )
-            return []
+            raise RuntimeError("query embedding signature does not match loaded corpus signature")
         with self._documents_lock:
             self._last_search_error = None
 

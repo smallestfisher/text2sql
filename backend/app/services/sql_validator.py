@@ -157,6 +157,8 @@ class SqlValidator:
             errors.extend(time_filter_errors)
             month_filter_semantic_errors = self._validate_month_filter_semantics(query_plan, filter_scope)
             errors.extend(month_filter_semantic_errors)
+            time_literal_format_errors = self._validate_time_literal_formats(query_plan, filter_scope)
+            errors.extend(time_literal_format_errors)
 
             version_errors = self._validate_version_context(query_plan, filter_scope)
             errors.extend(version_errors)
@@ -360,42 +362,61 @@ class SqlValidator:
         if any(item.field == "biz_date" for item in query_plan.filters):
             return []
 
-        month_filters = [
-            item
-            for item in query_plan.filters
-            if item.field == "biz_month"
-            and item.op == "="
-            and isinstance(item.value, str)
-            and re.fullmatch(r"20\d{4}", item.value)
-        ]
-        if not month_filters:
+        month_values = self._query_plan_month_values(query_plan)
+        if not month_values:
             return []
 
-        day_field_candidates = {
-            field
-            for field in self._field_candidates(query_plan, "biz_date")
-            if field and field != "biz_date"
-        }
+        day_field_candidates = self._time_field_candidates(query_plan, "biz_date")
         if not day_field_candidates:
             return []
 
-        for month_filter in month_filters:
-            month_value = str(month_filter.value)
-            day_one_literal = f"{month_value[:4]}-{month_value[4:6]}-01"
-            for field_name in day_field_candidates:
-                single_day_pattern = rf"\b{re.escape(field_name)}\b\s*=\s*'{re.escape(day_one_literal)}'"
-                between_same_day_pattern = (
-                    rf"\b{re.escape(field_name)}\b\s+between\s+'{re.escape(day_one_literal)}'\s+and\s+'{re.escape(day_one_literal)}'"
-                )
-                if re.search(single_day_pattern, where_clause, re.IGNORECASE) or re.search(
-                    between_same_day_pattern,
-                    where_clause,
-                    re.IGNORECASE,
-                ):
-                    return [
-                        "sql collapses biz_month filter to a single day; expand it to a full-month range or month expression"
-                    ]
+        for month_value in month_values:
+            for candidate in day_field_candidates:
+                candidate_format = candidate.get("format") or "YYYY-MM-DD"
+                month_range = self.semantic_runtime.month_range_literals(month_value, candidate_format)
+                if not month_range:
+                    continue
+                day_one_literal, _ = month_range
+                for field_name in self._time_candidate_field_names(candidate):
+                    if self._matches_single_literal_comparison(where_clause, field_name, day_one_literal):
+                        return [
+                            "sql collapses biz_month filter to a single day; expand it to a full-month range or month expression"
+                        ]
         return []
+
+    def _validate_time_literal_formats(
+        self,
+        query_plan: QueryPlan,
+        where_clause: str,
+    ) -> list[str]:
+        if self.semantic_runtime is None or not where_clause:
+            return []
+
+        invalid_literal_patterns = {
+            "YYYYMMDD": [r"20\d{2}-\d{2}-\d{2}"],
+            "YYYY-MM-DD": [r"20\d{8}"],
+            "YYYYMM": [r"20\d{2}-\d{2}(?:-\d{2})?", r"20\d{6}"],
+            "YYYY-MM": [r"20\d{4}(?:\d{2})?", r"20\d{2}-\d{2}-\d{2}"],
+        }
+        errors: list[str] = []
+        inspected_fields: set[tuple[str, str]] = set()
+        for logical_field in ["biz_date", "biz_month"]:
+            for candidate in self._time_field_candidates(query_plan, logical_field):
+                field_format = str(candidate.get("format") or "").strip().upper()
+                if not field_format:
+                    continue
+                for field_name in self._time_candidate_field_names(candidate):
+                    key = (field_name, field_format)
+                    if key in inspected_fields:
+                        continue
+                    inspected_fields.add(key)
+                    for literal_pattern in invalid_literal_patterns.get(field_format, []):
+                        if self._matches_direct_literal_pattern(where_clause, field_name, literal_pattern):
+                            errors.append(
+                                f"sql compares {field_name} as {field_format} but uses incompatible time literals; rewrite literals to match the physical field format or use an equivalent time expression"
+                            )
+                            break
+        return errors
 
     def _validate_limit_consistency(
         self,
@@ -430,6 +451,73 @@ class SqlValidator:
                 + ", ".join(sorted(set(missing_dimensions)))
             ]
         return []
+
+    def _time_field_candidates(self, query_plan: QueryPlan, logical_field: str) -> list[dict]:
+        if self.semantic_runtime is None:
+            return []
+        return self.semantic_runtime.resolve_time_field_candidates(
+            query_plan.subject_domain,
+            query_plan.tables,
+            logical_field,
+        )
+
+    def _time_candidate_field_names(self, candidate: dict) -> set[str]:
+        names: set[str] = set()
+        field_name = str(candidate.get("field", "")).strip().lower()
+        qualified_field = str(candidate.get("qualified_field", "")).strip().lower()
+        if field_name:
+            names.add(field_name)
+        if qualified_field:
+            names.add(qualified_field)
+        return names
+
+    def _query_plan_month_values(self, query_plan: QueryPlan) -> list[str]:
+        if self.semantic_runtime is None:
+            return []
+        values: list[str] = []
+        for item in query_plan.filters:
+            if item.field != "biz_month":
+                continue
+            candidate_values = [item.value]
+            if item.op == "between" and isinstance(item.value, list):
+                candidate_values = list(item.value)
+            for candidate_value in candidate_values:
+                compact_month = self.semantic_runtime.compact_month_value(str(candidate_value))
+                if compact_month and compact_month not in values:
+                    values.append(compact_month)
+        if values:
+            return values
+        time_context = query_plan.time_context
+        if time_context.grain == "month" and time_context.range:
+            for candidate_value in [time_context.range.start, time_context.range.end]:
+                compact_month = self.semantic_runtime.compact_month_value(candidate_value)
+                if compact_month and compact_month not in values:
+                    values.append(compact_month)
+        return values
+
+    def _matches_single_literal_comparison(self, sql_fragment: str, field_name: str, literal: str) -> bool:
+        single_day_pattern = rf"\b{re.escape(field_name)}\b\s*=\s*'{re.escape(literal)}'"
+        between_same_day_pattern = (
+            rf"\b{re.escape(field_name)}\b\s+between\s+'{re.escape(literal)}'\s+and\s+'{re.escape(literal)}'"
+        )
+        return re.search(single_day_pattern, sql_fragment, re.IGNORECASE) is not None or re.search(
+            between_same_day_pattern,
+            sql_fragment,
+            re.IGNORECASE,
+        ) is not None
+
+    def _matches_direct_literal_pattern(self, sql_fragment: str, field_name: str, literal_pattern: str) -> bool:
+        comparison_pattern = (
+            rf"\b{re.escape(field_name)}\b\s*(?:=|>=|<=|>|<)\s*'(?:{literal_pattern})'"
+        )
+        between_pattern = (
+            rf"\b{re.escape(field_name)}\b\s+between\s+'(?:{literal_pattern})'\s+and\s+'(?:{literal_pattern})'"
+        )
+        return re.search(comparison_pattern, sql_fragment, re.IGNORECASE) is not None or re.search(
+            between_pattern,
+            sql_fragment,
+            re.IGNORECASE,
+        ) is not None
 
     def _validate_unexpected_group_by_fields(
         self,

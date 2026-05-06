@@ -54,9 +54,6 @@ def _default_vector_api_base() -> str | None:
     explicit = os.getenv("VECTOR_API_BASE")
     if explicit:
         return explicit
-    openai_base = os.getenv("OPENAI_API_BASE")
-    if openai_base:
-        return openai_base
     if _default_vector_provider() == "siliconflow":
         return "https://api.siliconflow.cn/v1"
     return None
@@ -85,8 +82,10 @@ class Settings(BaseModel):
     llm_timeout_seconds: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
     llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))
+    enable_vector_retrieval: bool = _env_bool("ENABLE_VECTOR_RETRIEVAL", default=True)
+    prewarm_vector_retrieval: bool = _env_bool("PREWARM_VECTOR_RETRIEVAL", default=True)
     vector_retrieval_provider: str = _default_vector_provider()
-    vector_api_key: str | None = os.getenv("VECTOR_API_KEY") or os.getenv("OPENAI_API_KEY")
+    vector_api_key: str | None = os.getenv("VECTOR_API_KEY")
     vector_api_base: str | None = _default_vector_api_base()
     vector_model: str = os.getenv("VECTOR_MODEL", "Qwen/Qwen3-Embedding-8B")
     vector_dimensions: int = int(os.getenv("VECTOR_DIMENSIONS", "1024"))
