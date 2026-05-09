@@ -157,13 +157,20 @@
 
 当前容器初始化同时也是一层 fail-fast 启动门：
 
-- business DB 必须可连通，且只读会话的 `MAX_EXECUTION_TIME` 必须能成功下发
+- business DB 必须可连通，且只读超时设置必须能成功下发
 - runtime DB 必须可连通
 - runtime schema 初始化必须成功
 - metadata 文件必须存在且 JSON 结构合法
 - `sqlglot` 依赖必须可用
 
 任何一项失败，服务都不会继续启动。
+
+数据库方言由 `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 或连接串推断。当前支持：
+
+- `mysql`
+- `oracle`
+
+业务 SQL 生成、SQL repair、`sqlglot` 解析和 validator 会使用 business 方言；runtime 存储初始化会使用 runtime 方言。
 
 ---
 
@@ -516,7 +523,7 @@ SQL validator 当前会校验：
 - Query Plan shape contract
 - 时间/版本约束
 - 真实时间字段格式和时间字面量是否一致
-- LIMIT
+- 结果行数限制
 - 风险级别和风险 flags
 
 当前只允许一次 repair，不做无限循环自修。
@@ -524,7 +531,7 @@ SQL validator 当前会校验：
 这里的 repair 是通用 fallback：
 
 - 输入是 `original_prompt + 原 SQL + validator/executor 反馈`
-- 目标是修正 shape、过滤、LIMIT、只读约束等问题
+- 目标是修正 shape、过滤、结果行数限制、只读约束等问题
 - 当前主链路已经不再保留业务特化 repair 分支
 
 ### 10.4 SqlExecutor

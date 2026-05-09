@@ -7,6 +7,7 @@ import re
 from backend.app.models.query_plan import QueryPlan
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.sql_ast_validator import SqlAstValidator
+from backend.app.services.sql_dialect import SqlDialect
 
 
 @dataclass
@@ -37,8 +38,10 @@ class SqlValidator:
         semantic_runtime: SemanticRuntime | None = None,
         max_limit: int = 200,
         high_risk_limit: int = 1000,
+        sql_dialect: str = "mysql",
     ) -> None:
-        self.ast_validator = ast_validator or SqlAstValidator()
+        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
+        self.ast_validator = ast_validator or SqlAstValidator(sql_dialect=self.sql_dialect.name)
         self.semantic_runtime = semantic_runtime
         self.max_limit = max_limit
         self.high_risk_limit = max(high_risk_limit, max_limit)
@@ -217,10 +220,10 @@ class SqlValidator:
         warnings.extend(self._build_risk_warnings(inspection, used_sources))
 
         if not inspection.has_limit:
-            warnings.append("sql does not include LIMIT")
+            warnings.append(f"sql does not include {self.sql_dialect.result_limit_clause_name}")
         elif inspection.limit_value is not None and inspection.limit_value > self.max_limit:
             errors.append(
-                f"sql limit {inspection.limit_value} exceeds configured maximum {self.max_limit}"
+                f"sql result limit {inspection.limit_value} exceeds configured maximum {self.max_limit}"
             )
 
         ast_errors, ast_warnings = self.ast_validator.validate(sql)
@@ -565,9 +568,9 @@ class SqlValidator:
         if len(inspection.functions) >= 4:
             warnings.append("sql contains many function calls; review complexity and semantic stability")
         if inspection.limit_value is not None and inspection.limit_value >= self.high_risk_limit:
-            warnings.append(f"sql limit {inspection.limit_value} is high; review result size governance")
+            warnings.append(f"sql result limit {inspection.limit_value} is high; review result size governance")
         if not inspection.has_limit and not inspection.has_where:
-            warnings.append("sql has neither WHERE nor LIMIT; high full-scan risk")
+            warnings.append("sql has neither WHERE nor result limit; high full-scan risk")
         return warnings
 
     def _collect_risk_flags(self, errors: list[str], warnings: list[str]) -> list[str]:

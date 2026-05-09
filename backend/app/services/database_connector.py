@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import re
 import time
 
 from sqlalchemy import create_engine, text
@@ -8,6 +9,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError, TimeoutError
 
 from backend.app.models.api import ExecutionResponse
+from backend.app.services.sql_dialect import SqlDialect
 
 
 class DatabaseConnector:
@@ -17,11 +19,13 @@ class DatabaseConnector:
         timeout_seconds: int = 30,
         max_result_rows: int = 500,
         slow_query_threshold_ms: int = 3000,
+        sql_dialect: str | None = None,
     ) -> None:
         self.database_url = database_url
         self.timeout_seconds = timeout_seconds
         self.max_result_rows = max_result_rows
         self.slow_query_threshold_ms = slow_query_threshold_ms
+        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect or database_url)
         self.engine = (
             create_engine(database_url, pool_pre_ping=True, future=True)
             if database_url
@@ -39,11 +43,12 @@ class DatabaseConnector:
         started = time.perf_counter()
         warnings: list[str] = []
         try:
+            executable_sql = self.sql_dialect.strip_statement_terminator(sql)
             with self.engine.connect() as connection:
                 if self.timeout_seconds > 0:
                     try:
                         self._apply_session_max_execution_time(connection)
-                    except SQLAlchemyError as exc:
+                    except (RuntimeError, SQLAlchemyError) as exc:
                         return ExecutionResponse(
                             executed=False,
                             status="db_error",
@@ -56,7 +61,7 @@ class DatabaseConnector:
                             elapsed_ms=int((time.perf_counter() - started) * 1000),
                             error_category="configuration",
                         )
-                result = connection.execute(text(sql))
+                result = connection.execute(text(self._adapt_sql_for_dialect(executable_sql)))
                 fetched_rows = result.fetchmany(self.max_result_rows + 1)
                 truncated = len(fetched_rows) > self.max_result_rows
                 rows = [dict(row._mapping) for row in fetched_rows[: self.max_result_rows]]
@@ -146,6 +151,7 @@ class DatabaseConnector:
                 "connected": False,
                 "error": "database connector is not configured",
                 "database_url_configured": False,
+                "sql_dialect": self.sql_dialect.name,
                 "timeout_seconds": self.timeout_seconds,
                 "max_result_rows": self.max_result_rows,
                 "slow_query_threshold_ms": self.slow_query_threshold_ms,
@@ -158,15 +164,17 @@ class DatabaseConnector:
             return {
                 "connected": True,
                 "database_url_configured": True,
+                "sql_dialect": self.sql_dialect.name,
                 "timeout_seconds": self.timeout_seconds,
                 "max_result_rows": self.max_result_rows,
                 "slow_query_threshold_ms": self.slow_query_threshold_ms,
             }
-        except SQLAlchemyError as exc:
+        except (RuntimeError, SQLAlchemyError) as exc:
             return {
                 "connected": False,
                 "error": str(exc),
                 "database_url_configured": True,
+                "sql_dialect": self.sql_dialect.name,
                 "timeout_seconds": self.timeout_seconds,
                 "max_result_rows": self.max_result_rows,
                 "slow_query_threshold_ms": self.slow_query_threshold_ms,
@@ -179,7 +187,7 @@ class DatabaseConnector:
             statements = [segment.strip() for segment in sql_script.split(";") if segment.strip()]
             with self.engine.begin() as connection:
                 for statement in statements:
-                    connection.execute(text(statement))
+                    connection.execute(text(self._adapt_sql_for_dialect(statement)))
             return {"executed": True, "statements": len(statements)}
         except SQLAlchemyError as exc:
             return {"executed": False, "error": str(exc)}
@@ -188,7 +196,7 @@ class DatabaseConnector:
         if not self.connected:
             raise RuntimeError("database connector is not configured")
         with self.engine.connect() as connection:
-            result = connection.execute(text(sql), params or {})
+            result = connection.execute(text(self._adapt_sql_for_dialect(sql, params or {})), params or {})
             return [dict(row._mapping) for row in result]
 
     def fetch_one(self, sql: str, params: dict | None = None) -> dict | None:
@@ -199,7 +207,7 @@ class DatabaseConnector:
         if not self.connected:
             raise RuntimeError("database connector is not configured")
         with self.engine.begin() as connection:
-            result = connection.execute(text(sql), params or {})
+            result = connection.execute(text(self._adapt_sql_for_dialect(sql, params or {})), params or {})
             return int(result.rowcount or 0)
 
     def ensure_database_exists(self) -> dict:
@@ -209,7 +217,11 @@ class DatabaseConnector:
         target_url = make_url(self.database_url)
         target_database = target_url.database
         if not target_database:
+            if self.sql_dialect.name == "oracle":
+                return {"executed": True, "database": None, "sql_dialect": self.sql_dialect.name}
             return {"executed": False, "error": "target database name is missing"}
+        if self.sql_dialect.name == "oracle":
+            return {"executed": True, "database": target_database, "sql_dialect": self.sql_dialect.name}
 
         admin_engine = create_engine(
             target_url.set(database=None),
@@ -239,6 +251,30 @@ class DatabaseConnector:
             yield connection
 
     def _apply_session_max_execution_time(self, connection) -> None:
-        connection.exec_driver_sql(
-            f"SET SESSION MAX_EXECUTION_TIME={self.timeout_seconds * 1000}"
+        self.sql_dialect.apply_read_timeout(connection, self.timeout_seconds)
+
+    def _adapt_sql_for_dialect(self, sql: str, params: dict | None = None) -> str:
+        normalized = self.sql_dialect.strip_statement_terminator(sql)
+        if self.sql_dialect.name != "oracle":
+            return normalized
+        params = params or {}
+        limit_param_match = re.search(
+            r"\s+LIMIT\s+:([A-Za-z_][A-Za-z0-9_]*)\s*$",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if limit_param_match:
+            param_name = limit_param_match.group(1)
+            limit_value = int(params[param_name])
+            return re.sub(
+                r"\s+LIMIT\s+:[A-Za-z_][A-Za-z0-9_]*\s*$",
+                f" FETCH FIRST {limit_value} ROWS ONLY",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+        return re.sub(
+            r"\s+LIMIT\s+(\d+)\s*$",
+            r" FETCH FIRST \1 ROWS ONLY",
+            normalized,
+            flags=re.IGNORECASE,
         )

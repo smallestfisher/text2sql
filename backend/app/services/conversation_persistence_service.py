@@ -103,13 +103,15 @@ class ConversationPersistenceService:
         ).mappings().first()
         last_message_row = connection.execute(
             text(
-                """
+                self.database_connector._adapt_sql_for_dialect(
+                    """
                 SELECT created_at
                 FROM chat_messages
                 WHERE session_id = :session_id
                 ORDER BY created_at DESC, message_id DESC
                 LIMIT 1
                 """
+                )
             ),
             {"session_id": session_id},
         ).mappings().first()
@@ -225,6 +227,53 @@ class ConversationPersistenceService:
             persisted_warnings.append(f"execution_status:{final_execution.status}")
             if final_execution.error_category:
                 persisted_warnings.append(f"execution_error_category:{final_execution.error_category}")
+        params = {
+            "trace_id": trace.trace_id,
+            "session_id": request.session_id,
+            "user_id": request.user_context.user_id if request.user_context else None,
+            "question": request.question,
+            "question_type": final_classification.question_type if final_classification is not None else None,
+            "subject_domain": final_classification.subject_domain if final_classification is not None else None,
+            "answer_status": final_answer_status,
+            "plan_valid": final_plan_validation.valid if final_plan_validation is not None else None,
+            "plan_risk_level": final_plan_validation.risk_level if final_plan_validation is not None else None,
+            "plan_risk_flags_json": json_dumps(final_plan_validation.risk_flags) if final_plan_validation is not None else None,
+            "sql_valid": final_sql_validation.valid if final_sql_validation is not None else None,
+            "sql_risk_level": final_sql_validation.risk_level if final_sql_validation is not None else None,
+            "sql_risk_flags_json": json_dumps(final_sql_validation.risk_flags) if final_sql_validation is not None else None,
+            "executed": bool(final_execution and final_execution.executed) if final_execution is not None else None,
+            "row_count": final_execution.row_count if final_execution is not None else None,
+            "warnings_json": json_dumps(persisted_warnings),
+            "trace_json": json_dumps(trace.model_dump(mode="json")),
+            "created_at": trace.created_at,
+        }
+        updated = connection.execute(
+            text(
+                """
+                UPDATE query_logs
+                SET session_id = :session_id,
+                    user_id = :user_id,
+                    question = :question,
+                    question_type = :question_type,
+                    subject_domain = :subject_domain,
+                    answer_status = :answer_status,
+                    plan_valid = :plan_valid,
+                    plan_risk_level = :plan_risk_level,
+                    plan_risk_flags_json = :plan_risk_flags_json,
+                    sql_valid = :sql_valid,
+                    sql_risk_level = :sql_risk_level,
+                    sql_risk_flags_json = :sql_risk_flags_json,
+                    executed = :executed,
+                    row_count = :row_count,
+                    warnings_json = :warnings_json,
+                    trace_json = :trace_json
+                WHERE trace_id = :trace_id
+                """
+            ),
+            params,
+        )
+        if int(updated.rowcount or 0) > 0:
+            return
         connection.execute(
             text(
                 """
@@ -239,45 +288,9 @@ class ConversationPersistenceService:
                     :sql_valid, :sql_risk_level, :sql_risk_flags_json,
                     :executed, :row_count, :warnings_json, :trace_json, :created_at
                 )
-                ON DUPLICATE KEY UPDATE
-                    session_id = VALUES(session_id),
-                    user_id = VALUES(user_id),
-                    question = VALUES(question),
-                    question_type = VALUES(question_type),
-                    subject_domain = VALUES(subject_domain),
-                    answer_status = VALUES(answer_status),
-                    plan_valid = VALUES(plan_valid),
-                    plan_risk_level = VALUES(plan_risk_level),
-                    plan_risk_flags_json = VALUES(plan_risk_flags_json),
-                    sql_valid = VALUES(sql_valid),
-                    sql_risk_level = VALUES(sql_risk_level),
-                    sql_risk_flags_json = VALUES(sql_risk_flags_json),
-                    executed = VALUES(executed),
-                    row_count = VALUES(row_count),
-                    warnings_json = VALUES(warnings_json),
-                    trace_json = VALUES(trace_json)
                 """
             ),
-            {
-                "trace_id": trace.trace_id,
-                "session_id": request.session_id,
-                "user_id": request.user_context.user_id if request.user_context else None,
-                "question": request.question,
-                "question_type": final_classification.question_type if final_classification is not None else None,
-                "subject_domain": final_classification.subject_domain if final_classification is not None else None,
-                "answer_status": final_answer_status,
-                "plan_valid": final_plan_validation.valid if final_plan_validation is not None else None,
-                "plan_risk_level": final_plan_validation.risk_level if final_plan_validation is not None else None,
-                "plan_risk_flags_json": json_dumps(final_plan_validation.risk_flags) if final_plan_validation is not None else None,
-                "sql_valid": final_sql_validation.valid if final_sql_validation is not None else None,
-                "sql_risk_level": final_sql_validation.risk_level if final_sql_validation is not None else None,
-                "sql_risk_flags_json": json_dumps(final_sql_validation.risk_flags) if final_sql_validation is not None else None,
-                "executed": bool(final_execution and final_execution.executed) if final_execution is not None else None,
-                "row_count": final_execution.row_count if final_execution is not None else None,
-                "warnings_json": json_dumps(persisted_warnings),
-                "trace_json": json_dumps(trace.model_dump(mode="json")),
-                "created_at": trace.created_at,
-            },
+            params,
         )
 
     def _replace_retrieval_logs(self, connection, *, trace_id: str, retrieval) -> None:

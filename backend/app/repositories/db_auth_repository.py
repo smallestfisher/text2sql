@@ -41,18 +41,29 @@ class DbAuthRepository:
         ]
 
     def upsert_role(self, role: RoleRecord) -> RoleRecord:
-        self.database_connector.execute_write(
+        updated = self.database_connector.execute_write(
             """
-            INSERT INTO roles (role_name, description, created_at)
-            VALUES (:role_name, :description, :created_at)
-            ON DUPLICATE KEY UPDATE description = VALUES(description)
+            UPDATE roles
+            SET description = :description
+            WHERE role_name = :role_name
             """,
             {
                 "role_name": role.role_name,
                 "description": role.description,
-                "created_at": role.created_at,
             },
         )
+        if updated == 0:
+            self.database_connector.execute_write(
+                """
+                INSERT INTO roles (role_name, description, created_at)
+                VALUES (:role_name, :description, :created_at)
+                """,
+                {
+                    "role_name": role.role_name,
+                    "description": role.description,
+                    "created_at": role.created_at,
+                },
+            )
         return role
 
     def get_by_user_id(self, user_id: str) -> AuthUserRecord | None:

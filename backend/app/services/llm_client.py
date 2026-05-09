@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from backend.app.core.cancellation import CancellationToken
 from backend.app.core.exceptions import LLMServiceError
+from backend.app.services.sql_dialect import SqlDialect
 
 try:
     import sqlglot
@@ -24,6 +25,7 @@ class LLMClient:
         timeout_seconds: int = 20,
         max_retries: int = 2,
         repair_max_retries: int | None = None,
+        sql_dialect: str = "mysql",
     ) -> None:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for LLM SQL validation helpers")
@@ -33,6 +35,7 @@ class LLMClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max(1, max_retries)
         self.repair_max_retries = max(1, repair_max_retries if repair_max_retries is not None else max_retries)
+        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
         self.client = None
         if api_key:
             self.client = OpenAI(api_key=api_key, base_url=api_base)
@@ -186,7 +189,7 @@ class LLMClient:
         self._require_enabled("sql generation")
 
         system_prompt = (
-            "你是 MySQL 场景下的主 Text2SQL 生成器。"
+            f"你是 {self.sql_dialect.label} 场景下的主 Text2SQL 生成器。"
             "只能使用用户 prompt 中提供的真实数据库表和字段，生成一条可执行的只读 SQL。"
             "只返回 SQL，不要输出 markdown、注释或解释。"
         )
@@ -208,7 +211,10 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "精确返回一条只读 SELECT 或 WITH ... SELECT 语句，并且必须带 LIMIT。不要解释。",
+                            "content": (
+                                "精确返回一条只读 SELECT 或 WITH ... SELECT 语句，"
+                                f"并且必须带 {self.sql_dialect.result_limit_clause_name}。不要解释。"
+                            ),
                         }
                     )
             except Exception as exc:
@@ -240,8 +246,10 @@ class LLMClient:
             "必须继续满足 query_plan.tables、filters、dimensions、sort 和 limit 这些硬约束。",
             "如果 errors 指出缺失 required dimensions，先修复最终外层 SELECT 和最终外层 GROUP BY 的 shape。",
             "不要输出 markdown 或解释。",
-            "必须包含 LIMIT。",
+            f"必须包含 {self.sql_dialect.result_limit_clause_name}。",
         ]
+        if self.sql_dialect.name == "oracle":
+            constraints.append("不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。")
         if extra_constraints:
             constraints = [*extra_constraints, *constraints]
         repair_payload = {
@@ -260,7 +268,7 @@ class LLMClient:
         if extra_context:
             repair_payload["repair_context"] = extra_context
         system_prompt = (
-            "你负责修复 MySQL Text2SQL 的输出。"
+            f"你负责修复 {self.sql_dialect.label} Text2SQL 的输出。"
             "只返回一条修正后的只读 SQL 语句。"
             "优先保证最终外层 SELECT / GROUP BY 的输出 shape 与 query_plan.dimensions 一致。"
         )
@@ -281,7 +289,10 @@ class LLMClient:
                     messages.append(
                         {
                             "role": "user",
-                            "content": "精确返回一条合法的只读 SQL 语句。若缺少 required dimensions，先补齐最终外层 SELECT 和 GROUP BY。不要额外文字。",
+                            "content": (
+                                "精确返回一条合法的只读 SQL 语句。若缺少 required dimensions，"
+                                f"先补齐最终外层 SELECT 和 GROUP BY，并包含 {self.sql_dialect.result_limit_clause_name}。不要额外文字。"
+                            ),
                         }
                     )
             except Exception:
@@ -308,6 +319,7 @@ class LLMClient:
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
             "repair_max_retries": self.repair_max_retries,
+            "sql_dialect": self.sql_dialect.name,
         }
 
     def _require_enabled(self, task_name: str) -> None:
@@ -363,7 +375,7 @@ class LLMClient:
         forbidden = (" insert ", " update ", " delete ", " drop ", " alter ", " truncate ", " create ")
         if any(keyword in normalized for keyword in forbidden):
             return False
-        return " limit " in normalized
+        return self.sql_dialect.has_result_limit(compact)
 
     def _sql_candidates(self, content: str) -> list[str]:
         cleaned = self._strip_reasoning_markup(content).strip()
@@ -467,7 +479,7 @@ class LLMClient:
 
     def _is_single_sql_statement(self, sql: str) -> bool:
         try:
-            statements = sqlglot.parse(sql, read="mysql")
+            statements = sqlglot.parse(sql, read=self.sql_dialect.sqlglot_dialect)
         except Exception:
             return False
         return len(statements) == 1

@@ -44,7 +44,7 @@ class DbVectorDocumentRepository:
         if not documents:
             return 0
 
-        statement = text(
+        insert_statement = text(
             """
             INSERT INTO vector_corpus_documents (
                 document_id, source_type, source_id, summary, text_content, metadata_json,
@@ -55,42 +55,47 @@ class DbVectorDocumentRepository:
                 :content_hash, :embedding_provider, :embedding_backend, :embedding_model,
                 :embedding_dimensions, :vector_json, :created_at, :updated_at
             )
-            ON DUPLICATE KEY UPDATE
-                source_type = VALUES(source_type),
-                source_id = VALUES(source_id),
-                summary = VALUES(summary),
-                text_content = VALUES(text_content),
-                metadata_json = VALUES(metadata_json),
-                content_hash = VALUES(content_hash),
-                embedding_provider = VALUES(embedding_provider),
-                embedding_backend = VALUES(embedding_backend),
-                embedding_model = VALUES(embedding_model),
-                embedding_dimensions = VALUES(embedding_dimensions),
-                vector_json = VALUES(vector_json),
-                updated_at = VALUES(updated_at)
+            """
+        )
+        update_statement = text(
+            """
+            UPDATE vector_corpus_documents
+            SET source_type = :source_type,
+                source_id = :source_id,
+                summary = :summary,
+                text_content = :text_content,
+                metadata_json = :metadata_json,
+                content_hash = :content_hash,
+                embedding_provider = :embedding_provider,
+                embedding_backend = :embedding_backend,
+                embedding_model = :embedding_model,
+                embedding_dimensions = :embedding_dimensions,
+                vector_json = :vector_json,
+                updated_at = :updated_at
+            WHERE document_id = :document_id
             """
         )
         with self.database_connector.begin() as connection:
             for document in documents:
-                connection.execute(
-                    statement,
-                    {
-                        "document_id": document["document_id"],
-                        "source_type": document["source_type"],
-                        "source_id": document["source_id"],
-                        "summary": document.get("summary"),
-                        "text_content": document.get("text_content", ""),
-                        "metadata_json": json_dumps(document.get("metadata", {})),
-                        "content_hash": document["content_hash"],
-                        "embedding_provider": document["embedding_provider"],
-                        "embedding_backend": document["embedding_backend"],
-                        "embedding_model": document["embedding_model"],
-                        "embedding_dimensions": int(document["embedding_dimensions"]),
-                        "vector_json": json_dumps(document.get("vector", [])),
-                        "created_at": self._coerce_datetime(document.get("created_at")),
-                        "updated_at": self._coerce_datetime(document.get("updated_at")),
-                    },
-                )
+                params = {
+                    "document_id": document["document_id"],
+                    "source_type": document["source_type"],
+                    "source_id": document["source_id"],
+                    "summary": document.get("summary"),
+                    "text_content": document.get("text_content", ""),
+                    "metadata_json": json_dumps(document.get("metadata", {})),
+                    "content_hash": document["content_hash"],
+                    "embedding_provider": document["embedding_provider"],
+                    "embedding_backend": document["embedding_backend"],
+                    "embedding_model": document["embedding_model"],
+                    "embedding_dimensions": int(document["embedding_dimensions"]),
+                    "vector_json": json_dumps(document.get("vector", [])),
+                    "created_at": self._coerce_datetime(document.get("created_at")),
+                    "updated_at": self._coerce_datetime(document.get("updated_at")),
+                }
+                result = connection.execute(update_statement, params)
+                if int(result.rowcount or 0) == 0:
+                    connection.execute(insert_statement, params)
         return len(documents)
 
     def delete_missing(self, document_ids: list[str]) -> int:

@@ -31,6 +31,19 @@ def _raw_business_database_url() -> str | None:
     return os.getenv("BUSINESS_DATABASE_URL")
 
 
+def _resolve_sql_dialect(explicit_name: str, database_url: str | None, default: str = "mysql") -> str:
+    explicit = os.getenv(explicit_name)
+    if explicit:
+        return explicit.strip().lower()
+    if database_url:
+        driver_name = make_url(database_url).drivername.lower()
+        if driver_name.startswith("oracle"):
+            return "oracle"
+        if driver_name.startswith("mysql") or "pymysql" in driver_name:
+            return "mysql"
+    return default
+
+
 def _resolve_runtime_database_url() -> str | None:
     explicit_runtime_url = os.getenv("RUNTIME_DATABASE_URL")
     if explicit_runtime_url:
@@ -39,6 +52,9 @@ def _resolve_runtime_database_url() -> str | None:
     business_database_url = _raw_business_database_url()
     if not business_database_url:
         return None
+
+    if make_url(business_database_url).drivername.lower().startswith("oracle"):
+        return business_database_url
 
     runtime_database_name = os.getenv("RUNTIME_DATABASE_NAME", "manager").strip() or "manager"
     return make_url(business_database_url).set(database=runtime_database_name).render_as_string(
@@ -76,6 +92,8 @@ class Settings(BaseModel):
     business_database_url: str | None = _raw_business_database_url()
     runtime_database_url: str | None = _resolve_runtime_database_url()
     runtime_database_name: str = os.getenv("RUNTIME_DATABASE_NAME", "manager")
+    business_sql_dialect: str = _resolve_sql_dialect("BUSINESS_SQL_DIALECT", business_database_url)
+    runtime_sql_dialect: str = _resolve_sql_dialect("RUNTIME_SQL_DIALECT", runtime_database_url)
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_api_base: str | None = os.getenv("OPENAI_API_BASE")
     llm_model: str = os.getenv("LLM_MODEL", "Qwen/Qwen3-14B")

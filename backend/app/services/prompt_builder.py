@@ -9,6 +9,7 @@ from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.sql_dialect import SqlDialect
 
 
 class PromptBuilder:
@@ -18,9 +19,11 @@ class PromptBuilder:
         self,
         semantic_runtime: SemanticRuntime | None = None,
         metadata_registry: MetadataRegistry | None = None,
+        sql_dialect: str = "mysql",
     ) -> None:
         self.semantic_runtime = semantic_runtime
         self.metadata_registry = metadata_registry or MetadataRegistry()
+        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
 
     def build_classification_prompt(
         self,
@@ -168,7 +171,7 @@ class PromptBuilder:
             ]
         if self._has_latest_n_filter(query_plan):
             sql_preferences = [
-                *self._prompt_asset_strings("sql_generation", "latest_n_preferences"),
+                *self._latest_n_preferences(),
                 *sql_preferences,
             ]
         business_notes = self._business_notes_for_plan(query_plan, selected_sources, retrieval)
@@ -194,6 +197,11 @@ class PromptBuilder:
         return {
             "task": "sql_generation",
             "question": question,
+            "target_sql_dialect": {
+                "name": self.sql_dialect.name,
+                "label": self.sql_dialect.label,
+                "result_limit_clause": self.sql_dialect.result_limit_clause_name,
+            },
             "query_plan": query_plan.model_dump(),
             "allowed_sources": selected_sources,
             "allowed_fields": sorted(self._sql_allowed_fields(query_plan)),
@@ -207,7 +215,7 @@ class PromptBuilder:
             "context_summary": context_summary,
             "instructions": {
                 "return_format": "sql_only",
-                "constraints": self._prompt_asset_strings("sql_generation", "base_constraints"),
+                "constraints": self._sql_generation_constraints(),
                 "sql_preferences": sql_preferences,
                 "few_shot": {
                     "retrieved_examples": retrieved_examples,
@@ -441,21 +449,25 @@ class PromptBuilder:
                 continue
             if not self._retrieved_example_matches_plan(query_plan, example, hit):
                 continue
-            selected.append(
-                {
-                    "id": example.id,
-                    "question": example.question,
-                    "intent": example.intent,
-                    "tables": example.tables,
-                    "metrics": example.metrics,
-                    "dimensions": example.dimensions,
-                    "filters": [item.model_dump(mode="json") for item in example.filters],
-                    "sql": example.sql,
-                    "result_shape": example.result_shape,
-                    "notes": example.notes,
-                    "matched_features": hit.matched_features,
-                }
-            )
+            payload = {
+                "id": example.id,
+                "question": example.question,
+                "intent": example.intent,
+                "tables": example.tables,
+                "metrics": example.metrics,
+                "dimensions": example.dimensions,
+                "filters": [item.model_dump(mode="json") for item in example.filters],
+                "result_shape": example.result_shape,
+                "notes": example.notes,
+                "matched_features": hit.matched_features,
+            }
+            if self.sql_dialect.name == "mysql":
+                payload["sql"] = example.sql
+            else:
+                payload["source_sql_dialect"] = "mysql"
+                payload["target_sql_dialect"] = self.sql_dialect.name
+                payload["sql_omitted_reason"] = "source example SQL uses a different dialect; reuse only semantic shape, tables, metrics, filters, and result_shape"
+            selected.append(payload)
             if len(selected) >= 2:
                 break
         return selected
@@ -732,10 +744,13 @@ class PromptBuilder:
         if normalized_format == "YYYY-MM":
             return f"REPLACE({field_expression}, '-', '')"
         if normalized_format == "YYYYMMDD":
-            return f"SUBSTRING({field_expression}, 1, 6)"
+            return f"{self._substring_function()}({field_expression}, 1, 6)"
         if normalized_format == "YYYY-MM-DD":
-            return f"REPLACE(SUBSTRING({field_expression}, 1, 7), '-', '')"
+            return f"REPLACE({self._substring_function()}({field_expression}, 1, 7), '-', '')"
         return None
+
+    def _substring_function(self) -> str:
+        return "SUBSTR" if self.sql_dialect.name == "oracle" else "SUBSTRING"
 
     def _example_compact_month(self, query_plan: QueryPlan) -> str:
         if self.semantic_runtime is not None:
@@ -952,3 +967,36 @@ class PromptBuilder:
         if not isinstance(section_payload, dict):
             return None
         return section_payload.get(key)
+
+    def _sql_generation_constraints(self) -> list[str]:
+        constraints = []
+        for item in self._prompt_asset_strings("sql_generation", "base_constraints"):
+            if "MySQL" in item:
+                constraints.append(f"优先基于真实物理表生成 {self.sql_dialect.label} 只读查询。")
+                continue
+            if "必须包含 LIMIT" in item:
+                constraints.append(f"必须包含结果行数限制，并使用 {self.sql_dialect.result_limit_clause_name} 语法。")
+                continue
+            constraints.append(item)
+        if self.sql_dialect.name == "oracle":
+            constraints.extend(
+                [
+                    "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
+                    "Oracle 日期函数优先使用 TO_DATE、TO_CHAR、ADD_MONTHS、TRUNC、SYSDATE。",
+                ]
+            )
+        return constraints
+
+    def _latest_n_preferences(self) -> list[str]:
+        preferences = []
+        for item in self._prompt_asset_strings("sql_generation", "latest_n_preferences"):
+            if "ORDER BY 真实排序字段 DESC LIMIT N" in item:
+                if self.sql_dialect.name == "oracle":
+                    preferences.append(
+                        "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。"
+                    )
+                else:
+                    preferences.append(item)
+                continue
+            preferences.append(item)
+        return preferences

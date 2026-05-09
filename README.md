@@ -23,7 +23,9 @@
 - 当前默认就启用向量检索；仍然保留 `ENABLE_VECTOR_RETRIEVAL` 开关用于环境级控制
 - 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
 - retrieval corpus 的 embedding 会持久化到 runtime 库的 `vector_corpus_documents` 表；默认会在启动和 reload 时同步预热，失败就直接报错，不再静默降级
-- 容器启动时会显式校验 business DB 连通性和只读会话超时设置、runtime DB 连通性、metadata 文件可读性，以及 `sqlglot` 依赖；任一失败都会直接阻断启动
+- 业务 SQL 方言现在由 `BUSINESS_SQL_DIALECT` 或 `BUSINESS_DATABASE_URL` 推断，当前支持 `mysql` 和 `oracle`
+- Oracle 业务库使用 `oracle+oracledb://...` 连接串，SQL 生成和校验会切到 `Oracle SQL`、`FETCH FIRST n ROWS ONLY` 和 Oracle 日期函数约束
+- 容器启动时会显式校验 business DB 连通性和只读超时设置、runtime DB 连通性、metadata 文件可读性，以及 `sqlglot` 依赖；任一失败都会直接阻断启动
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 权限时，问候/闲聊/无关问题不再直接丢弃，而是返回终止型闲聊回复；默认 `false`
 - LLM 不可用、调用失败或返回非法结构时，请求会显式失败，不再静默降级为 `stub/skipped`
 - LLM 结构化输出如果字段格式非法，例如 `metrics/filters/context_delta/time_context` 形状不对，请求会直接失败，不再自动忽略坏字段继续执行
@@ -31,6 +33,23 @@
 - SQL 生成重试和 SQL repair 重试现在已经分开配置：`LLM_MAX_RETRIES` 控制首轮生成，`SQL_REPAIR_MAX_RETRIES` 控制通用 repair fallback
 
 ## 快速启动
+
+### 一键启停
+
+```bash
+scripts/devctl.sh start
+scripts/devctl.sh status
+scripts/devctl.sh stop
+```
+
+脚本默认同时启动后端 `127.0.0.1:8000` 和前端 `127.0.0.1:5173`，pid 和日志写入 `.runtime/`。也可以只操作单个服务：
+
+```bash
+scripts/devctl.sh restart backend
+scripts/devctl.sh logs frontend
+```
+
+端口可通过 `BACKEND_PORT`、`FRONTEND_PORT` 覆盖。
 
 ### Backend
 
@@ -58,7 +77,9 @@ npm run dev
 
 - 业务查询库读取 `BUSINESS_DATABASE_URL`
 - 运行时库读取 `RUNTIME_DATABASE_URL`
-- 未配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接派生并默认使用 `manager` 数据库
+- `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 可显式指定 `mysql` 或 `oracle`；不配置时从连接串推断
+- MySQL 未配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接派生并默认使用 `manager` 数据库
+- Oracle 未配置 `RUNTIME_DATABASE_URL` 时会复用 `BUSINESS_DATABASE_URL`；生产建议给 runtime 单独配置一个 Oracle schema 用户
 - 首次启动会尝试自动建库、建表和补增量列
 - runtime 库除了会话、审计和 eval 数据外，现在也承载 retrieval corpus 的持久化向量表 `vector_corpus_documents`
 - 如果 runtime schema 初始化失败，服务会直接启动失败，不会再带着半可用 runtime 继续运行

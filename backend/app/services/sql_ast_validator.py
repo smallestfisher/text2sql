@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
+from backend.app.services.sql_dialect import SqlDialect
+
 try:
     import sqlglot
     from sqlglot import exp
@@ -58,6 +60,11 @@ class SqlAstValidator:
         "BY",
         "ORDER",
         "LIMIT",
+        "FETCH",
+        "FIRST",
+        "NEXT",
+        "ROWS",
+        "ONLY",
         "JOIN",
         "LEFT",
         "RIGHT",
@@ -86,14 +93,16 @@ class SqlAstValidator:
         "HAVING",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, sql_dialect: str = "mysql") -> None:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for SQL AST validation")
+        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
 
     def health(self) -> dict:
         return {
             "backend": "sqlglot" if sqlglot is not None else "regex",
             "sqlglot_enabled": sqlglot is not None,
+            "sql_dialect": self.sql_dialect.name,
         }
 
     def inspect(self, sql: str | None) -> SqlInspection:
@@ -145,7 +154,7 @@ class SqlAstValidator:
         lowered = normalized.lower()
         where_clause = self._extract_where_clause(normalized)
         all_where_clause = self._extract_all_where_clauses(normalized)
-        limit_match = re.search(r"\bLIMIT\s+(\d+)", normalized, re.IGNORECASE)
+        limit_value = self.sql_dialect.extract_result_limit_value(normalized)
         sources = re.findall(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", normalized, re.IGNORECASE)
         cte_names = self._extract_cte_names(normalized)
         aliases = self._extract_source_aliases(normalized)
@@ -166,8 +175,8 @@ class SqlAstValidator:
             has_where=bool(where_clause),
             where_clause=where_clause,
             all_where_clause=all_where_clause,
-            has_limit=limit_match is not None,
-            limit_value=int(limit_match.group(1)) if limit_match else None,
+            has_limit=limit_value is not None,
+            limit_value=limit_value,
             has_subquery=re.search(r"\(\s*SELECT\b", normalized, re.IGNORECASE) is not None,
             has_distinct=re.search(r"\bSELECT\s+DISTINCT\b", normalized, re.IGNORECASE) is not None,
             has_having=re.search(r"\bHAVING\b", normalized, re.IGNORECASE) is not None,
@@ -181,7 +190,7 @@ class SqlAstValidator:
         if not normalized:
             return SqlInspection(statement_count=0, normalized_sql="", parser_backend="sqlglot")
         try:
-            statements = sqlglot.parse(normalized, read="mysql")
+            statements = sqlglot.parse(normalized, read=self.sql_dialect.sqlglot_dialect)
         except ParseError as exc:
             return SqlInspection(
                 statement_count=1,
@@ -224,9 +233,9 @@ class SqlAstValidator:
         where_clause = ""
         where_node = root.find(exp.Where)
         if where_node is not None:
-            where_clause = where_node.this.sql(dialect="mysql")
+            where_clause = where_node.this.sql(dialect=self.sql_dialect.sqlglot_dialect)
         all_where_clause = " ".join(
-            node.this.sql(dialect="mysql")
+            node.this.sql(dialect=self.sql_dialect.sqlglot_dialect)
             for node in root.find_all(exp.Where)
             if getattr(node, "this", None) is not None
         )
@@ -253,7 +262,7 @@ class SqlAstValidator:
             has_distinct=bool(getattr(root, "args", {}).get("distinct")),
             has_having=root.args.get("having") is not None if hasattr(root, "args") else False,
             has_wildcard_select=any(True for _ in root.find_all(exp.Star)),
-            normalized_sql=root.sql(dialect="mysql").lower(),
+            normalized_sql=root.sql(dialect=self.sql_dialect.sqlglot_dialect).lower(),
             parser_backend="sqlglot",
         )
 
@@ -271,7 +280,7 @@ class SqlAstValidator:
     def _extract_where_clause(self, sql: str) -> str:
         outer_sql = self._outer_query_sql(sql)
         match = re.search(
-            r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|$)",
+            r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bFETCH\b|\bLIMIT\b|\bUNION\b|$)",
             outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
@@ -281,7 +290,7 @@ class SqlAstValidator:
 
     def _extract_all_where_clauses(self, sql: str) -> str:
         matches = re.findall(
-            r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|\)|$)",
+            r"\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bFETCH\b|\bLIMIT\b|\bUNION\b|\)|$)",
             sql,
             re.IGNORECASE | re.DOTALL,
         )
@@ -308,7 +317,7 @@ class SqlAstValidator:
     def _extract_group_by_fields(self, sql: str) -> list[str]:
         outer_sql = self._outer_query_sql(sql)
         match = re.search(
-            r"\bGROUP\s+BY\b(.*?)(?:\bORDER\s+BY\b|\bLIMIT\b|\bHAVING\b|$)",
+            r"\bGROUP\s+BY\b(.*?)(?:\bORDER\s+BY\b|\bFETCH\b|\bLIMIT\b|\bHAVING\b|$)",
             outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
@@ -319,7 +328,7 @@ class SqlAstValidator:
     def _extract_order_by_fields(self, sql: str) -> list[str]:
         outer_sql = self._outer_query_sql(sql)
         match = re.search(
-            r"\bORDER\s+BY\b(.*?)(?:\bLIMIT\b|$)",
+            r"\bORDER\s+BY\b(.*?)(?:\bFETCH\b|\bLIMIT\b|$)",
             outer_sql,
             re.IGNORECASE | re.DOTALL,
         )
@@ -424,7 +433,7 @@ class SqlAstValidator:
             elif hasattr(join.this, "alias_or_name"):
                 source = join.this.alias_or_name
             elif join.this is not None:
-                source = join.this.sql(dialect="mysql")
+                source = join.this.sql(dialect=self.sql_dialect.sqlglot_dialect)
             joins.append(
                 JoinInspection(
                     source=source,
@@ -515,10 +524,9 @@ class SqlAstValidator:
                 return value
             if isinstance(value, str) and value.isdigit():
                 return int(value)
-        match = re.search(r"\bLIMIT\s+(\d+)", limit_node.sql(dialect="mysql"), re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-        return None
+        return self.sql_dialect.extract_result_limit_value(
+            limit_node.sql(dialect=self.sql_dialect.sqlglot_dialect)
+        )
 
     def _function_name(self, node: Any) -> str:
         if hasattr(node, "sql_name") and callable(node.sql_name):
