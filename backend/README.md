@@ -200,6 +200,9 @@ Unknown column '...'
 - `vector_retrieval`：当前 query embedding 配置、已加载向量签名、就绪状态
 - `retrieval_corpus`：当前 corpus 文档数，以及最近一次向量 sync 的复用 / 重建摘要
 - `business_database`：当前连接性检查结果；服务启动时还会额外校验只读会话超时设置是否能成功下发
+- `runtime_database`：runtime 库当前连接性检查结果
+- `llm`：主推理模型配置与可用性检查结果
+- `sql_ast`：`sqlglot` AST 校验能力和当前 SQL 方言状态
 
 ### Admin Users / Roles
 

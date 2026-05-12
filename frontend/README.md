@@ -103,6 +103,7 @@ npm run build
 
 ## 主要 API 依赖
 
+- `GET /api/auth/bootstrap-status`
 - `POST /api/auth/bootstrap-admin`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
@@ -110,6 +111,7 @@ npm run build
 - `GET /api/chat/sessions`
 - `DELETE /api/chat/sessions/{session_id}`
 - `GET /api/chat/sessions/{session_id}/workspace`
+- `POST /api/chat/query`
 - `POST /api/chat/query/stream`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/export`
@@ -118,7 +120,11 @@ npm run build
 - `GET /api/admin/runtime/query-logs`
 - `POST /api/admin/runtime/query-logs/{trace_id}/replay`
 - `GET /api/admin/metadata/overview`
+- `GET /api/admin/feedbacks/summary`
+- `GET /api/admin/eval/summary`
 - `GET /api/admin/users`
+- `POST /api/admin/users/{user_id}/reset-password`
+- `DELETE /api/admin/users/{user_id}`
 - `GET /api/admin/roles`
 - `PUT /api/admin/users/{user_id}`
 

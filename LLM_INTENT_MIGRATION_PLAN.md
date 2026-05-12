@@ -30,7 +30,7 @@
    - 只做 shallow parse
    - 只保留显式、高确定性信号抽取
 
-2. `LLMIntentService`
+2. `IntentService`
    - 负责主链路意图理解
    - 输出结构化 `StructuredIntent`
 
@@ -73,7 +73,7 @@
 
 ### 3.2 Intent 主链路完成
 
-`LLMIntentService` + `IntentNormalizer` 已进入主链路：
+`IntentService` + `IntentNormalizer` 已进入主链路：
 
 - 不再保留 `shadow / primary / fallback` 过渡开关
 - `normalized intent` 已成为默认高层理解输入

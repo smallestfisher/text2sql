@@ -120,7 +120,7 @@
 
 ## 4. 容器与装配
 
-系统装配中心是 [backend/app/core/container.py](/home/y/llm/new/backend/app/core/container.py) 里的 `AppContainer`。
+系统装配中心是 [backend/app/core/container.py](backend/app/core/container.py) 里的 `AppContainer`。
 
 初始化时它会装配这些核心对象：
 
@@ -222,13 +222,13 @@
 
 ## 6. 一次查询的真实执行链路
 
-主编排服务是 [backend/app/services/orchestrator.py](/home/y/llm/new/backend/app/services/orchestrator.py) 里的 `ConversationOrchestrator`。
+主编排服务是 [backend/app/services/orchestrator.py](backend/app/services/orchestrator.py) 里的 `ConversationOrchestrator`。
 
 一次 `POST /api/chat/query/stream` 的关键流程如下。
 
 ### 6.1 SSE 路由层
 
-路由在 [backend/app/api/routes/chat.py](/home/y/llm/new/backend/app/api/routes/chat.py)。
+路由在 [backend/app/api/routes/chat.py](backend/app/api/routes/chat.py)。
 
 它会做这些事情：
 
@@ -272,7 +272,7 @@
 
 ### 7.1 QueryIntentParser
 
-[backend/app/services/query_intent_parser.py](/home/y/llm/new/backend/app/services/query_intent_parser.py)
+[backend/app/services/query_intent_parser.py](backend/app/services/query_intent_parser.py)
 
 当前 parser 已收缩为 shallow parse，主要只抽高确定性信号，例如：
 
@@ -286,14 +286,14 @@
 
 ### 7.2 IntentService
 
-[backend/app/services/intent_service.py](/home/y/llm/new/backend/app/services/intent_service.py)
+[backend/app/services/intent_service.py](backend/app/services/intent_service.py)
 
 它调用 `LLMClient` 和 `PromptBuilder` 生成 LLM intent。  
 高层理解现在由这条链路主导。
 
 ### 7.3 IntentNormalizer
 
-[backend/app/services/intent_normalizer.py](/home/y/llm/new/backend/app/services/intent_normalizer.py)
+[backend/app/services/intent_normalizer.py](backend/app/services/intent_normalizer.py)
 
 它负责把 LLM intent 收口到当前语义系统允许的边界里，例如：
 
@@ -305,7 +305,7 @@
 
 ### 7.4 QuestionClassifier
 
-[backend/app/services/question_classifier.py](/home/y/llm/new/backend/app/services/question_classifier.py)
+[backend/app/services/question_classifier.py](backend/app/services/question_classifier.py)
 
 当前分类是：
 
@@ -315,7 +315,7 @@
 
 ### 7.5 QueryPlanner
 
-[backend/app/services/query_planner.py](/home/y/llm/new/backend/app/services/query_planner.py)
+[backend/app/services/query_planner.py](backend/app/services/query_planner.py)
 
 它负责把：
 
@@ -329,7 +329,7 @@
 
 ### 7.6 QueryPlanCompiler
 
-[backend/app/services/query_plan_compiler.py](/home/y/llm/new/backend/app/services/query_plan_compiler.py)
+[backend/app/services/query_plan_compiler.py](backend/app/services/query_plan_compiler.py)
 
 它会在 retrieval 结果已经出来之后，对 `QueryPlan` 做一层 retrieval-aware compile，当前主要包括：
 
@@ -341,7 +341,7 @@
 
 ### 7.7 QueryPlanValidator
 
-[backend/app/services/query_plan_validator.py](/home/y/llm/new/backend/app/services/query_plan_validator.py)
+[backend/app/services/query_plan_validator.py](backend/app/services/query_plan_validator.py)
 
 它负责校验 Query Plan 是否仍在允许边界内，包括：
 
@@ -354,7 +354,7 @@
 
 ## 8. Retrieval 架构
 
-检索服务在 [backend/app/services/retrieval_service.py](/home/y/llm/new/backend/app/services/retrieval_service.py)。
+检索服务在 [backend/app/services/retrieval_service.py](backend/app/services/retrieval_service.py)。
 
 当前 retrieval 不是单通道，而是混合检索：
 
@@ -392,7 +392,7 @@
 
 ### 8.2 PromptBuilder 如何消费 retrieval
 
-[backend/app/services/prompt_builder.py](/home/y/llm/new/backend/app/services/prompt_builder.py)
+[backend/app/services/prompt_builder.py](backend/app/services/prompt_builder.py)
 
 当前 SQL prompt 会消费 retrieval 产出的这些证据：
 
@@ -416,7 +416,7 @@
 
 ### 9.1 VectorRetriever
 
-[backend/app/services/vector_retriever.py](/home/y/llm/new/backend/app/services/vector_retriever.py)
+[backend/app/services/vector_retriever.py](backend/app/services/vector_retriever.py)
 
 当前向量通道的边界很明确：
 
@@ -428,7 +428,7 @@
 
 ### 9.2 VectorCorpusStoreService
 
-[backend/app/services/vector_corpus_store_service.py](/home/y/llm/new/backend/app/services/vector_corpus_store_service.py)
+[backend/app/services/vector_corpus_store_service.py](backend/app/services/vector_corpus_store_service.py)
 
 它负责把当前 corpus 和 runtime 库里的持久化向量做同步：
 
@@ -486,7 +486,7 @@
 
 ### 10.2 LLMClient
 
-[backend/app/services/llm_client.py](/home/y/llm/new/backend/app/services/llm_client.py)
+[backend/app/services/llm_client.py](backend/app/services/llm_client.py)
 
 当前 LLM client 负责：
 
@@ -514,7 +514,7 @@
 
 ### 10.3 SqlValidator
 
-[backend/app/services/sql_validator.py](/home/y/llm/new/backend/app/services/sql_validator.py)
+[backend/app/services/sql_validator.py](backend/app/services/sql_validator.py)
 
 SQL validator 当前会校验：
 
@@ -536,7 +536,7 @@ SQL validator 当前会校验：
 
 ### 10.4 SqlExecutor
 
-[backend/app/services/sql_executor.py](/home/y/llm/new/backend/app/services/sql_executor.py)
+[backend/app/services/sql_executor.py](backend/app/services/sql_executor.py)
 
 SQL 执行使用业务查询库连接。  
 结果还会经过 `ExecutionCacheService` 做短 TTL 缓存。
@@ -547,7 +547,7 @@ SQL 执行使用业务查询库连接。
 
 ### 11.1 AnswerBuilder
 
-[backend/app/services/answer_builder.py](/home/y/llm/new/backend/app/services/answer_builder.py)
+[backend/app/services/answer_builder.py](backend/app/services/answer_builder.py)
 
 它负责把：
 
@@ -560,21 +560,22 @@ SQL 执行使用业务查询库连接。
 
 ### 11.2 SessionStateService
 
-[backend/app/services/session_state_service.py](/home/y/llm/new/backend/app/services/session_state_service.py)
+[backend/app/services/session_state_service.py](backend/app/services/session_state_service.py)
 
 它负责生成下一轮 `session_state`，供 follow-up 问题继承上下文。
 
 ### 11.3 SessionService
 
-[backend/app/services/session_service.py](/home/y/llm/new/backend/app/services/session_service.py)
+[backend/app/services/session_service.py](backend/app/services/session_service.py)
 
 它负责：
 
 - 创建/删除 session
-- 追加用户消息和助手消息
 - 读取历史消息
 - 解析当前 state
 - 做会话归属校验
+
+主聊天链路里的消息写入、状态快照和 runtime artifacts 落库，当前主要由 `ConversationPersistenceService` 在一次事务里完成。
 
 ---
 
@@ -603,7 +604,7 @@ SQL 执行使用业务查询库连接。
 
 ### 12.4 Response Restore
 
-[backend/app/services/chat_response_restore_service.py](/home/y/llm/new/backend/app/services/chat_response_restore_service.py)
+[backend/app/services/chat_response_restore_service.py](backend/app/services/chat_response_restore_service.py)
 
 它负责根据 `trace_id` 从：
 
@@ -620,7 +621,7 @@ SQL 执行使用业务查询库连接。
 
 ## 13. Workspace 与前端工作台
 
-工作台恢复服务在 [backend/app/services/session_workspace_service.py](/home/y/llm/new/backend/app/services/session_workspace_service.py)。
+工作台恢复服务在 [backend/app/services/session_workspace_service.py](backend/app/services/session_workspace_service.py)。
 
 当前 `workspace` 会聚合：
 
