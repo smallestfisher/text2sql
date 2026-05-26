@@ -32,9 +32,10 @@ scripts/devctl.sh logs backend
 - 业务查询库读取 `BUSINESS_DATABASE_URL`
 - 运行时库读取 `RUNTIME_DATABASE_URL`
 - `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 可显式指定 `mysql` 或 `oracle`；不配置时从连接串推断
-- MySQL 未显式配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接自动派生并使用 `manager` 数据库
-- Oracle 未显式配置 `RUNTIME_DATABASE_URL` 时，会复用 `BUSINESS_DATABASE_URL`；生产建议给 runtime 单独配置一个 Oracle schema 用户
+- 当前业务查询库默认使用 Oracle；如果 runtime 继续使用 MySQL，需要显式配置 `RUNTIME_DATABASE_URL` 和 `RUNTIME_SQL_DIALECT=mysql`
+- Oracle 未显式配置 `RUNTIME_DATABASE_URL` 时，会复用 `BUSINESS_DATABASE_URL`；生产建议始终给 runtime 显式配置独立连接
 - 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
+- 本地 Oracle 容器和业务表初始化方式见仓库根目录 [README.md](../README.md) 的 `Oracle 业务库` 小节
 - LLM 模型名通过 `LLM_MODEL` 配置
 - `LLM_MAX_RETRIES` 控制分类 / intent / SQL 首轮生成的重试次数
 - `SQL_REPAIR_MAX_RETRIES` 控制 SQL repair fallback 的独立重试次数

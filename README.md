@@ -23,8 +23,8 @@
 - 当前默认就启用向量检索；仍然保留 `ENABLE_VECTOR_RETRIEVAL` 开关用于环境级控制
 - 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
 - retrieval corpus 的 embedding 会持久化到 runtime 库的 `vector_corpus_documents` 表；默认会在启动和 reload 时同步预热，失败就直接报错，不再静默降级
-- 业务 SQL 方言现在由 `BUSINESS_SQL_DIALECT` 或 `BUSINESS_DATABASE_URL` 推断，当前支持 `mysql` 和 `oracle`
-- Oracle 业务库使用 `oracle+oracledb://...` 连接串，SQL 生成和校验会切到 `Oracle SQL`、`FETCH FIRST n ROWS ONLY` 和 Oracle 日期函数约束
+- 当前工程的业务库按 Oracle 配置，使用 `oracle+oracledb://...` 连接串；SQL 生成和校验会切到 `Oracle SQL`、`FETCH FIRST n ROWS ONLY` 和 Oracle 日期函数约束
+- runtime 库仍可独立使用 MySQL，用于保存会话、审计、eval 和 retrieval corpus 数据
 - 容器启动时会显式校验 business DB 连通性和只读超时设置、runtime DB 连通性、metadata 文件可读性，以及 `sqlglot` 依赖；任一失败都会直接阻断启动
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 权限时，问候/闲聊/无关问题不再直接丢弃，而是返回终止型闲聊回复；默认 `false`
 - LLM 不可用、调用失败或返回非法结构时，请求会显式失败，不再静默降级为 `stub/skipped`
@@ -61,6 +61,27 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 更完整的后端运行、配置和 API 说明见 `backend/README.md`。
 
+### Oracle 业务库
+
+当前工程默认业务数据库是 Oracle。 本地可用仓库内的 Compose 文件启动：
+
+```bash
+docker compose -f docker-compose.oracle.yml up -d
+```
+
+容器默认创建 `app/app123` 业务用户，PDB 服务名为 `FREEPDB1`，对应连接串：
+
+```env
+BUSINESS_DATABASE_URL="oracle+oracledb://app:app123@127.0.0.1:1521/?service_name=FREEPDB1"
+BUSINESS_SQL_DIALECT="oracle"
+```
+
+业务表结构定义见 [sql/oracle_business_schema.sql](sql/oracle_business_schema.sql)。如果需要在新 Oracle 实例里初始化业务表，可执行：
+
+```bash
+docker exec -i text2sql-oracle sqlplus -L app/app123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_business_schema.sql
+```
+
 ### Frontend
 
 ```bash
@@ -78,8 +99,8 @@ npm run dev
 - 业务查询库读取 `BUSINESS_DATABASE_URL`
 - 运行时库读取 `RUNTIME_DATABASE_URL`
 - `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 可显式指定 `mysql` 或 `oracle`；不配置时从连接串推断
-- MySQL 未配置 `RUNTIME_DATABASE_URL` 时，会基于业务库连接派生并默认使用 `manager` 数据库
-- Oracle 未配置 `RUNTIME_DATABASE_URL` 时会复用 `BUSINESS_DATABASE_URL`；生产建议给 runtime 单独配置一个 Oracle schema 用户
+- 当前业务查询库默认使用 Oracle；如果 runtime 继续使用 MySQL，需要显式配置 `RUNTIME_DATABASE_URL` 和 `RUNTIME_SQL_DIALECT=mysql`
+- Oracle 未配置 `RUNTIME_DATABASE_URL` 时会复用 `BUSINESS_DATABASE_URL`；生产建议始终给 runtime 显式配置独立连接
 - 首次启动会尝试自动建库、建表和补增量列
 - runtime 库除了会话、审计和 eval 数据外，现在也承载 retrieval corpus 的持久化向量表 `vector_corpus_documents`
 - 如果 runtime schema 初始化失败，服务会直接启动失败，不会再带着半可用 runtime 继续运行
