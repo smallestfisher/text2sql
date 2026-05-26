@@ -9,7 +9,11 @@ BEGIN
     PLAN_date VARCHAR2(16 CHAR),
     factory_code VARCHAR2(32 CHAR),
     product_ID VARCHAR2(64 CHAR),
-    target_qty NUMBER(10),
+    target_IN_glass_qty NUMBER(10),
+    target_in_panel_qty NUMBER(10),
+    target_Out_glass_qty NUMBER(10),
+    target_Out_panel_qty NUMBER(10),
+    target_Out_TTL_panel_qty NUMBER(10),
     CONSTRAINT PK_DAILY_PLAN PRIMARY KEY (id)
 )';
 EXCEPTION
@@ -60,6 +64,7 @@ BEGIN
     target_in_panel_qty NUMBER(10),
     target_Out_glass_qty NUMBER(10),
     target_Out_panel_qty NUMBER(10),
+    target_Out_TTL_panel_qty NUMBER(10),
     CONSTRAINT PK_MONTHLY_PLAN_APPROVED PRIMARY KEY (id)
 )';
 EXCEPTION

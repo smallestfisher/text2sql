@@ -24,6 +24,11 @@ class QueryIntentParser:
         matched_entities = self._match_aliases(normalized_question, self.entity_index)
         requested_dimensions = self.semantic_runtime.extract_dimensions(question)
         filters = self._extract_filters(question)
+        matched_metrics = self.semantic_runtime.resolve_metrics(
+            question=question,
+            matched_metrics=matched_metrics,
+            filters=filters,
+        )
         time_context = self._extract_time_context(question)
         version_context = self.semantic_runtime.extract_version_context(question)
         requested_sort = self.semantic_runtime.extract_sort(question, matched_metrics)

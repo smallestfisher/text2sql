@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import logging
 import re
 import time
 
@@ -10,6 +11,9 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError, 
 
 from backend.app.models.api import ExecutionResponse
 from backend.app.services.sql_dialect import SqlDialect
+
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseConnector:
@@ -31,6 +35,13 @@ class DatabaseConnector:
             if database_url
             else None
         )
+        logger.debug(
+            "database connector configured dialect=%s configured=%s timeout_seconds=%s max_rows=%s",
+            self.sql_dialect.name,
+            bool(database_url),
+            self.timeout_seconds,
+            self.max_result_rows,
+        )
 
     @property
     def connected(self) -> bool:
@@ -44,6 +55,11 @@ class DatabaseConnector:
         warnings: list[str] = []
         try:
             executable_sql = self.sql_dialect.strip_statement_terminator(sql)
+            logger.debug(
+                "sql execute start dialect=%s preview=%s",
+                self.sql_dialect.name,
+                self._preview_sql(executable_sql),
+            )
             with self.engine.connect() as connection:
                 if self.timeout_seconds > 0:
                     try:
@@ -80,6 +96,14 @@ class DatabaseConnector:
                     status = "empty_result"
                 elif truncated:
                     status = "truncated"
+                logger.debug(
+                    "sql execute done status=%s rows=%s truncated=%s elapsed_ms=%s columns=%s",
+                    status,
+                    len(rows),
+                    truncated,
+                    elapsed_ms,
+                    columns,
+                )
                 return ExecutionResponse(
                     executed=True,
                     status=status,
@@ -93,6 +117,11 @@ class DatabaseConnector:
                     truncated=truncated,
                 )
         except TimeoutError as exc:
+            logger.warning(
+                "sql execute timeout elapsed_ms=%s error=%s",
+                int((time.perf_counter() - started) * 1000),
+                exc,
+            )
             return ExecutionResponse(
                 executed=False,
                 status="timeout",
@@ -106,6 +135,11 @@ class DatabaseConnector:
                 error_category="timeout",
             )
         except OperationalError as exc:
+            logger.warning(
+                "sql execute connectivity error elapsed_ms=%s error=%s",
+                int((time.perf_counter() - started) * 1000),
+                exc,
+            )
             return ExecutionResponse(
                 executed=False,
                 status="db_error",
@@ -119,6 +153,11 @@ class DatabaseConnector:
                 error_category="connectivity",
             )
         except ProgrammingError as exc:
+            logger.warning(
+                "sql execute runtime error elapsed_ms=%s error=%s",
+                int((time.perf_counter() - started) * 1000),
+                exc,
+            )
             return ExecutionResponse(
                 executed=False,
                 status="db_error",
@@ -132,6 +171,11 @@ class DatabaseConnector:
                 error_category="sql_runtime",
             )
         except SQLAlchemyError as exc:
+            logger.warning(
+                "sql execute database error elapsed_ms=%s error=%s",
+                int((time.perf_counter() - started) * 1000),
+                exc,
+            )
             return ExecutionResponse(
                 executed=False,
                 status="db_error",
@@ -161,6 +205,11 @@ class DatabaseConnector:
                 if verify_readonly_session_settings and self.timeout_seconds > 0:
                     self._apply_session_max_execution_time(connection)
                 connection.execute(text("SELECT 1"))
+            logger.debug(
+                "database health ok dialect=%s verify_readonly=%s",
+                self.sql_dialect.name,
+                verify_readonly_session_settings,
+            )
             return {
                 "connected": True,
                 "database_url_configured": True,
@@ -170,6 +219,12 @@ class DatabaseConnector:
                 "slow_query_threshold_ms": self.slow_query_threshold_ms,
             }
         except (RuntimeError, SQLAlchemyError) as exc:
+            logger.warning(
+                "database health failed dialect=%s verify_readonly=%s error=%s",
+                self.sql_dialect.name,
+                verify_readonly_session_settings,
+                exc,
+            )
             return {
                 "connected": False,
                 "error": str(exc),
@@ -278,3 +333,10 @@ class DatabaseConnector:
             normalized,
             flags=re.IGNORECASE,
         )
+
+    @staticmethod
+    def _preview_sql(sql: str, max_length: int = 180) -> str:
+        compact = re.sub(r"\s+", " ", sql).strip()
+        if len(compact) <= max_length:
+            return compact
+        return compact[: max_length - 3] + "..."

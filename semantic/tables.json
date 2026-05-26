@@ -94,7 +94,11 @@
       "PLAN_date (排产日期)",
       "factory_code (工厂代码)",
       "product_ID (产品编码)",
-      "target_qty (计划投入量)"
+      "target_IN_glass_qty (目标投入Glass量)",
+      "target_in_panel_qty (目标投入panel量)",
+      "target_Out_glass_qty (目标产出Glass量)",
+      "target_Out_panel_qty (目标产出panel量)",
+      "target_Out_TTL_panel_qty (目标全部品产出panel量,仅适用于MDL工程)"
     ],
     "MAIN_KEY": "PLAN_date,factory_code,product_ID",
     "time_fields": {
@@ -119,7 +123,8 @@
       "target_IN_glass_qty (目标投入Glass量)",
       "target_in_panel_qty (目标投入panel量)",
       "target_Out_glass_qty (目标产出Glass量)",
-      "target_Out_panel_qty (目标产出panel量)"
+      "target_Out_panel_qty (目标产出panel量)",
+      "target_Out_TTL_panel_qty (目标全部品产出panel量,仅适用于MDL工程)"
     ],
     "MAIN_KEY": "plan_month,PLAN_date,factory_code,product_ID",
     "time_fields": {

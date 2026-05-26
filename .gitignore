@@ -1,6 +1,7 @@
 .env
 .env.*
 env
+.venv/
 *.local
 .DS_Store
 .idea/
@@ -13,3 +14,5 @@ frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
 .runtime/
+test_data.xlsx
+sql/oracle_test_data.sql

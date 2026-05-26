@@ -274,7 +274,7 @@
         "name": "group_by_month",
         "type": "regex",
         "field": "biz_month",
-        "pattern": "(?:按|按照|只看)\\s*(?:月|月份)(?:维度)?(?:拆分|分组|查看|统计|看)?",
+        "pattern": "(?:(?:按|按照|只看)\\s*(?:月|月份)(?:维度)?(?:拆分|分组|查看|统计|看)?|(?:每个?月|逐月|分月)(?:分别|各自)?(?:统计|查看|看|汇总)?)",
         "flags": [
           "ignorecase"
         ]
@@ -414,6 +414,14 @@
         "field": "plan_input_qty",
         "order": "desc",
         "pattern": "(?:按|依)?计划投入(?:量)?(?:从高到低|降序|倒序)",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "field": "plan_output_qty",
+        "order": "desc",
+        "pattern": "(?:按|依)?(?:计划|目标)产出(?:量)?(?:从高到低|降序|倒序)",
         "flags": [
           "ignorecase"
         ]

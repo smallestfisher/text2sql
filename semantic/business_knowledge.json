@@ -76,7 +76,9 @@
       "tables": ["daily_PLAN", "production_actuals"],
       "keywords": ["plan", "actual", "投入", "产出", "factory", "work_date"],
       "notes": [
-        "daily_PLAN 通常用于计划投入量查询。",
+        "daily_PLAN 通常用于计划投入量和计划产出量查询。",
+        "计划投入的 Glass / panel 字段分别是 target_IN_glass_qty、target_in_panel_qty；计划产出的 Glass / panel 字段分别是 target_Out_glass_qty、target_Out_panel_qty。",
+        "target_Out_TTL_panel_qty 表示全部品产出 panel 量，仅适用于需要全部品口径或 MDL 相关口径的问题。",
         "当问题需要计划和实际产出对比时，daily_PLAN 通常与 production_actuals 关联。"
       ]
     },

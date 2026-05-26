@@ -303,6 +303,8 @@
 - filters
 - 结构合法性
 
+指标口径约束应优先放在 `semantic/domain_config/metrics/*.json`。例如 `plan_actual` 的实际投入/产出指标通过 `act_type_scope` 声明适用的 `production_actuals.act_type`，Normalizer 只读取配置并做一致性过滤，不在 Python 里维护具体业务指标名列表。
+
 ### 7.4 QuestionClassifier
 
 [backend/app/services/question_classifier.py](backend/app/services/question_classifier.py)

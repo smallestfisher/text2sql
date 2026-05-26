@@ -12,7 +12,7 @@
       "definitions": [
         {
           "table": "daily_PLAN",
-          "expression": "sum(target_qty)",
+          "expression": "sum(target_IN_glass_qty)",
           "grain": "day"
         },
         {
@@ -57,12 +57,83 @@
       ]
     },
     {
+      "name": "plan_output_qty",
+      "aliases": [
+        "计划产出",
+        "计划产出量",
+        "目标产出",
+        "目标产出量"
+      ],
+      "semantic_column": "plan_output_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "daily_PLAN",
+          "expression": "sum(target_Out_glass_qty)",
+          "grain": "day"
+        },
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_Out_glass_qty)",
+          "grain": "month_or_day"
+        }
+      ]
+    },
+    {
+      "name": "plan_output_panel_qty",
+      "aliases": [
+        "计划产出panel量",
+        "计划产出panel数量",
+        "目标产出panel量",
+        "目标产出panel数量"
+      ],
+      "semantic_column": "plan_output_panel_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "daily_PLAN",
+          "expression": "sum(target_Out_panel_qty)",
+          "grain": "day"
+        },
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_Out_panel_qty)",
+          "grain": "month_or_day"
+        }
+      ]
+    },
+    {
+      "name": "plan_output_total_panel_qty",
+      "aliases": [
+        "计划全部品产出panel量",
+        "计划全部品产出panel数量",
+        "目标全部品产出panel量",
+        "目标全部品产出panel数量",
+        "全部品产出panel量"
+      ],
+      "semantic_column": "plan_output_total_panel_qty",
+      "aggregate_function": "SUM",
+      "definitions": [
+        {
+          "table": "daily_PLAN",
+          "expression": "sum(target_Out_TTL_panel_qty)",
+          "grain": "day"
+        },
+        {
+          "table": "monthly_plan_approved",
+          "expression": "sum(target_Out_TTL_panel_qty)",
+          "grain": "month_or_day"
+        }
+      ]
+    },
+    {
       "name": "actual_output_qty",
       "aliases": [
         "实际产出",
         "产出量"
       ],
       "semantic_column": "actual_output_qty",
+      "act_type_scope": "产出",
       "aggregate_function": "SUM",
       "definitions": [
         {
@@ -79,6 +150,7 @@
         "产出panel数量"
       ],
       "semantic_column": "actual_output_panel_qty",
+      "act_type_scope": "产出",
       "aggregate_function": "SUM",
       "definitions": [
         {
@@ -95,6 +167,7 @@
         "实际投产"
       ],
       "semantic_column": "actual_input_qty",
+      "act_type_scope": "投入",
       "aggregate_function": "SUM",
       "definitions": [
         {
@@ -111,6 +184,7 @@
         "投入panel数量"
       ],
       "semantic_column": "actual_input_panel_qty",
+      "act_type_scope": "投入",
       "aggregate_function": "SUM",
       "definitions": [
         {
@@ -128,6 +202,7 @@
         "投入差额"
       ],
       "semantic_column": "input_gap_qty",
+      "act_type_scope": "投入",
       "aggregate_function": "DERIVED",
       "definitions": [
         {
@@ -150,6 +225,7 @@
         "投入panel差额"
       ],
       "semantic_column": "input_panel_gap_qty",
+      "act_type_scope": "投入",
       "aggregate_function": "DERIVED",
       "definitions": [
         {
@@ -171,6 +247,7 @@
         "审批投入达成率"
       ],
       "semantic_column": "input_achievement_rate",
+      "act_type_scope": "投入",
       "aggregate_function": "DERIVED",
       "definitions": [
         {
@@ -192,6 +269,7 @@
         "审批投入panel达成率"
       ],
       "semantic_column": "input_panel_achievement_rate",
+      "act_type_scope": "投入",
       "aggregate_function": "DERIVED",
       "definitions": [
         {

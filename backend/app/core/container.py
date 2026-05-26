@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from backend.app.core.settings import settings
 from backend.app.repositories.db_audit_repository import DbAuditRepository
 from backend.app.repositories.db_evaluation_run_repository import DbEvaluationRunRepository
@@ -44,9 +46,19 @@ from backend.app.services.vector_corpus_store_service import VectorCorpusStoreSe
 from backend.app.services.runtime_store_initializer import RuntimeStoreInitializer
 
 
+logger = logging.getLogger(__name__)
+
+
 class AppContainer:
     def __init__(self) -> None:
         self.settings = settings
+        logger.info(
+            "container init start app_env=%s business_dialect=%s runtime_dialect=%s vector_enabled=%s",
+            self.settings.app_env,
+            self.settings.business_sql_dialect,
+            self.settings.runtime_sql_dialect,
+            self.settings.enable_vector_retrieval,
+        )
         self.domain_config_loader = DomainConfigLoader()
         self.domain_config = self.domain_config_loader.load()
         self.metadata_registry = MetadataRegistry()
@@ -78,7 +90,9 @@ class AppContainer:
             connector_name="runtime database",
         )
         self.runtime_store_initializer = RuntimeStoreInitializer(self.runtime_database_connector)
+        logger.debug("runtime schema init start")
         self.runtime_store_initializer.ensure_schema()
+        logger.debug("runtime schema init done")
         self.auth_repository = DbAuthRepository(self.runtime_database_connector)
         self.session_repository = DbSessionRepository(self.runtime_database_connector)
         self.audit_repository = DbAuditRepository(self.runtime_database_connector)
@@ -173,6 +187,11 @@ class AppContainer:
             async_vector_index=False,
             prewarm_vector_index=self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
         )
+        logger.info(
+            "container init done vector_provider=%s prewarm_vector=%s",
+            vector_provider,
+            self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
+        )
         self.answer_builder = AnswerBuilder(
             enable_chitchat_mode=self.settings.enable_chitchat_mode,
         )
@@ -238,7 +257,19 @@ class AppContainer:
             verify_readonly_session_settings=verify_readonly_session_settings,
         )
         if health.get("connected"):
+            logger.debug(
+                "database connection ok name=%s dialect=%s verify_readonly=%s",
+                connector_name,
+                health.get("sql_dialect"),
+                verify_readonly_session_settings,
+            )
             return
+        logger.error(
+            "database connection failed name=%s dialect=%s error=%s",
+            connector_name,
+            health.get("sql_dialect"),
+            health.get("error"),
+        )
         raise RuntimeError(
             f"{connector_name} is not ready: {health.get('error') or 'database connector is not configured'}"
         )

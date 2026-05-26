@@ -3,6 +3,9 @@
     "metric_to_domain": {
       "inventory_qty": "inventory",
       "plan_input_qty": "plan_actual",
+      "plan_output_qty": "plan_actual",
+      "plan_output_panel_qty": "plan_actual",
+      "plan_output_total_panel_qty": "plan_actual",
       "approved_input_qty": "plan_actual",
       "approved_input_panel_qty": "plan_actual",
       "actual_output_qty": "plan_actual",

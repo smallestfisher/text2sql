@@ -26,8 +26,9 @@ scripts/devctl.sh logs backend
 ## 配置读取
 
 - 终端日志默认输出到 stdout
-- 日志级别通过 `LOG_LEVEL` 控制，默认 `INFO`
-- 每条日志会附带 `request_id` 和 `trace_id`
+- 日志级别通过 `LOG_LEVEL` 控制，默认 `INFO`；排查链路问题时可临时设为 `DEBUG`
+- 日志使用紧凑格式输出，并在存在上下文时附带 `req=...` 和 `trace=...`
+- `LOG_LEVEL=DEBUG` 时，主查询链路会输出 `stage_io` 日志，可按阶段查看 request、planning、retrieval、compile_plan、validate_plan、generate_sql、validate_sql、execute_sql、answer_building 的输入和输出摘要
 - 优先读取仓库根目录 `.env`
 - 业务查询库读取 `BUSINESS_DATABASE_URL`
 - 运行时库读取 `RUNTIME_DATABASE_URL`
@@ -59,6 +60,7 @@ scripts/devctl.sh logs backend
 - `semantic/domain_config.json` 是辅助语义配置的 manifest 入口，实际内容由 `semantic/domain_config/` 下的分片合并得到
 - `semantic/domain_config/base/prompt_assets.json` 承载静态 prompt 资产，`PromptBuilder` 现在从配置读取分类 / relevance / intent / SQL 生成指令
 - `semantic/domain_config/query_profiles/*.json` 当前除了字段与默认排序配置外，也承载 source 互斥、support table 补全、post-process 规则
+- `semantic/domain_config/metrics/*.json` 当前是指标口径的主配置源。指标除了 `semantic_column`、`aggregate_function` 和物理 `definitions` 外，也可以声明 `act_type_scope` 这类口径约束；`IntentNormalizer` 会按配置过滤 LLM intent，例如 `act_type=投入` 时只保留适用投入口径的实际指标
 - `semantic/join_patterns.json` 用于维护稳定的多表 join 经验，并参与 retrieval / prompt 注入
 - 进行语义解析、问题分类和 relevance guard
 - 生成 Query Plan 作为 LLM SQL 生成约束

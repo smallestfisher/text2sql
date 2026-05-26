@@ -110,6 +110,11 @@ class SemanticRuntime:
         metric = self.metric_catalog.get(metric_name, {})
         return str(metric.get("aggregate_function", "SUM")).upper()
 
+    def metric_act_type_scope(self, metric_name: str) -> str | None:
+        metric = self.metric_catalog.get(metric_name, {})
+        scope = str(metric.get("act_type_scope", "")).strip()
+        return scope or None
+
     def is_known_metric(self, metric_name: str) -> bool:
         return metric_name in self.metric_catalog
 
@@ -710,6 +715,9 @@ class SemanticRuntime:
         explicit_non_time_dimensions = {
             item for item in dimensions if item not in {"biz_date", "biz_month", "demand_month"}
         }
+        explicit_time_dimensions = {
+            item for item in dimensions if item in {"biz_date", "biz_month", "demand_month"}
+        }
         entities = set(matched_entities)
 
         for rule in preferences:
@@ -726,6 +734,12 @@ class SemanticRuntime:
             if rule_time_grain and rule_time_grain != time_grain:
                 continue
             if adds_time_dimension and explicit_non_time_dimensions:
+                continue
+            if (
+                adds_time_dimension
+                and explicit_time_dimensions
+                and not set(add_dimensions).intersection(explicit_time_dimensions)
+            ):
                 continue
             if excluded_filter_fields.intersection(filter_fields) and not set(add_dimensions).intersection(dimensions):
                 continue

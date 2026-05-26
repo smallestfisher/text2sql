@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import logging
 
 from backend.app.core.cancellation import CancellationToken
@@ -26,6 +27,7 @@ from backend.app.services.sql_validator import SqlValidator
 
 
 logger = logging.getLogger(__name__)
+_OMITTED = object()
 
 
 class ConversationOrchestrator:
@@ -92,6 +94,15 @@ class ConversationOrchestrator:
                 request.session_id,
                 request.question,
             )
+            self._log_stage_io(
+                "request",
+                inputs={
+                    "question": request.question,
+                    "session_id": request.session_id,
+                    "has_session_state": request.session_state is not None,
+                    "user_id": request.user_context.user_id if request.user_context else None,
+                },
+            )
             self._raise_if_cancelled(cancellation_token, stage="request accepted")
             self._publish_progress(
                 trace.trace_id,
@@ -111,6 +122,11 @@ class ConversationOrchestrator:
             if request.session_id and session_state is None:
                 session_state = self.session_service.resolve_state(request.session_id)
             self._raise_if_cancelled(cancellation_token, stage="load session")
+            self._log_stage_io(
+                "load_session",
+                inputs={"session_id": request.session_id, "provided_state": request.session_state is not None},
+                outputs={"session_state": self._session_state_summary(session_state)},
+            )
             self.audit_service.append_step(trace, "load_session", "completed", "session state resolved")
             self._publish_progress(
                 trace.trace_id,
@@ -144,6 +160,17 @@ class ConversationOrchestrator:
             normalized_diff = planning_trace["normalized_diff"]
             semantic_diff = planning_trace["semantic_diff"]
             warnings.extend(planning_warnings)
+
+            self._log_stage_io(
+                "planning",
+                inputs={"question": request.question, "session_state": self._session_state_summary(session_state)},
+                outputs={
+                    "intent": self._intent_summary(query_intent),
+                    "classification": self._classification_summary(classification),
+                    "warnings": planning_warnings,
+                    "intent_selection": intent_selection,
+                },
+            )
 
             logger.info(
                 "parser trace trace_id=%s domain=%s metrics=%s entities=%s dimensions=%s filters=%s time_grain=%s version=%s follow_up_cue=%s explicit_slots=%s",
@@ -196,6 +223,14 @@ class ConversationOrchestrator:
                 query_intent=query_intent,
                 classification=classification,
                 session_state=session_state,
+            )
+            self._log_stage_io(
+                "plan_from_intent",
+                inputs={
+                    "intent": self._intent_summary(query_intent),
+                    "classification": self._classification_summary(classification),
+                },
+                outputs={"query_plan": self._query_plan_summary(query_plan)},
             )
             logger.info(
                 "classification trace_id=%s type=%s domain=%s inherit=%s need_clarification=%s semantic_diff=%s",
@@ -269,6 +304,11 @@ class ConversationOrchestrator:
             retrieval = self.retrieval_service.retrieve(query_intent)
             self._raise_if_cancelled(cancellation_token, stage="retrieval")
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
+            self._log_stage_io(
+                "retrieval",
+                inputs={"intent": self._intent_summary(query_intent)},
+                outputs={"retrieval": self._retrieval_summary(retrieval)},
+            )
             logger.info(
                 "retrieval trace_id=%s hits=%s metrics=%s",
                 trace.trace_id,
@@ -292,6 +332,11 @@ class ConversationOrchestrator:
 
             query_plan = self.query_plan_compiler.compile(query_plan=query_plan, retrieval=retrieval)
             self._raise_if_cancelled(cancellation_token, stage="compile plan")
+            self._log_stage_io(
+                "compile_plan",
+                inputs={"retrieval": self._retrieval_summary(retrieval)},
+                outputs={"query_plan": self._query_plan_summary(query_plan)},
+            )
             logger.info(
                 "plan trace_id=%s tables=%s metrics=%s dimensions=%s",
                 trace.trace_id,
@@ -314,6 +359,17 @@ class ConversationOrchestrator:
             plan_errors = plan_result.errors
             plan_warnings = plan_result.warnings
             warnings.extend(plan_warnings)
+            self._log_stage_io(
+                "validate_plan",
+                inputs={"query_plan": self._query_plan_summary(query_plan)},
+                outputs={
+                    "valid": not plan_errors,
+                    "errors": plan_errors,
+                    "warnings": plan_warnings,
+                    "risk_level": plan_result.risk_level,
+                    "risk_flags": plan_result.risk_flags,
+                },
+            )
             logger.info(
                 "plan validation trace_id=%s valid=%s errors=%s warnings=%s",
                 trace.trace_id,
@@ -373,6 +429,19 @@ class ConversationOrchestrator:
                     retrieval=retrieval,
                     question=request.question,
                 )
+                self._log_stage_io(
+                    "build_sql_prompt",
+                    inputs={
+                        "question": request.question,
+                        "query_plan": self._query_plan_summary(query_plan),
+                        "retrieval": self._retrieval_summary(retrieval),
+                    },
+                    outputs={
+                        "prompt_keys": sorted(sql_prompt.keys()),
+                        "context_budget": sql_prompt.get("context_budget"),
+                        "context_summary": sql_prompt.get("context_summary"),
+                    },
+                )
                 prompt_context_metadata = {
                     "context_budget": sql_prompt.get("context_budget"),
                     "context_summary": sql_prompt.get("context_summary"),
@@ -394,6 +463,11 @@ class ConversationOrchestrator:
 
             if not plan_errors:
                 sql = llm_sql
+            self._log_stage_io(
+                "generate_sql",
+                inputs={"plan_valid": not plan_errors, "llm_enabled": self.llm_client.enabled},
+                outputs={"sql_present": bool(sql), "sql_preview": self._preview_text(sql)},
+            )
             logger.info(
                 "sql generation trace_id=%s generated=%s llm_used=%s",
                 trace.trace_id,
@@ -448,6 +522,17 @@ class ConversationOrchestrator:
             sql_warnings = sql_result.warnings if sql_result is not None else []
             sql_risk_level = sql_result.risk_level if sql_result is not None else "low"
             sql_risk_flags = sql_result.risk_flags if sql_result is not None else []
+            self._log_stage_io(
+                "validate_sql",
+                inputs={"sql_preview": self._preview_text(sql), "query_plan": self._query_plan_summary(query_plan)},
+                outputs={
+                    "valid": not sql_errors,
+                    "errors": sql_errors,
+                    "warnings": sql_warnings,
+                    "risk_level": sql_risk_level,
+                    "risk_flags": sql_risk_flags,
+                },
+            )
             if sql_errors and llm_sql and not plan_errors and sql_prompt is not None:
                 repaired_sql = self.llm_client.repair_sql(
                     prompt_payload=sql_prompt,
@@ -530,6 +615,11 @@ class ConversationOrchestrator:
                 sql=sql,
                 user_context=request.user_context,
                 cancellation_token=cancellation_token,
+            )
+            self._log_stage_io(
+                "execute_sql",
+                inputs={"sql_preview": self._preview_text(sql), "blocked_by_errors": bool(plan_errors or sql_errors)},
+                outputs={"execution": self._execution_summary(execution)},
             )
             if (
                 execution is not None
@@ -620,6 +710,19 @@ class ConversationOrchestrator:
                 user_context=request.user_context,
             )
             self._raise_if_cancelled(cancellation_token, stage="answer building")
+            self._log_stage_io(
+                "answer_building",
+                inputs={
+                    "classification": self._classification_summary(classification),
+                    "execution": self._execution_summary(execution),
+                    "plan_valid": plan_validation.valid if plan_validation else None,
+                    "sql_valid": sql_validation.valid if sql_validation else None,
+                },
+                outputs={
+                    "answer_status": answer.status if answer else None,
+                    "summary": self._preview_text(answer.summary if answer else None),
+                },
+            )
             self._publish_progress(
                 trace.trace_id,
                 event_type="stage",
@@ -635,6 +738,11 @@ class ConversationOrchestrator:
             )
             if request.session_id:
                 next_session_state.session_id = request.session_id
+            self._log_stage_io(
+                "next_session_state",
+                inputs={"previous": self._session_state_summary(session_state)},
+                outputs={"next": self._session_state_summary(next_session_state)},
+            )
 
             response = ChatResponse(
                 classification=classification,
@@ -740,6 +848,147 @@ class ConversationOrchestrator:
                 metadata=metadata or {},
             )
         )
+
+    def _log_stage_io(
+        self,
+        stage: str,
+        *,
+        inputs: Mapping[str, object] | None = None,
+        outputs: Mapping[str, object] | None = None,
+    ) -> None:
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        logger.debug(
+            "stage_io stage=%s inputs=%s outputs=%s",
+            stage,
+            self._compact_payload(inputs or {}),
+            self._compact_payload(outputs or {}),
+        )
+
+    def _compact_payload(self, value: object, *, depth: int = 0) -> object:
+        if depth >= 4:
+            return "..."
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return self._preview_text(value) if isinstance(value, str) else value
+        if hasattr(value, "model_dump"):
+            return self._compact_payload(value.model_dump(mode="json"), depth=depth + 1)
+        if isinstance(value, Mapping):
+            compact = {}
+            for key, item in value.items():
+                compact_item = self._compact_payload(item, depth=depth + 1)
+                if compact_item is not _OMITTED:
+                    compact[str(key)] = compact_item
+            return compact
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            items = [self._compact_payload(item, depth=depth + 1) for item in list(value)[:8]]
+            if len(value) > 8:
+                items.append(f"...(+{len(value) - 8})")
+            return items
+        return self._preview_text(str(value))
+
+    @staticmethod
+    def _preview_text(value: str | None, max_length: int = 240) -> str | None:
+        if value is None:
+            return None
+        compact = " ".join(str(value).split())
+        if len(compact) <= max_length:
+            return compact
+        return compact[: max_length - 3] + "..."
+
+    def _session_state_summary(self, session_state: SessionState | None) -> dict | None:
+        if session_state is None:
+            return None
+        return {
+            "session_id": session_state.session_id,
+            "subject_domain": session_state.subject_domain,
+            "tables": session_state.tables,
+            "metrics": session_state.metrics,
+            "dimensions": session_state.dimensions,
+            "filter_fields": [item.field for item in session_state.filters],
+            "has_last_sql": bool(session_state.last_sql),
+        }
+
+    @staticmethod
+    def _intent_summary(query_intent) -> dict | None:
+        if query_intent is None:
+            return None
+        return {
+            "subject_domain": query_intent.subject_domain,
+            "metrics": query_intent.matched_metrics,
+            "entities": query_intent.matched_entities,
+            "dimensions": query_intent.requested_dimensions,
+            "filter_fields": [item.field for item in query_intent.filters],
+            "time_grain": query_intent.time_context.grain,
+            "has_version": bool(query_intent.version_context),
+            "follow_up": query_intent.has_follow_up_cue,
+        }
+
+    @staticmethod
+    def _classification_summary(classification) -> dict | None:
+        if classification is None:
+            return None
+        return {
+            "question_type": classification.question_type,
+            "subject_domain": classification.subject_domain,
+            "need_clarification": classification.need_clarification,
+            "inherit_context": classification.inherit_context,
+            "reason_code": classification.reason_code,
+        }
+
+    @staticmethod
+    def _query_plan_summary(query_plan) -> dict | None:
+        if query_plan is None:
+            return None
+        return {
+            "question_type": query_plan.question_type,
+            "subject_domain": query_plan.subject_domain,
+            "tables": query_plan.tables,
+            "metrics": query_plan.metrics,
+            "dimensions": query_plan.dimensions,
+            "filter_fields": [item.field for item in query_plan.filters],
+            "join_path": query_plan.join_path,
+            "time_grain": query_plan.time_context.grain,
+            "limit": query_plan.limit,
+            "need_clarification": query_plan.need_clarification,
+        }
+
+    @staticmethod
+    def _retrieval_summary(retrieval) -> dict | None:
+        if retrieval is None:
+            return None
+        return {
+            "domains": retrieval.domains,
+            "metrics": retrieval.metrics,
+            "terms": retrieval.retrieval_terms,
+            "channels": retrieval.retrieval_channels,
+            "hit_count": len(retrieval.hits),
+            "hit_count_by_source": retrieval.hit_count_by_source,
+            "top_hits": [
+                {
+                    "source_type": hit.source_type,
+                    "source_id": hit.source_id,
+                    "score": round(hit.score, 4),
+                    "channel": hit.retrieval_channel,
+                }
+                for hit in retrieval.hits[:5]
+            ],
+        }
+
+    @staticmethod
+    def _execution_summary(execution) -> dict | None:
+        if execution is None:
+            return None
+        return {
+            "executed": execution.executed,
+            "status": execution.status,
+            "row_count": execution.row_count,
+            "columns": execution.columns,
+            "elapsed_ms": execution.elapsed_ms,
+            "truncated": execution.truncated,
+            "error_category": execution.error_category,
+            "error_count": len(execution.errors),
+            "warning_count": len(execution.warnings),
+        }
 
     def _sync_classification_with_query_plan(self, classification, query_plan) -> None:
         if classification.question_type == "invalid":

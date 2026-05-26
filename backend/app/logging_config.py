@@ -9,6 +9,20 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 trace_id_var: ContextVar[str] = ContextVar("trace_id", default="-")
 
 
+class CompactFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        if hasattr(record, "request_id") and hasattr(record, "trace_id"):
+            context_parts = []
+            if record.request_id != "-":
+                context_parts.append(f"req={record.request_id}")
+            if record.trace_id != "-":
+                context_parts.append(f"trace={record.trace_id}")
+            record.context = f" {' '.join(context_parts)}" if context_parts else ""
+        else:
+            record.context = ""
+        return super().format(record)
+
+
 class RequestContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get()
@@ -44,7 +58,9 @@ def configure_logging(log_level: str = "INFO") -> None:
             },
             "formatters": {
                 "standard": {
-                    "format": "%(asctime)s %(levelname)s [%(name)s] [request_id=%(request_id)s trace_id=%(trace_id)s] %(message)s",
+                    "()": "backend.app.logging_config.CompactFormatter",
+                    "format": "%(asctime)s %(levelname).1s %(name)s%(context)s | %(message)s",
+                    "datefmt": "%H:%M:%S",
                 }
             },
             "handlers": {

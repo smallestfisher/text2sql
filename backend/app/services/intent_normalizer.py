@@ -78,6 +78,7 @@ class IntentNormalizer:
             matched_metrics=normalized_metrics,
             filters=filters,
         )
+        normalized_metrics = self._filter_metrics_by_act_type(normalized_metrics, filters)
         if subject_domain == "unknown":
             return normalized_metrics, warnings
         plan_probe = QueryPlan(
@@ -95,6 +96,24 @@ class IntentNormalizer:
             else:
                 warnings.append(f"drop metric outside domain: {metric_name}")
         return kept, warnings
+
+    def _filter_metrics_by_act_type(self, metrics: list[str], filters: list) -> list[str]:
+        act_type_value = None
+        for item in filters:
+            if item.field == "act_type" and isinstance(item.value, str):
+                act_type_value = item.value
+                break
+
+        if not act_type_value:
+            return metrics
+
+        scoped_metrics: list[str] = []
+        for metric in metrics:
+            scope = self.semantic_runtime.metric_act_type_scope(metric)
+            if scope and scope != act_type_value:
+                continue
+            scoped_metrics.append(metric)
+        return scoped_metrics
 
     def _normalize_dimensions(self, dimensions: list[str], subject_domain: str) -> tuple[list[str], list[str]]:
         if subject_domain == "unknown":

@@ -18,23 +18,16 @@ class RequestTraceMiddleware(BaseHTTPMiddleware):
         set_request_id(request_id)
         clear_trace_id()
         started_at = time.time()
-        logger.info(
-            "request started method=%s path=%s query=%s request_id=%s",
-            request.method,
-            request.url.path,
-            request.url.query or "-",
-            request_id,
-        )
+        logger.debug("request start %s %s query=%s", request.method, request.url.path, request.url.query or "-")
         try:
             response = await call_next(request)
             elapsed_ms = int((time.time() - started_at) * 1000)
             logger.info(
-                "request completed method=%s path=%s status=%s elapsed_ms=%s request_id=%s",
+                "request done %s %s status=%s elapsed_ms=%s",
                 request.method,
                 request.url.path,
                 response.status_code,
                 elapsed_ms,
-                request_id,
             )
             response.headers["X-Request-ID"] = request_id
             response.headers["X-Process-Time-Ms"] = str(elapsed_ms)

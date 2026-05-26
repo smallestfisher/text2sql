@@ -10,6 +10,7 @@
 - `semantic/domain_config.json` 仍然保留，但现在只是语义配置的 manifest 入口；真实内容按职责拆在 `semantic/domain_config/`
 - `semantic/domain_config/base/prompt_assets.json` 是分类、相关性、intent、SQL 生成的静态 prompt 资产入口，`PromptBuilder` 不再在代码里硬编码大段业务提示
 - `semantic/domain_config/query_profiles/*.json` 现在除了字段白名单外，也承载 source 互斥、support table 补全、post-process 这类运行时约束
+- `semantic/domain_config/metrics/*.json` 承载指标定义、物理表达式和口径约束；例如 `plan_actual` 指标可通过 `act_type_scope` 声明只适用于 `投入` 或 `产出`，Normalizer 会按配置过滤 LLM intent，避免在 Python 里堆业务指标名
 - SQL、分类、相关性判断 prompt 目前统一以中文自然语言指令为主
 - PromptBuilder 只选择当前问题相关的 schema、业务知识和少量真实 few-shot，避免 token 膨胀
 - `examples/nl2sql_examples.template.json` 保留真实 few-shot 资产；命中后会以 `retrieved_examples` 形式进入 SQL prompt
@@ -81,6 +82,15 @@ BUSINESS_SQL_DIALECT="oracle"
 ```bash
 docker exec -i text2sql-oracle sqlplus -L app/app123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_business_schema.sql
 ```
+
+生产样例测试数据可从 `test_data.xlsx` 生成 Oracle insert 脚本：
+
+```bash
+python3 scripts/import_test_data_to_oracle.py
+docker exec -i text2sql-oracle sqlplus -L app/app123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_test_data.sql
+```
+
+生成脚本会把 Excel sheet 映射到业务表，并按 Oracle 业务 schema 归一化日期和数值字段。
 
 ### Frontend
 

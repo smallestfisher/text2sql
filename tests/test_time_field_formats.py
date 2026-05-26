@@ -38,6 +38,18 @@ class TimeFieldFormatTests(unittest.TestCase):
             candidates,
         )
 
+    def test_plan_output_fields_follow_tables_metadata(self) -> None:
+        self.assertIn("target_Out_glass_qty", self.semantic_runtime.table_fields("daily_PLAN"))
+        self.assertIn("target_Out_TTL_panel_qty", self.semantic_runtime.table_fields("monthly_plan_approved"))
+
+        resolved_fields = self.semantic_runtime.resolve_field_candidates(
+            "plan_actual",
+            ["daily_PLAN", "monthly_plan_approved"],
+            "plan_output_total_panel_qty",
+        )
+
+        self.assertIn("target_Out_TTL_panel_qty", resolved_fields)
+
     def test_sql_prompt_emits_format_driven_time_resolution(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
