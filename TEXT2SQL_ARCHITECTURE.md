@@ -165,12 +165,10 @@
 
 任何一项失败，服务都不会继续启动。
 
-数据库方言由 `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 或连接串推断。当前支持：
+数据库角色固定：
 
-- `mysql`
-- `oracle`
-
-业务 SQL 生成、SQL repair、`sqlglot` 解析和 validator 会使用 business 方言；runtime 存储初始化会使用 runtime 方言。
+- 业务数据库固定为 Oracle；业务 SQL 生成、SQL repair、`sqlglot` 解析和 validator 固定使用 Oracle 规则。
+- runtime 数据库固定为 MySQL；runtime schema 初始化和会话、审计、向量 corpus 持久化固定使用 MySQL 表结构。
 
 ---
 

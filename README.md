@@ -24,8 +24,8 @@
 - 当前默认就启用向量检索；仍然保留 `ENABLE_VECTOR_RETRIEVAL` 开关用于环境级控制
 - 当前默认向量模型为 `siliconflow + Qwen/Qwen3-Embedding-8B`，默认维度 `1024`
 - retrieval corpus 的 embedding 会持久化到 runtime 库的 `vector_corpus_documents` 表；默认会在启动和 reload 时同步预热，失败就直接报错，不再静默降级
-- 当前工程的业务库按 Oracle 配置，使用 `oracle+oracledb://...` 连接串；SQL 生成和校验会切到 `Oracle SQL`、`FETCH FIRST n ROWS ONLY` 和 Oracle 日期函数约束
-- runtime 库仍可独立使用 MySQL，用于保存会话、审计、eval 和 retrieval corpus 数据
+- 当前工程的业务数据库固定为 Oracle，使用 `oracle+oracledb://...` 连接串；SQL 生成和校验固定使用 `Oracle SQL`、`FETCH FIRST n ROWS ONLY` 和 Oracle 日期函数约束
+- runtime 数据库固定为 MySQL，用于保存会话、审计、eval 和 retrieval corpus 数据
 - 容器启动时会显式校验 business DB 连通性和只读超时设置、runtime DB 连通性、metadata 文件可读性，以及 `sqlglot` 依赖；任一失败都会直接阻断启动
 - `ENABLE_CHITCHAT_MODE=true` 且当前用户拥有 `chitchat` 权限时，问候/闲聊/无关问题不再直接丢弃，而是返回终止型闲聊回复；默认 `false`
 - LLM 不可用、调用失败或返回非法结构时，请求会显式失败，不再静默降级为 `stub/skipped`
@@ -62,32 +62,38 @@ uvicorn backend.app.main:app --reload --app-dir .
 
 更完整的后端运行、配置和 API 说明见 `backend/README.md`。
 
-### Oracle 业务库
+### 本地数据库
 
-当前工程默认业务数据库是 Oracle。 本地可用仓库内的 Compose 文件启动：
+当前工程本地数据库由仓库根目录的 Compose 文件统一启动：Oracle 作为业务库，MySQL 作为 runtime 库。
+
+```bash
+docker compose up -d
+```
+
+Oracle 容器默认创建 `admin/admin123` 业务用户，PDB 服务名为 `FREEPDB1`，并在新 volume 首次初始化时自动执行 [sql/oracle_business_schema.sql](sql/oracle_business_schema.sql) 创建业务表。MySQL 容器默认创建 `manager` runtime 库和 `admin/admin123` 用户。对应连接串：
+
+```env
+BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@127.0.0.1:1521/?service_name=FREEPDB1"
+RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@127.0.0.1:3306/manager"
+```
+
+如果只需要单独启动 Oracle 业务库，仍可使用 `docker-compose.oracle.yml`：
 
 ```bash
 docker compose -f docker-compose.oracle.yml up -d
 ```
 
-容器默认创建 `app/app123` 业务用户，PDB 服务名为 `FREEPDB1`，对应连接串：
-
-```env
-BUSINESS_DATABASE_URL="oracle+oracledb://app:app123@127.0.0.1:1521/?service_name=FREEPDB1"
-BUSINESS_SQL_DIALECT="oracle"
-```
-
-业务表结构定义见 [sql/oracle_business_schema.sql](sql/oracle_business_schema.sql)。如果需要在新 Oracle 实例里初始化业务表，可执行：
+业务表结构定义见 [sql/oracle_business_schema.sql](sql/oracle_business_schema.sql)。如果 Oracle volume 已经存在，容器初始化脚本不会重复执行；需要补建业务表时可手动执行：
 
 ```bash
-docker exec -i text2sql-oracle sqlplus -L app/app123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_business_schema.sql
+docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_business_schema.sql
 ```
 
 生产样例测试数据可从 `test_data.xlsx` 生成 Oracle insert 脚本：
 
 ```bash
 python3 scripts/import_test_data_to_oracle.py
-docker exec -i text2sql-oracle sqlplus -L app/app123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_test_data.sql
+docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_test_data.sql
 ```
 
 生成脚本会把 Excel sheet 映射到业务表，并按 Oracle 业务 schema 归一化日期和数值字段。
@@ -108,10 +114,10 @@ npm run dev
 
 - 业务查询库读取 `BUSINESS_DATABASE_URL`
 - 运行时库读取 `RUNTIME_DATABASE_URL`
-- `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 可显式指定 `mysql` 或 `oracle`；不配置时从连接串推断
-- 当前业务查询库默认使用 Oracle；如果 runtime 继续使用 MySQL，需要显式配置 `RUNTIME_DATABASE_URL` 和 `RUNTIME_SQL_DIALECT=mysql`
-- Oracle 未配置 `RUNTIME_DATABASE_URL` 时会复用 `BUSINESS_DATABASE_URL`；生产建议始终给 runtime 显式配置独立连接
-- 首次启动会尝试自动建库、建表和补增量列
+- 业务查询库固定为 Oracle，不提供 MySQL 业务库路径
+- runtime 库固定为 MySQL，必须显式配置独立的 `RUNTIME_DATABASE_URL`
+- 本地 MySQL runtime 容器会通过 [sql/mysql_runtime_init.sql](sql/mysql_runtime_init.sql) 创建 `manager` 库、`admin` 用户，并执行 [sql/runtime_store.sql](sql/runtime_store.sql) 初始化 runtime 表
+- 应用首次启动仍会幂等检查建库、建表、补增量列和补索引
 - runtime 库除了会话、审计和 eval 数据外，现在也承载 retrieval corpus 的持久化向量表 `vector_corpus_documents`
 - 如果 runtime schema 初始化失败，服务会直接启动失败，不会再带着半可用 runtime 继续运行
 

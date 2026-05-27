@@ -3,38 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from sqlalchemy.engine import make_url
-
 
 @dataclass(frozen=True)
 class SqlDialect:
     name: str
 
     @classmethod
-    def from_name_or_url(cls, value: str | None, *, default: str = "mysql") -> "SqlDialect":
-        if value:
-            normalized = cls._normalize(value)
-            if normalized:
-                return cls(normalized)
-            try:
-                driver_name = make_url(value).drivername
-            except Exception:
-                driver_name = ""
-            normalized = cls._normalize(driver_name)
-            if normalized:
-                return cls(normalized)
-        return cls(cls._normalize(default) or "mysql")
-
-    @staticmethod
-    def _normalize(value: str | None) -> str | None:
+    def from_name(cls, value: str | None, *, default: str = "mysql") -> "SqlDialect":
         lowered = (value or "").strip().lower()
         if not lowered:
-            return None
-        if lowered.startswith("oracle"):
-            return "oracle"
-        if lowered.startswith("mysql") or "pymysql" in lowered:
-            return "mysql"
-        return None
+            lowered = default
+        if lowered not in {"oracle", "mysql"}:
+            raise ValueError(f"unsupported sql dialect: {value}")
+        return cls(lowered)
 
     @property
     def label(self) -> str:
@@ -96,4 +77,3 @@ class SqlDialect:
                 driver_connection.callTimeout = timeout_seconds * 1000
                 return
             raise RuntimeError("oracle driver does not expose call timeout configuration")
-

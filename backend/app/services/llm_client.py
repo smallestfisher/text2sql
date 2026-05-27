@@ -25,7 +25,6 @@ class LLMClient:
         timeout_seconds: int = 20,
         max_retries: int = 2,
         repair_max_retries: int | None = None,
-        sql_dialect: str = "mysql",
     ) -> None:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for LLM SQL validation helpers")
@@ -35,7 +34,7 @@ class LLMClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max(1, max_retries)
         self.repair_max_retries = max(1, repair_max_retries if repair_max_retries is not None else max_retries)
-        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
+        self.sql_dialect = SqlDialect.from_name("oracle")
         self.client = None
         if api_key:
             self.client = OpenAI(api_key=api_key, base_url=api_base)
@@ -248,8 +247,7 @@ class LLMClient:
             "不要输出 markdown 或解释。",
             f"必须包含 {self.sql_dialect.result_limit_clause_name}。",
         ]
-        if self.sql_dialect.name == "oracle":
-            constraints.append("不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。")
+        constraints.append("不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。")
         if extra_constraints:
             constraints = [*extra_constraints, *constraints]
         repair_payload = {

@@ -9,18 +9,15 @@ from backend.app.services.sql_dialect import SqlDialect
 
 
 class SqlDialectTests(unittest.TestCase):
-    def test_dialect_is_inferred_from_url(self) -> None:
-        self.assertEqual(
-            SqlDialect.from_name_or_url("oracle+oracledb://u:p@host:1521/?service_name=ORCL").name,
-            "oracle",
-        )
-        self.assertEqual(
-            SqlDialect.from_name_or_url("mysql+pymysql://u:p@host/db").name,
-            "mysql",
-        )
+    def test_dialect_accepts_only_explicit_role_names(self) -> None:
+        self.assertEqual(SqlDialect.from_name("oracle").name, "oracle")
+        self.assertEqual(SqlDialect.from_name("mysql").name, "mysql")
+
+        with self.assertRaisesRegex(ValueError, "unsupported sql dialect"):
+            SqlDialect.from_name("oracle+oracledb://u:p@host:1521/?service_name=ORCL")
 
     def test_oracle_result_limit_is_detected(self) -> None:
-        dialect = SqlDialect.from_name_or_url("oracle")
+        dialect = SqlDialect.from_name("oracle")
 
         self.assertTrue(dialect.has_result_limit("SELECT * FROM t FETCH FIRST 20 ROWS ONLY"))
         self.assertEqual(
@@ -28,15 +25,12 @@ class SqlDialectTests(unittest.TestCase):
             20,
         )
 
-    def test_oracle_runtime_limit_sql_is_adapted(self) -> None:
-        connector = DatabaseConnector(sql_dialect="oracle")
+    def test_connector_strips_statement_terminator_without_sql_rewrite(self) -> None:
+        connector = DatabaseConnector(sql_dialect="mysql")
 
         self.assertEqual(
-            connector._adapt_sql_for_dialect(
-                "SELECT * FROM query_logs ORDER BY created_at DESC LIMIT :limit",
-                {"limit": 50},
-            ),
-            "SELECT * FROM query_logs ORDER BY created_at DESC FETCH FIRST 50 ROWS ONLY",
+            connector._prepare_sql("SELECT * FROM query_logs ORDER BY created_at DESC LIMIT :limit;"),
+            "SELECT * FROM query_logs ORDER BY created_at DESC LIMIT :limit",
         )
 
     def test_oracle_prompt_constraints_do_not_request_mysql_limit(self) -> None:
@@ -53,7 +47,6 @@ class SqlDialectTests(unittest.TestCase):
                     }
                 }
             ),
-            sql_dialect="oracle",
         )
 
         constraints = builder._sql_generation_constraints()

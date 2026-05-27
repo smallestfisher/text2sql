@@ -6,10 +6,12 @@ services:
       - "1521:1521"
     environment:
       ORACLE_PASSWORD: oracle123
-      APP_USER: app
-      APP_USER_PASSWORD: app123
+      APP_USER: admin
+      APP_USER_PASSWORD: admin123
     volumes:
       - oracle-data:/opt/oracle/oradata
+      - ./sql/oracle_business_init.sh:/container-entrypoint-initdb.d/01-business-schema.sh:ro
+      - ./sql/oracle_business_schema.sql:/opt/text2sql/sql/oracle_business_schema.sql:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh"]
       interval: 30s

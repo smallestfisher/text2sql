@@ -103,15 +103,13 @@ class ConversationPersistenceService:
         ).mappings().first()
         last_message_row = connection.execute(
             text(
-                self.database_connector._adapt_sql_for_dialect(
-                    """
+                """
                 SELECT created_at
                 FROM chat_messages
                 WHERE session_id = :session_id
                 ORDER BY created_at DESC, message_id DESC
                 LIMIT 1
                 """
-                )
             ),
             {"session_id": session_id},
         ).mappings().first()

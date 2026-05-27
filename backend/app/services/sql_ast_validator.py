@@ -93,10 +93,10 @@ class SqlAstValidator:
         "HAVING",
     }
 
-    def __init__(self, sql_dialect: str = "mysql") -> None:
+    def __init__(self) -> None:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for SQL AST validation")
-        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
+        self.sql_dialect = SqlDialect.from_name("oracle")
 
     def health(self) -> dict:
         return {

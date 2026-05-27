@@ -38,10 +38,9 @@ class SqlValidator:
         semantic_runtime: SemanticRuntime | None = None,
         max_limit: int = 200,
         high_risk_limit: int = 1000,
-        sql_dialect: str = "mysql",
     ) -> None:
-        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
-        self.ast_validator = ast_validator or SqlAstValidator(sql_dialect=self.sql_dialect.name)
+        self.sql_dialect = SqlDialect.from_name("oracle")
+        self.ast_validator = ast_validator or SqlAstValidator()
         self.semantic_runtime = semantic_runtime
         self.max_limit = max_limit
         self.high_risk_limit = max(high_risk_limit, max_limit)

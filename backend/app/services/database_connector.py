@@ -29,7 +29,7 @@ class DatabaseConnector:
         self.timeout_seconds = timeout_seconds
         self.max_result_rows = max_result_rows
         self.slow_query_threshold_ms = slow_query_threshold_ms
-        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect or database_url)
+        self.sql_dialect = SqlDialect.from_name(sql_dialect)
         self.engine = (
             create_engine(database_url, pool_pre_ping=True, future=True)
             if database_url
@@ -77,7 +77,7 @@ class DatabaseConnector:
                             elapsed_ms=int((time.perf_counter() - started) * 1000),
                             error_category="configuration",
                         )
-                result = connection.execute(text(self._adapt_sql_for_dialect(executable_sql)))
+                result = connection.execute(text(self._prepare_sql(executable_sql)))
                 fetched_rows = result.fetchmany(self.max_result_rows + 1)
                 truncated = len(fetched_rows) > self.max_result_rows
                 rows = [dict(row._mapping) for row in fetched_rows[: self.max_result_rows]]
@@ -242,7 +242,7 @@ class DatabaseConnector:
             statements = [segment.strip() for segment in sql_script.split(";") if segment.strip()]
             with self.engine.begin() as connection:
                 for statement in statements:
-                    connection.execute(text(self._adapt_sql_for_dialect(statement)))
+                    connection.execute(text(self._prepare_sql(statement)))
             return {"executed": True, "statements": len(statements)}
         except SQLAlchemyError as exc:
             return {"executed": False, "error": str(exc)}
@@ -251,7 +251,7 @@ class DatabaseConnector:
         if not self.connected:
             raise RuntimeError("database connector is not configured")
         with self.engine.connect() as connection:
-            result = connection.execute(text(self._adapt_sql_for_dialect(sql, params or {})), params or {})
+            result = connection.execute(text(self._prepare_sql(sql)), params or {})
             return [dict(row._mapping) for row in result]
 
     def fetch_one(self, sql: str, params: dict | None = None) -> dict | None:
@@ -262,7 +262,7 @@ class DatabaseConnector:
         if not self.connected:
             raise RuntimeError("database connector is not configured")
         with self.engine.begin() as connection:
-            result = connection.execute(text(self._adapt_sql_for_dialect(sql, params or {})), params or {})
+            result = connection.execute(text(self._prepare_sql(sql)), params or {})
             return int(result.rowcount or 0)
 
     def ensure_database_exists(self) -> dict:
@@ -272,11 +272,7 @@ class DatabaseConnector:
         target_url = make_url(self.database_url)
         target_database = target_url.database
         if not target_database:
-            if self.sql_dialect.name == "oracle":
-                return {"executed": True, "database": None, "sql_dialect": self.sql_dialect.name}
             return {"executed": False, "error": "target database name is missing"}
-        if self.sql_dialect.name == "oracle":
-            return {"executed": True, "database": target_database, "sql_dialect": self.sql_dialect.name}
 
         admin_engine = create_engine(
             target_url.set(database=None),
@@ -308,31 +304,8 @@ class DatabaseConnector:
     def _apply_session_max_execution_time(self, connection) -> None:
         self.sql_dialect.apply_read_timeout(connection, self.timeout_seconds)
 
-    def _adapt_sql_for_dialect(self, sql: str, params: dict | None = None) -> str:
-        normalized = self.sql_dialect.strip_statement_terminator(sql)
-        if self.sql_dialect.name != "oracle":
-            return normalized
-        params = params or {}
-        limit_param_match = re.search(
-            r"\s+LIMIT\s+:([A-Za-z_][A-Za-z0-9_]*)\s*$",
-            normalized,
-            flags=re.IGNORECASE,
-        )
-        if limit_param_match:
-            param_name = limit_param_match.group(1)
-            limit_value = int(params[param_name])
-            return re.sub(
-                r"\s+LIMIT\s+:[A-Za-z_][A-Za-z0-9_]*\s*$",
-                f" FETCH FIRST {limit_value} ROWS ONLY",
-                normalized,
-                flags=re.IGNORECASE,
-            )
-        return re.sub(
-            r"\s+LIMIT\s+(\d+)\s*$",
-            r" FETCH FIRST \1 ROWS ONLY",
-            normalized,
-            flags=re.IGNORECASE,
-        )
+    def _prepare_sql(self, sql: str) -> str:
+        return self.sql_dialect.strip_statement_terminator(sql)
 
     @staticmethod
     def _preview_sql(sql: str, max_length: int = 180) -> str:

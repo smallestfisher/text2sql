@@ -48,6 +48,9 @@ from backend.app.services.runtime_store_initializer import RuntimeStoreInitializ
 
 logger = logging.getLogger(__name__)
 
+BUSINESS_SQL_DIALECT = "oracle"
+RUNTIME_SQL_DIALECT = "mysql"
+
 
 class AppContainer:
     def __init__(self) -> None:
@@ -55,8 +58,8 @@ class AppContainer:
         logger.info(
             "container init start app_env=%s business_dialect=%s runtime_dialect=%s vector_enabled=%s",
             self.settings.app_env,
-            self.settings.business_sql_dialect,
-            self.settings.runtime_sql_dialect,
+            BUSINESS_SQL_DIALECT,
+            RUNTIME_SQL_DIALECT,
             self.settings.enable_vector_retrieval,
         )
         self.domain_config_loader = DomainConfigLoader()
@@ -71,14 +74,14 @@ class AppContainer:
             timeout_seconds=self.settings.sql_timeout_seconds,
             max_result_rows=self.settings.execution_max_rows,
             slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
-            sql_dialect=self.settings.business_sql_dialect,
+            sql_dialect=BUSINESS_SQL_DIALECT,
         )
         self.runtime_database_connector = DatabaseConnector(
             database_url=self.settings.runtime_database_url,
             timeout_seconds=self.settings.sql_timeout_seconds,
             max_result_rows=self.settings.execution_max_rows,
             slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
-            sql_dialect=self.settings.runtime_sql_dialect,
+            sql_dialect=RUNTIME_SQL_DIALECT,
         )
         self._require_database_connection(
             self.business_database_connector,
@@ -106,7 +109,6 @@ class AppContainer:
         self.prompt_builder = PromptBuilder(
             semantic_runtime=self.semantic_runtime,
             metadata_registry=self.metadata_registry,
-            sql_dialect=self.settings.business_sql_dialect,
         )
         self.llm_client = LLMClient(
             model_name=self.settings.llm_model,
@@ -115,7 +117,6 @@ class AppContainer:
             timeout_seconds=self.settings.llm_timeout_seconds,
             max_retries=self.settings.llm_max_retries,
             repair_max_retries=self.settings.sql_repair_max_retries,
-            sql_dialect=self.settings.business_sql_dialect,
         )
         self.intent_service = IntentService(
             llm_client=self.llm_client,
@@ -145,13 +146,12 @@ class AppContainer:
             database_connector=self.business_database_connector,
             execution_cache=self.execution_cache_service,
         )
-        self.sql_ast_validator = SqlAstValidator(sql_dialect=self.settings.business_sql_dialect)
+        self.sql_ast_validator = SqlAstValidator()
         self.sql_validator = SqlValidator(
             ast_validator=self.sql_ast_validator,
             semantic_runtime=self.semantic_runtime,
             max_limit=self.settings.default_sql_limit,
             high_risk_limit=self.settings.high_risk_sql_limit,
-            sql_dialect=self.settings.business_sql_dialect,
         )
         self.auth_service = AuthService(
             repository=self.auth_repository,

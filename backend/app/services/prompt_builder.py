@@ -19,11 +19,10 @@ class PromptBuilder:
         self,
         semantic_runtime: SemanticRuntime | None = None,
         metadata_registry: MetadataRegistry | None = None,
-        sql_dialect: str = "mysql",
     ) -> None:
         self.semantic_runtime = semantic_runtime
         self.metadata_registry = metadata_registry or MetadataRegistry()
-        self.sql_dialect = SqlDialect.from_name_or_url(sql_dialect)
+        self.sql_dialect = SqlDialect.from_name("oracle")
 
     def build_classification_prompt(
         self,
@@ -197,7 +196,7 @@ class PromptBuilder:
         return {
             "task": "sql_generation",
             "question": question,
-            "target_sql_dialect": {
+            "oracle_sql_rules": {
                 "name": self.sql_dialect.name,
                 "label": self.sql_dialect.label,
                 "result_limit_clause": self.sql_dialect.result_limit_clause_name,
@@ -461,12 +460,7 @@ class PromptBuilder:
                 "notes": example.notes,
                 "matched_features": hit.matched_features,
             }
-            if self.sql_dialect.name == "mysql":
-                payload["sql"] = example.sql
-            else:
-                payload["source_sql_dialect"] = "mysql"
-                payload["target_sql_dialect"] = self.sql_dialect.name
-                payload["sql_omitted_reason"] = "source example SQL uses a different dialect; reuse only semantic shape, tables, metrics, filters, and result_shape"
+            payload["sql_omitted_reason"] = "reuse only semantic shape, tables, metrics, filters, and result_shape"
             selected.append(payload)
             if len(selected) >= 2:
                 break
@@ -750,7 +744,7 @@ class PromptBuilder:
         return None
 
     def _substring_function(self) -> str:
-        return "SUBSTR" if self.sql_dialect.name == "oracle" else "SUBSTRING"
+        return "SUBSTR"
 
     def _example_compact_month(self, query_plan: QueryPlan) -> str:
         if self.semantic_runtime is not None:
@@ -978,25 +972,21 @@ class PromptBuilder:
                 constraints.append(f"必须包含结果行数限制，并使用 {self.sql_dialect.result_limit_clause_name} 语法。")
                 continue
             constraints.append(item)
-        if self.sql_dialect.name == "oracle":
-            constraints.extend(
-                [
-                    "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
-                    "Oracle 日期函数优先使用 TO_DATE、TO_CHAR、ADD_MONTHS、TRUNC、SYSDATE。",
-                ]
-            )
+        constraints.extend(
+            [
+                "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
+                "Oracle 日期函数优先使用 TO_DATE、TO_CHAR、ADD_MONTHS、TRUNC、SYSDATE。",
+            ]
+        )
         return constraints
 
     def _latest_n_preferences(self) -> list[str]:
         preferences = []
         for item in self._prompt_asset_strings("sql_generation", "latest_n_preferences"):
             if "ORDER BY 真实排序字段 DESC LIMIT N" in item:
-                if self.sql_dialect.name == "oracle":
-                    preferences.append(
-                        "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。"
-                    )
-                else:
-                    preferences.append(item)
+                preferences.append(
+                    "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。"
+                )
                 continue
             preferences.append(item)
         return preferences

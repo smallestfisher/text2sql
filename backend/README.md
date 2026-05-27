@@ -32,11 +32,10 @@ scripts/devctl.sh logs backend
 - 优先读取仓库根目录 `.env`
 - 业务查询库读取 `BUSINESS_DATABASE_URL`
 - 运行时库读取 `RUNTIME_DATABASE_URL`
-- `BUSINESS_SQL_DIALECT` / `RUNTIME_SQL_DIALECT` 可显式指定 `mysql` 或 `oracle`；不配置时从连接串推断
-- 当前业务查询库默认使用 Oracle；如果 runtime 继续使用 MySQL，需要显式配置 `RUNTIME_DATABASE_URL` 和 `RUNTIME_SQL_DIALECT=mysql`
-- Oracle 未显式配置 `RUNTIME_DATABASE_URL` 时，会复用 `BUSINESS_DATABASE_URL`；生产建议始终给 runtime 显式配置独立连接
-- 可通过 `RUNTIME_DATABASE_NAME` 修改默认运行时数据库名
-- 本地 Oracle 容器和业务表初始化方式见仓库根目录 [README.md](../README.md) 的 `Oracle 业务库` 小节
+- 业务查询库固定为 Oracle，不提供 MySQL 业务库路径
+- runtime 库固定为 MySQL，必须显式配置独立的 `RUNTIME_DATABASE_URL`
+- 本地开发可用仓库根目录 `docker-compose.yml` 同时启动 Oracle 业务库和 MySQL runtime 库
+- 本地 Oracle / MySQL 容器和业务表初始化方式见仓库根目录 [README.md](../README.md) 的 `本地数据库` 小节
 - LLM 模型名通过 `LLM_MODEL` 配置
 - `LLM_MAX_RETRIES` 控制分类 / intent / SQL 首轮生成的重试次数
 - `SQL_REPAIR_MAX_RETRIES` 控制 SQL repair fallback 的独立重试次数
@@ -64,11 +63,11 @@ scripts/devctl.sh logs backend
 - `semantic/join_patterns.json` 用于维护稳定的多表 join 经验，并参与 retrieval / prompt 注入
 - 进行语义解析、问题分类和 relevance guard
 - 生成 Query Plan 作为 LLM SQL 生成约束
-- 由 LLM 直接基于真实表和业务知识生成目标数据库方言 SQL；当前支持 MySQL 和 Oracle
+- 由 LLM 直接基于真实表和业务知识生成 Oracle SQL
 - PromptBuilder 只选择当前 Query Plan 相关表结构、知识块和少量真实 few-shot，避免 prompt 膨胀
 - PromptBuilder 会把命中的 `retrieved_examples`、`business_notes` 和 `join_patterns` 一起带入 SQL prompt
 - 对 `oms_inventory` 的常规库存问题，如果用户只说“OMS库存/库存”而没有显式指定 `glass`、`panel` 或具体库龄段，当前默认同时返回 `glass_qty` 和 `panel_qty` 两套口径；只有明确问库龄时才应使用 `ONE_AGE_panel_qty` 到 `EUGHT_AGE_panel_qty`
-- SQL 校验器做只读、安全、表字段范围、时间/版本、结果行数限制和风险治理；MySQL 使用 `LIMIT`，Oracle 使用 `FETCH FIRST n ROWS ONLY`
+- SQL 校验器做只读、安全、表字段范围、时间/版本、结果行数限制和风险治理；业务 SQL 使用 Oracle `FETCH FIRST n ROWS ONLY`
 - SQL 校验或执行失败时，触发一次通用 LLM SQL repair；repair 不再走业务特化分支
 - 生成下一轮 `session_state`
 - 提供会话仓库、workspace 聚合接口、trace 恢复和 response snapshot
@@ -102,6 +101,16 @@ scripts/devctl.sh logs backend
 - retrieval corpus 持久化向量 `vector_corpus_documents`
 
 运行时表定义见 [sql/runtime_store.sql](../sql/runtime_store.sql)。
+
+本地 MySQL runtime 容器由仓库根目录 `docker-compose.yml` 提供，默认连接串为：
+
+```env
+RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@127.0.0.1:3306/manager"
+```
+
+容器首次启动会执行 [sql/mysql_runtime_init.sql](../sql/mysql_runtime_init.sql)，创建 `manager` 库、`admin` 用户，并执行 [sql/runtime_store.sql](../sql/runtime_store.sql) 初始化 runtime 表。应用启动后仍会通过 `RuntimeStoreInitializer` 幂等检查建表、补列和补索引。
+
+Oracle 业务库也会在新 volume 首次初始化时执行 [sql/oracle_business_init.sh](../sql/oracle_business_init.sh)，自动创建业务表。已有 Oracle volume 不会重复执行该脚本，需要补建表时按仓库根目录 README 的手动 `sqlplus` 命令执行 [sql/oracle_business_schema.sql](../sql/oracle_business_schema.sql)。
 
 首次启动时，服务会尝试：
 
