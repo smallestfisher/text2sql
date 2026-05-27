@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -12,9 +13,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.api import dependencies
 from backend.app.api.routes.chat import chat_query_stream
 from backend.app.core.exceptions import ClientCancelledError
-from backend.app.models.api import PlanRequest
-from backend.app.models.classification import QueryIntent
+from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecord
+from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.classification import QueryIntent, QuestionClassification
+from backend.app.models.conversation import ChatMessage, ChatSession
 from backend.app.models.intent import StructuredIntent
+from backend.app.models.query_plan import QueryPlan
+from backend.app.models.session_state import SessionState
+from backend.app.models.trace import TraceRecord
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.metadata_registry import MetadataRegistry
@@ -348,6 +354,68 @@ class SessionWorkspaceFailFastTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "boom"):
             service.get_workspace("sess_1")
+
+    def test_workspace_passes_latest_state_as_session_state_to_restore_service(self) -> None:
+        session = ChatSession(id="sess_1")
+        message = ChatMessage(id="msg_1", session_id="sess_1", role="user", content="查询库存", trace_id="trace_1")
+        state = SessionState(session_id="sess_1")
+        query_log = RuntimeQueryLogRecord(trace_id="trace_1", session_id="sess_1", created_at=datetime.utcnow())
+        sql_audit = RuntimeSqlAuditRecord(
+            sql_audit_id="audit_1",
+            trace_id="trace_1",
+            plan_valid=True,
+            sql_valid=True,
+            executed=False,
+            created_at=datetime.utcnow(),
+        )
+        trace = TraceRecord(trace_id="trace_1")
+
+        class RestoreService:
+            captured_session_state = None
+
+            def build_from_trace_id(
+                self,
+                trace_id,
+                *,
+                session_state=None,
+                messages=None,
+                user_context=None,
+                trace=None,
+                query_log=None,
+                sql_audit=None,
+            ):
+                self.captured_session_state = session_state
+                return ChatResponse(
+                    classification=QuestionClassification(question_type="new", subject_domain="unknown"),
+                    query_intent=QueryIntent(normalized_question="查询库存"),
+                    query_plan=QueryPlan(question_type="new", subject_domain="unknown"),
+                    sql=None,
+                    plan_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+                    sql_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+                    execution=None,
+                    next_session_state=session_state or SessionState(session_id="sess_1"),
+                )
+
+        restore_service = RestoreService()
+        service = SessionWorkspaceService(
+            session_service=SimpleNamespace(
+                get_session=lambda session_id: session,
+                history=lambda session_id: [message],
+                resolve_state=lambda session_id: state,
+            ),
+            runtime_log_repository=SimpleNamespace(
+                list_query_logs=lambda limit, session_id: [query_log],
+                get_query_log=lambda trace_id: query_log,
+                get_sql_audit=lambda trace_id: sql_audit,
+            ),
+            audit_service=SimpleNamespace(get_trace=lambda trace_id: trace),
+            response_restore_service=restore_service,
+        )
+
+        workspace = service.get_workspace("sess_1")
+
+        self.assertIs(restore_service.captured_session_state, state)
+        self.assertIs(workspace.latest_response.next_session_state, state)
 
 
 class StructuredIntentFailFastTests(unittest.TestCase):

@@ -84,7 +84,7 @@ class SessionWorkspaceService:
                 raise RuntimeError(f"workspace restoration missing sql audit for trace_id={trace_id}")
             response = self.response_restore_service.build_from_trace_id(
                 trace_id=trace_id,
-                state=state if trace_id == latest_trace_id else None,
+                session_state=state if trace_id == latest_trace_id else None,
                 messages=messages,
                 user_context=user_context,
                 trace=trace,
