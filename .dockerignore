@@ -1,0 +1,14 @@
+.git
+.codex
+.pytest_cache
+.runtime
+__pycache__
+*.py[cod]
+*.log
+.env
+
+frontend/node_modules
+frontend/dist
+
+tests
+docs

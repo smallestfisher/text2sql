@@ -1,6 +1,59 @@
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: text2sql-backend
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: docker
+      BUSINESS_DATABASE_URL: ${DOCKER_BUSINESS_DATABASE_URL:-oracle+oracledb://admin:admin123@oracle:1521/?service_name=FREEPDB1}
+      RUNTIME_DATABASE_URL: ${DOCKER_RUNTIME_DATABASE_URL:-mysql+pymysql://admin:admin123@mysql:3306/manager}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.siliconflow.cn/v1}
+      LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen3-14B}
+      ENABLE_VECTOR_RETRIEVAL: ${ENABLE_VECTOR_RETRIEVAL:-true}
+      PREWARM_VECTOR_RETRIEVAL: ${PREWARM_VECTOR_RETRIEVAL:-true}
+      VECTOR_RETRIEVAL_PROVIDER: ${VECTOR_RETRIEVAL_PROVIDER:-siliconflow}
+      VECTOR_API_KEY: ${VECTOR_API_KEY:-${OPENAI_API_KEY:-}}
+      VECTOR_API_BASE: ${VECTOR_API_BASE:-https://api.siliconflow.cn/v1}
+      VECTOR_MODEL: ${VECTOR_MODEL:-Qwen/Qwen3-Embedding-8B}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-dev-token-secret-change-me}
+      ENABLE_DOCS: ${ENABLE_DOCS:-true}
+    volumes:
+      - ./semantic:/app/semantic
+      - ./examples:/app/examples
+      - ./eval:/app/eval
+      - ./schemas:/app/schemas:ro
+      - ./sql/runtime_store.sql:/app/sql/runtime_store.sql:ro
+    depends_on:
+      oracle:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: text2sql-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
   oracle:
-    image: gvenzl/oracle-free:23-slim-faststart
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/gvenzl/oracle-free:23
     container_name: text2sql-oracle
     ports:
       - "1521:1521"
@@ -21,7 +74,7 @@ services:
     restart: unless-stopped
 
   mysql:
-    image: mysql:8.4
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mysql:8.4.0
     container_name: text2sql-mysql
     ports:
       - "3306:3306"

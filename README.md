@@ -6,13 +6,74 @@ LLM-first Text2SQL 工程：用户用自然语言提问，系统基于真实表�
 
 - 业务数据库固定为 Oracle，连接串来自 `BUSINESS_DATABASE_URL`。
 - runtime 数据库固定为 MySQL，连接串来自 `RUNTIME_DATABASE_URL`。
-- 本地 `docker-compose.yml` 同时提供 Oracle 业务库和 MySQL runtime 库。
+- 本地 `docker-compose.yml` 提供完整 Docker 编排：前端、后端、Oracle 业务库和 MySQL runtime 库。
 - Oracle SQL 生成、repair、`sqlglot` 解析和 validator 都固定使用 Oracle 规则。
 - MySQL runtime 保存用户、会话、trace、query log、SQL audit、feedback、eval 和 retrieval corpus。
 - LLM、`sqlglot`、业务库、runtime 库、metadata 文件都是启动时 fail-fast 依赖。
 - 准确率问题优先修语义资产、业务知识、retrieval、prompt 和 validator，不回退到本地 SQL 模板分支。
 
 ## 快速启动
+
+### Docker 整栈启动
+
+1. 准备环境文件，至少填入 `OPENAI_API_KEY` 和 `AUTH_TOKEN_SECRET`。
+
+```bash
+cp env.example .env
+```
+
+2. 构建并启动完整服务。
+
+```bash
+docker compose up -d --build
+```
+
+启动后访问：
+
+- Frontend: `http://127.0.0.1:5173`
+- Backend: `http://127.0.0.1:8000`
+
+`docker-compose.yml` 会启动：
+
+- `text2sql-frontend`：Nginx 托管前端静态文件，并反代 `/api`、`/health` 到后端。
+- `text2sql-backend`：FastAPI 后端。
+- `text2sql-oracle`：业务库，默认用户 `admin/admin123`，服务名 `FREEPDB1`。
+- `text2sql-mysql`：runtime 库，默认库 `manager`，用户 `admin/admin123`。
+
+后端容器内默认连接串使用 Docker 服务名：
+
+```env
+BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@oracle:1521/?service_name=FREEPDB1"
+RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@mysql:3306/manager"
+```
+
+如果要覆盖容器内数据库地址，使用 `DOCKER_BUSINESS_DATABASE_URL` 和 `DOCKER_RUNTIME_DATABASE_URL`。这样不会影响本机开发时使用的 `BUSINESS_DATABASE_URL` / `RUNTIME_DATABASE_URL`。
+
+`semantic/`、`examples/`、`eval/` 会挂载到后端容器中，所以管理台修改 metadata、example 或 eval case 后会落回工作区文件。
+
+源码或构建配置变更后，按影响范围重建应用镜像：
+
+```bash
+docker compose up -d --build backend frontend
+```
+
+如果只改后端代码，可以只重建后端：
+
+```bash
+docker compose build backend
+docker compose up -d backend
+```
+
+如果只改前端代码，可以只重建前端：
+
+```bash
+docker compose build frontend
+docker compose up -d frontend
+```
+
+不要用 `docker compose down -v` 作为常规重启命令；它会删除 Oracle / MySQL 数据卷。
+
+### 本机开发启动
 
 1. 准备环境文件和依赖。
 
@@ -22,16 +83,11 @@ pip install -r backend/requirements.txt
 cd frontend && npm install && cd ..
 ```
 
-2. 启动本地数据库。
+2. 启动本地数据库。如果只想启动数据库而不启动应用，可以执行：
 
 ```bash
-docker compose up -d
+docker compose up -d oracle mysql
 ```
-
-`docker-compose.yml` 会启动：
-
-- `text2sql-oracle`：业务库，默认用户 `admin/admin123`，服务名 `FREEPDB1`。
-- `text2sql-mysql`：runtime 库，默认库 `manager`，用户 `admin/admin123`。
 
 新 volume 首次启动时会自动初始化：
 

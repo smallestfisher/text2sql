@@ -23,9 +23,9 @@ import type {
 const TOKEN_KEY = "text2sql.frontend.token";
 const SESSION_KEY = "text2sql.frontend.session";
 const PROMPTS = [
-  "查询 2026 年 4 月 CELL 工厂计划投入量",
-  "对比本月与上月各客户出货差异",
-  "按产品线查看最近 8 周库存趋势",
+  "2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+  "oms库存，近6个月库存变化趋势",
+  "最新P版，2026年5月Oxide产品数量是多少",
   "继续上一个问题，细分到工厂维度",
 ];
 const PROGRESS_BASE_STAGES = [
@@ -688,7 +688,7 @@ function App() {
               <div className="brand-mark">T</div>
               <div className="brand-copy-block">
                 <div className="brand-name">Text2SQL</div>
-                <div className="brand-meta">LobeHub 风格的问数工作台</div>
+                <div className="brand-meta">智能自然语言查数平台</div>
               </div>
             </div>
 
@@ -979,7 +979,7 @@ function App() {
                           void handleSend();
                         }
                       }}
-                      placeholder="输入业务问题，例如：查询本周北美客户计划与实际出货差异"
+                      placeholder="输入业务问题，例如：查询26年MDL工厂top10投入型号及其物量"
                     />
 
                     <div className="composer-footer">
@@ -1115,9 +1115,9 @@ function AuthScreen(props: {
       <section className="auth-layout">
         <div className="auth-showcase">
           <div className="hero-badge">Text2SQL Workspace</div>
-          <div className="auth-title">面向业务分析的自然语言查询入口</div>
+          <div className="auth-title">智能数据问答助手</div>
           <div className="auth-copy">
-            登录后可以直接提问，系统会基于真实表结构和业务说明生成 SQL、执行查询，并把 Trace 与上下文状态保留在同一工作台里。
+            只需自然语言提问，即可快速获取业务洞察。基于真实数据模型智能推理，让每一次查询都清晰、透明、可追溯。
           </div>
         </div>
 
