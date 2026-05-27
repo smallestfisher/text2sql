@@ -1577,20 +1577,6 @@ function PendingProgressCard(props: { events: ProgressEvent[] }) {
         </div>
       </div>
       <div className="progress-current-note">{view.currentStageNote}</div>
-      <div className="progress-summary-grid">
-        <div className="compact-stat">
-          <span>当前阶段</span>
-          <strong>{view.currentStageLabel}</strong>
-        </div>
-        <div className="compact-stat">
-          <span>完成进度</span>
-          <strong>{`${view.progressPercent}%`}</strong>
-        </div>
-        <div className="compact-stat">
-          <span>已完成步骤</span>
-          <strong>{`${view.completedCount}/${view.totalCount}`}</strong>
-        </div>
-      </div>
       <div className="progress-meter" aria-hidden="true">
         <div className="progress-meter-fill" style={{ width: `${view.progressPercent}%` }} />
       </div>
@@ -1598,16 +1584,16 @@ function PendingProgressCard(props: { events: ProgressEvent[] }) {
         <div className="message-result-note">{view.latest.detail}</div>
       ) : null}
       <div className="progress-step-list">
-        {view.steps.map((step) => (
-          <div className={`progress-step-item is-${step.tone}`} key={step.stage}>
-            <span className={`progress-step-icon is-${step.tone}`} aria-hidden="true">{step.icon}</span>
-            <div className="progress-step-copy">
-              <span className="progress-step-label">{step.label}</span>
-              <span className="progress-step-note">{step.note}</span>
-            </div>
-            <span className={`progress-step-badge is-${step.tone}`}>{step.badge}</span>
+        <div className={`progress-step-item is-${view.currentStep.tone}`}>
+          <span className={`progress-step-icon is-${view.currentStep.tone}`} aria-hidden="true">
+            {view.currentStep.icon}
+          </span>
+          <div className="progress-step-copy">
+            <span className="progress-step-label">{view.currentStep.label}</span>
+            <span className="progress-step-note">{view.currentStep.note}</span>
           </div>
-        ))}
+          <span className={`progress-step-badge is-${view.currentStep.tone}`}>{view.currentStep.badge}</span>
+        </div>
       </div>
       <div className="message-result-note">Trace: {view.latest.trace_id}</div>
     </div>
@@ -2042,103 +2028,33 @@ function resolvePendingMessages(
   );
 }
 
-function collapseProgressEvents(events: ProgressEvent[]) {
-  const order: string[] = [];
-  const latestByStage = new Map<string, ProgressEvent>();
-  for (const event of events) {
-    if (!latestByStage.has(event.stage)) {
-      order.push(event.stage);
-    }
-    latestByStage.set(event.stage, event);
-  }
-  return order
-    .map((stage) => latestByStage.get(stage))
-    .filter((event): event is ProgressEvent => Boolean(event));
-}
-
 function buildPendingProgressView(events: ProgressEvent[]) {
   const latest = events[events.length - 1];
-  const collapsed = collapseProgressEvents(events);
-  const latestByStage = new Map(collapsed.map((event) => [event.stage, event]));
-  const observedBaseStages = collapsed.filter((event) =>
-    PROGRESS_BASE_STAGES.includes(event.stage as (typeof PROGRESS_BASE_STAGES)[number]),
-  );
-  const highestObservedIndex = observedBaseStages.reduce((maxIndex, event) => {
-    const index = PROGRESS_BASE_STAGES.indexOf(event.stage as (typeof PROGRESS_BASE_STAGES)[number]);
-    return index > maxIndex ? index : maxIndex;
-  }, -1);
-  const terminal = latest.type === "completed" || latest.type === "failed";
-  const visibleBaseStages = terminal
-    ? PROGRESS_BASE_STAGES.slice(0, Math.max(highestObservedIndex + 1, 1))
-    : PROGRESS_BASE_STAGES;
-  const steps: PendingProgressStep[] = visibleBaseStages.map((stage, index) => {
-    const event = latestByStage.get(stage);
-    const meta = getProgressStageMeta(stage);
-    if (event) {
-      const tone = classifyProgressTone(event);
-      return {
-        stage,
-        label: meta.label,
-        note: describeProgressStepNote(stage, event, tone),
-        icon: meta.icon,
-        tone: tone === "active" && index < highestObservedIndex ? "completed" : tone,
-        badge: tone === "active" && index < highestObservedIndex ? "已完成" : describeProgressBadge(event),
-      };
-    }
-    if (highestObservedIndex >= 0 && index < highestObservedIndex) {
-      return {
-        stage,
-        label: meta.label,
-        note: meta.note,
-        icon: meta.icon,
-        tone: "completed",
-        badge: "已完成",
-      };
-    }
-    return {
-      stage,
-      label: meta.label,
-      note: meta.note,
-      icon: meta.icon,
-      tone: "pending",
-      badge: "待执行",
-    };
-  });
-
-  if (latest.type === "completed") {
-    steps.push({
-      stage: "completed",
-      label: describeProgressStage("completed"),
-      note: getProgressStageMeta("completed").note,
-      icon: getProgressStageMeta("completed").icon,
-      tone: "completed",
-      badge: "已完成",
-    });
-  }
-  if (latest.type === "failed") {
-    steps.push({
-      stage: "failed",
-      label: describeProgressStage("failed"),
-      note: latest.detail || getProgressStageMeta("failed").note,
-      icon: getProgressStageMeta("failed").icon,
-      tone: "failed",
-      badge: "失败",
-    });
-  }
-
-  const completedCount = steps.filter((step) => ["completed", "skipped"].includes(step.tone)).length;
-  const activeCount = steps.filter((step) => step.tone === "active").length;
+  const currentStageIndex = PROGRESS_BASE_STAGES.indexOf(latest.stage as (typeof PROGRESS_BASE_STAGES)[number]);
+  const totalStageCount = PROGRESS_BASE_STAGES.length + 1;
+  const completedCount = latest.type === "completed"
+    ? totalStageCount
+    : Math.max(currentStageIndex, 0);
+  const activeCount = latest.type === "failed" ? 0 : 1;
   const progressPercent = latest.type === "completed"
     ? 100
-    : Math.max(6, Math.min(99, Math.round(((completedCount + activeCount) / Math.max(steps.length, 1)) * 100)));
+    : Math.max(6, Math.min(99, Math.round(((completedCount + activeCount) / totalStageCount) * 100)));
+  const currentTone = classifyProgressTone(latest);
+  const currentStageMeta = getProgressStageMeta(latest.stage);
+  const currentStep: PendingProgressStep = {
+    stage: latest.stage,
+    label: describeProgressStage(latest.stage),
+    note: describeProgressStepNote(latest.stage, latest, currentTone),
+    icon: currentStageMeta.icon,
+    tone: currentTone,
+    badge: describeProgressBadge(latest),
+  };
 
   return {
     latest,
-    steps,
+    currentStep,
     progressPercent,
-    completedCount,
-    totalCount: steps.length,
-    currentStageIcon: getProgressStageMeta(latest.stage).icon,
+    currentStageIcon: currentStageMeta.icon,
     currentStageLabel: describeProgressStage(latest.stage),
     currentStageNote: describeProgressCurrentNote(latest),
     responseStatusLabel: describeResponseStatus(latest.status),

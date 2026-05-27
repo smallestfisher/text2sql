@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import logging
+import time
 
 from backend.app.core.cancellation import CancellationToken
 from backend.app.core.exceptions import ClientCancelledError
@@ -88,6 +89,7 @@ class ConversationOrchestrator:
         sql_validation: ValidationResponse | None = None
 
         try:
+            chat_started_at = time.perf_counter()
             logger.info(
                 "chat start trace_id=%s session_id=%s question=%s",
                 trace.trace_id,
@@ -119,8 +121,10 @@ class ConversationOrchestrator:
                 status="running",
                 detail="loading session state",
             )
+            stage_started_at = time.perf_counter()
             if request.session_id and session_state is None:
                 session_state = self.session_service.resolve_state(request.session_id)
+            self._log_timing(trace.trace_id, "load_session", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="load session")
             self._log_stage_io(
                 "load_session",
@@ -143,11 +147,13 @@ class ConversationOrchestrator:
                 status="running",
                 detail="building query plan",
             )
+            stage_started_at = time.perf_counter()
             planning_trace = self.query_planner.build_planning_trace(
                 question=request.question,
                 session_state=session_state,
                 cancellation_token=cancellation_token,
             )
+            self._log_timing(trace.trace_id, "planning", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="planning")
             query_intent = planning_trace["query_intent"]
             classification = planning_trace["classification"]
@@ -219,11 +225,13 @@ class ConversationOrchestrator:
                 },
             )
 
+            stage_started_at = time.perf_counter()
             query_plan = self.query_planner.build_plan_from_intent(
                 query_intent=query_intent,
                 classification=classification,
                 session_state=session_state,
             )
+            self._log_timing(trace.trace_id, "plan_from_intent", stage_started_at)
             self._log_stage_io(
                 "plan_from_intent",
                 inputs={
@@ -280,9 +288,10 @@ class ConversationOrchestrator:
             self._sync_classification_with_query_plan(classification, query_plan)
             terminal_reason = self._terminal_skip_reason(classification, query_plan)
             if terminal_reason is not None:
+                self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
                 self._raise_if_cancelled(cancellation_token, stage="terminal response")
-                return self._finalize_terminal_response(
+                response = self._finalize_terminal_response(
                     trace=trace,
                     request=request,
                     session_state=session_state,
@@ -293,6 +302,8 @@ class ConversationOrchestrator:
                     retrieval=None,
                     terminal_reason=terminal_reason,
                 )
+                self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                return response
 
             self._publish_progress(
                 trace.trace_id,
@@ -301,7 +312,14 @@ class ConversationOrchestrator:
                 status="running",
                 detail="retrieving examples and knowledge",
             )
+            stage_started_at = time.perf_counter()
             retrieval = self.retrieval_service.retrieve(query_intent)
+            self._log_timing(
+                trace.trace_id,
+                "retrieval",
+                stage_started_at,
+                hit_count=len(retrieval.hits),
+            )
             self._raise_if_cancelled(cancellation_token, stage="retrieval")
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
             self._log_stage_io(
@@ -330,7 +348,9 @@ class ConversationOrchestrator:
                 detail=f"{len(retrieval.hits)} hits",
             )
 
+            stage_started_at = time.perf_counter()
             query_plan = self.query_plan_compiler.compile(query_plan=query_plan, retrieval=retrieval)
+            self._log_timing(trace.trace_id, "compile_plan", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="compile plan")
             self._log_stage_io(
                 "compile_plan",
@@ -352,10 +372,12 @@ class ConversationOrchestrator:
                 metadata={"compiled_plan": query_plan.model_dump(mode="json")},
             )
 
+            stage_started_at = time.perf_counter()
             plan_result = self.query_plan_validator.validate_detailed(
                 query_plan=query_plan,
                 domain_config=self.domain_config,
             )
+            self._log_timing(trace.trace_id, "validate_plan", stage_started_at)
             plan_errors = plan_result.errors
             plan_warnings = plan_result.warnings
             warnings.extend(plan_warnings)
@@ -398,9 +420,10 @@ class ConversationOrchestrator:
             self._sync_classification_with_query_plan(classification, query_plan)
             terminal_reason = self._terminal_skip_reason(classification, query_plan)
             if terminal_reason is not None:
+                self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
                 self._raise_if_cancelled(cancellation_token, stage="terminal response")
-                return self._finalize_terminal_response(
+                response = self._finalize_terminal_response(
                     trace=trace,
                     request=request,
                     session_state=session_state,
@@ -412,6 +435,8 @@ class ConversationOrchestrator:
                     terminal_reason=terminal_reason,
                     plan_validation=plan_validation,
                 )
+                self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                return response
 
             llm_sql = None
             sql_hint_metadata = {"mode": "not_started", "used": False}
@@ -424,11 +449,13 @@ class ConversationOrchestrator:
                     status="running",
                     detail="generating sql",
                 )
+                stage_started_at = time.perf_counter()
                 sql_prompt = self.prompt_builder.build_sql_prompt(
                     query_plan,
                     retrieval=retrieval,
                     question=request.question,
                 )
+                self._log_timing(trace.trace_id, "build_sql_prompt", stage_started_at)
                 self._log_stage_io(
                     "build_sql_prompt",
                     inputs={
@@ -446,9 +473,16 @@ class ConversationOrchestrator:
                     "context_budget": sql_prompt.get("context_budget"),
                     "context_summary": sql_prompt.get("context_summary"),
                 }
+                stage_started_at = time.perf_counter()
                 llm_sql = self.llm_client.generate_sql_hint(
                     sql_prompt,
                     cancellation_token=cancellation_token,
+                )
+                self._log_timing(
+                    trace.trace_id,
+                    "generate_sql_hint",
+                    stage_started_at,
+                    sql_present=bool(llm_sql),
                 )
                 self._raise_if_cancelled(cancellation_token, stage="sql generation")
                 if llm_sql:
@@ -508,6 +542,7 @@ class ConversationOrchestrator:
                 query_plan.dimensions,
                 query_plan.metrics,
             )
+            stage_started_at = time.perf_counter()
             sql_result = (
                 self.sql_validator.validate_detailed(
                     sql,
@@ -518,6 +553,7 @@ class ConversationOrchestrator:
                 if sql is not None
                 else None
             )
+            self._log_timing(trace.trace_id, "validate_sql", stage_started_at)
             sql_errors = ["sql is empty"] if sql is None and not plan_errors else (sql_result.errors if sql_result else [])
             sql_warnings = sql_result.warnings if sql_result is not None else []
             sql_risk_level = sql_result.risk_level if sql_result is not None else "low"
@@ -534,12 +570,19 @@ class ConversationOrchestrator:
                 },
             )
             if sql_errors and llm_sql and not plan_errors and sql_prompt is not None:
+                stage_started_at = time.perf_counter()
                 repaired_sql = self.llm_client.repair_sql(
                     prompt_payload=sql_prompt,
                     sql=sql,
                     errors=sql_errors,
                     warnings=sql_warnings,
                     cancellation_token=cancellation_token,
+                )
+                self._log_timing(
+                    trace.trace_id,
+                    "repair_sql_after_validation",
+                    stage_started_at,
+                    repaired=bool(repaired_sql),
                 )
                 if repaired_sql and sql_errors:
                     logger.info(
@@ -548,12 +591,14 @@ class ConversationOrchestrator:
                         repaired_sql[:800],
                         sql_errors,
                     )
+                    stage_started_at = time.perf_counter()
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
                         self.domain_config,
                         query_plan=query_plan,
                         required_filter_fields=required_filter_fields,
                     )
+                    self._log_timing(trace.trace_id, "validate_repaired_sql", stage_started_at)
                     if not repaired_sql_result.errors:
                         warnings.append("llm sql repaired after validation failure")
                         sql_hint_metadata["repair_used"] = True
@@ -611,10 +656,20 @@ class ConversationOrchestrator:
                     status="running",
                     detail="executing sql",
                 )
+            stage_started_at = time.perf_counter()
             execution = None if (plan_errors or sql_errors) else self.sql_executor.execute(
                 sql=sql,
                 user_context=request.user_context,
                 cancellation_token=cancellation_token,
+            )
+            self._log_timing(
+                trace.trace_id,
+                "execute_sql",
+                stage_started_at,
+                skipped=bool(plan_errors or sql_errors),
+                status=execution.status if execution else None,
+                row_count=execution.row_count if execution else None,
+                db_elapsed_ms=execution.elapsed_ms if execution else None,
             )
             self._log_stage_io(
                 "execute_sql",
@@ -628,6 +683,7 @@ class ConversationOrchestrator:
                 and sql_prompt is not None
                 and self.llm_client.enabled
             ):
+                stage_started_at = time.perf_counter()
                 repaired_sql = self.llm_client.repair_sql(
                     prompt_payload=sql_prompt,
                     sql=sql,
@@ -635,18 +691,35 @@ class ConversationOrchestrator:
                     warnings=execution.warnings,
                     cancellation_token=cancellation_token,
                 )
+                self._log_timing(
+                    trace.trace_id,
+                    "repair_sql_after_execution",
+                    stage_started_at,
+                    repaired=bool(repaired_sql),
+                )
                 if repaired_sql:
+                    stage_started_at = time.perf_counter()
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
                         self.domain_config,
                         query_plan=query_plan,
                         required_filter_fields=required_filter_fields,
                     )
+                    self._log_timing(trace.trace_id, "validate_execution_repaired_sql", stage_started_at)
                     if not repaired_sql_result.errors:
+                        stage_started_at = time.perf_counter()
                         repaired_execution = self.sql_executor.execute(
                             sql=repaired_sql,
                             user_context=request.user_context,
                             cancellation_token=cancellation_token,
+                        )
+                        self._log_timing(
+                            trace.trace_id,
+                            "execute_repaired_sql",
+                            stage_started_at,
+                            status=repaired_execution.status,
+                            row_count=repaired_execution.row_count,
+                            db_elapsed_ms=repaired_execution.elapsed_ms,
                         )
                         if repaired_execution.executed:
                             warnings.append("llm sql repaired after execution failure")
@@ -701,6 +774,7 @@ class ConversationOrchestrator:
                 status="running",
                 detail="building answer",
             )
+            stage_started_at = time.perf_counter()
             answer = self.answer_builder.build(
                 classification=classification,
                 query_plan=query_plan,
@@ -709,6 +783,7 @@ class ConversationOrchestrator:
                 sql_validation=sql_validation,
                 user_context=request.user_context,
             )
+            self._log_timing(trace.trace_id, "answer_building", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="answer building")
             self._log_stage_io(
                 "answer_building",
@@ -731,11 +806,13 @@ class ConversationOrchestrator:
                 detail=answer.status if answer else "unknown",
             )
 
+            stage_started_at = time.perf_counter()
             next_session_state = self.session_state_service.build_next_state(
                 query_plan=query_plan,
                 previous_state=session_state,
                 sql=sql,
             )
+            self._log_timing(trace.trace_id, "next_session_state", stage_started_at)
             if request.session_id:
                 next_session_state.session_id = request.session_id
             self._log_stage_io(
@@ -757,6 +834,7 @@ class ConversationOrchestrator:
                 execution=execution,
                 next_session_state=next_session_state,
             )
+            stage_started_at = time.perf_counter()
             self._append_response_snapshot(trace, response)
             self._persist_success_artifacts(
                 trace=trace,
@@ -764,6 +842,8 @@ class ConversationOrchestrator:
                 response=response,
                 warnings=warnings + sql_warnings,
             )
+            self._log_timing(trace.trace_id, "persist_success", stage_started_at)
+            self._log_timing(trace.trace_id, "chat_total", chat_started_at)
             logger.info(
                 "chat completed trace_id=%s answer_status=%s plan_valid=%s sql_valid=%s",
                 trace.trace_id,
@@ -847,6 +927,21 @@ class ConversationOrchestrator:
                 detail=detail,
                 metadata=metadata or {},
             )
+        )
+
+    def _log_timing(self, trace_id: str, stage: str, started_at: float, **metadata: object) -> None:
+        metadata_parts = " ".join(
+            f"{key}={self._preview_text(str(value), max_length=120)}"
+            for key, value in metadata.items()
+            if value is not None
+        )
+        suffix = f" {metadata_parts}" if metadata_parts else ""
+        logger.info(
+            "timing trace_id=%s stage=%s elapsed_ms=%s%s",
+            trace_id,
+            stage,
+            int((time.perf_counter() - started_at) * 1000),
+            suffix,
         )
 
     def _log_stage_io(

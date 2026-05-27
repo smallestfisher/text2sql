@@ -369,6 +369,27 @@ class StructuredIntentFailFastTests(unittest.TestCase):
                 },
             )
 
+    def test_confidence_accepts_numeric_string(self) -> None:
+        intent = StructuredIntent.from_llm_payload(
+            normalized_question="查询库存",
+            payload={"confidence": "0.82"},
+        )
+        self.assertEqual(intent.confidence, 0.82)
+
+    def test_confidence_accepts_percentage_string(self) -> None:
+        intent = StructuredIntent.from_llm_payload(
+            normalized_question="查询库存",
+            payload={"confidence": "82%"},
+        )
+        self.assertEqual(intent.confidence, 0.82)
+
+    def test_confidence_invalid_string_becomes_none(self) -> None:
+        intent = StructuredIntent.from_llm_payload(
+            normalized_question="查询库存",
+            payload={"confidence": "high"},
+        )
+        self.assertIsNone(intent.confidence)
+
 
 class QuestionClassifierFailFastTests(unittest.TestCase):
     def test_invalid_context_delta_raises(self) -> None:

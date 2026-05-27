@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from backend.app.core.cancellation import CancellationToken
@@ -14,6 +16,9 @@ from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_classifier import QuestionClassifier
 from backend.app.services.query_intent_parser import QueryIntentParser
 from backend.app.services.semantic_runtime import SemanticRuntime
+
+
+logger = logging.getLogger(__name__)
 
 
 class QueryPlanner:
@@ -45,25 +50,40 @@ class QueryPlanner:
         session_state: SessionState | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> dict[str, Any]:
+        total_started = time.perf_counter()
+        stage_started = time.perf_counter()
         parser_query_intent = self.parser.parse(question=question, session_state=session_state)
         parser_intent = StructuredIntent.from_query_intent(parser_query_intent)
+        self._log_timing("planner.parse_intent", stage_started)
+
+        stage_started = time.perf_counter()
         llm_intent = self._build_llm_intent(
             question=question,
             query_intent=parser_query_intent,
             session_state=session_state,
             cancellation_token=cancellation_token,
         )
+        self._log_timing("planner.llm_intent", stage_started)
+
+        stage_started = time.perf_counter()
         normalized_intent = self._normalize_intent(question=question, llm_intent=llm_intent)
+        self._log_timing("planner.normalize_intent", stage_started)
+
+        stage_started = time.perf_counter()
         query_intent, intent_selection = self._select_effective_query_intent(
             parser_query_intent=parser_query_intent,
             normalized_intent_payload=normalized_intent,
         )
+        self._log_timing("planner.select_intent", stage_started)
+
+        stage_started = time.perf_counter()
         classification, classifier_warnings = self.classifier.classify(
             question=question,
             query_intent=query_intent,
             session_state=session_state,
             cancellation_token=cancellation_token,
         )
+        self._log_timing("planner.classify", stage_started)
         warnings: list[str] = list(classifier_warnings)
         if classification.need_clarification:
             warnings.append("clarification required before stable SQL generation")
@@ -73,6 +93,7 @@ class QueryPlanner:
             else {}
         )
         classifier_debug = self.classifier.last_debug_info()
+        self._log_timing("planner.total", total_started)
         return {
             "query_intent": query_intent,
             "parser_query_intent": parser_query_intent,
@@ -112,6 +133,9 @@ class QueryPlanner:
             },
             "classifier_debug": classifier_debug,
         }
+
+    def _log_timing(self, stage: str, started_at: float) -> None:
+        logger.info("timing stage=%s elapsed_ms=%s", stage, int((time.perf_counter() - started_at) * 1000))
 
     def _build_llm_intent(
         self,

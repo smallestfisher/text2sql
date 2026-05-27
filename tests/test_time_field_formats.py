@@ -72,22 +72,22 @@ class TimeFieldFormatTests(unittest.TestCase):
 
         self.assertEqual(
             work_date_candidate["projection_example"],
-            "SUBSTRING(production_actuals.work_date, 1, 6) AS biz_month",
+            "SUBSTR(production_actuals.work_date, 1, 6) AS biz_month",
         )
         self.assertEqual(
             work_date_candidate["month_filter_example"],
-            "SUBSTRING(production_actuals.work_date, 1, 6) = '202604'",
+            "SUBSTR(production_actuals.work_date, 1, 6) = '202604'",
         )
         self.assertEqual(
             work_date_candidate["month_range_filter_example"],
             "production_actuals.work_date BETWEEN '20260401' AND '20260430'",
         )
         self.assertIn(
-            "SUBSTRING(production_actuals.work_date, 1, 6) AS biz_month",
+            "SUBSTR(production_actuals.work_date, 1, 6) AS biz_month",
             prompt["shape_contract"]["logical_dimension_examples"]["biz_month"],
         )
 
-    def test_sql_validator_rejects_incompatible_time_literals(self) -> None:
+    def test_sql_validator_warns_incompatible_time_literals(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="plan_actual",
@@ -103,12 +103,13 @@ class TimeFieldFormatTests(unittest.TestCase):
             query_plan=query_plan,
         )
 
+        self.assertEqual([], result.errors)
         self.assertTrue(
-            any("incompatible time literals" in error for error in result.errors),
-            result.errors,
+            any("incompatible time literals" in warning for warning in result.warnings),
+            result.warnings,
         )
 
-    def test_sql_validator_rejects_month_filter_collapsed_to_single_day(self) -> None:
+    def test_sql_validator_warns_month_filter_collapsed_to_single_day(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="plan_actual",
@@ -124,9 +125,10 @@ class TimeFieldFormatTests(unittest.TestCase):
             query_plan=query_plan,
         )
 
+        self.assertEqual([], result.errors)
         self.assertIn(
             "sql collapses biz_month filter to a single day; expand it to a full-month range or month expression",
-            result.errors,
+            result.warnings,
         )
 
 

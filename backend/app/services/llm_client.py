@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 
@@ -14,6 +15,9 @@ try:
     import sqlglot
 except Exception:  # pragma: no cover - optional dependency
     sqlglot = None
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -326,13 +330,34 @@ class LLMClient:
         raise LLMServiceError(f"llm is required but not configured for {task_name}")
 
     def _complete(self, messages: list[dict]) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=0.1,
-            timeout=self.timeout_seconds,
-        )
-        return response.choices[0].message.content or ""
+        started_at = time.perf_counter()
+        prompt_chars = sum(len(str(message.get("content") or "")) for message in messages)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.1,
+                timeout=self.timeout_seconds,
+            )
+            content = response.choices[0].message.content or ""
+            logger.info(
+                "timing stage=llm.complete model=%s messages=%s prompt_chars=%s response_chars=%s elapsed_ms=%s",
+                self.model_name,
+                len(messages),
+                prompt_chars,
+                len(content),
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            return content
+        except Exception:
+            logger.warning(
+                "timing stage=llm.complete model=%s messages=%s prompt_chars=%s status=failed elapsed_ms=%s",
+                self.model_name,
+                len(messages),
+                prompt_chars,
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            raise
 
     def _extract_json(self, content: str) -> dict:
         content = content.strip()

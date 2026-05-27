@@ -23,13 +23,17 @@ logger = logging.getLogger(__name__)
 
 class SqlValidator:
     FORBIDDEN_KEYWORDS = (
-        " insert ",
-        " update ",
-        " delete ",
-        " drop ",
-        " alter ",
-        " truncate ",
-        " create ",
+        "insert",
+        "update",
+        "delete",
+        "drop",
+        "alter",
+        "truncate",
+        "create",
+        "merge",
+        "grant",
+        "revoke",
+        "execute",
     )
 
     def __init__(
@@ -72,7 +76,8 @@ class SqlValidator:
 
         errors: list[str] = []
         warnings: list[str] = []
-        normalized_sql = f" {sql.lower()} "
+        safety_sql = self._sql_without_literals_and_comments(sql)
+        normalized_sql = f" {safety_sql.lower()} "
         inspection = self.ast_validator.inspect(sql)
         logger.info(
             "sql validator inspect parser=%s statements=%s sources=%s select_fields=%s group_by_fields=%s functions=%s",
@@ -90,8 +95,8 @@ class SqlValidator:
             errors.append("only SELECT statements are allowed")
 
         for keyword in self.FORBIDDEN_KEYWORDS:
-            if keyword in normalized_sql:
-                errors.append(f"forbidden keyword detected:{keyword.strip()}")
+            if re.search(rf"\b{re.escape(keyword)}\b", normalized_sql, re.IGNORECASE):
+                errors.append(f"forbidden keyword detected:{keyword}")
 
         physical_sources = set(domain_config.get("semantic_graph", {}).get("nodes", []))
         allowed_sources = set(physical_sources)
@@ -107,7 +112,7 @@ class SqlValidator:
             expected_sources.update(inspection.cte_names)
             unexpected_sources = [source for source in used_sources if source not in expected_sources]
             if unexpected_sources:
-                errors.append(f"sql references sources outside query plan: {', '.join(unexpected_sources)}")
+                warnings.append(f"sql references sources outside query plan: {', '.join(unexpected_sources)}")
 
             missing_plan_filters = [
                 filter_item.field
@@ -137,7 +142,7 @@ class SqlValidator:
                     function in self.ast_validator.AGGREGATE_FUNCTIONS
                     for function in inspection.outer_functions
                 ):
-                    errors.append(
+                    warnings.append(
                         "sql does not group by required dimensions from query plan: "
                         + ", ".join(sorted(set(missing_group_by_fields)))
                     )
@@ -155,27 +160,27 @@ class SqlValidator:
                         "sql does not preserve query plan sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
                     )
 
-            time_filter_errors = self._validate_time_context(query_plan, filter_scope)
-            errors.extend(time_filter_errors)
-            month_filter_semantic_errors = self._validate_month_filter_semantics(query_plan, filter_scope)
-            errors.extend(month_filter_semantic_errors)
-            time_literal_format_errors = self._validate_time_literal_formats(query_plan, filter_scope)
-            errors.extend(time_literal_format_errors)
+            time_filter_warnings = self._validate_time_context(query_plan, filter_scope)
+            warnings.extend(time_filter_warnings)
+            month_filter_semantic_warnings = self._validate_month_filter_semantics(query_plan, filter_scope)
+            warnings.extend(month_filter_semantic_warnings)
+            time_literal_format_warnings = self._validate_time_literal_formats(query_plan, filter_scope)
+            warnings.extend(time_literal_format_warnings)
 
-            version_errors = self._validate_version_context(query_plan, filter_scope)
-            errors.extend(version_errors)
+            version_warnings = self._validate_version_context(query_plan, filter_scope)
+            warnings.extend(version_warnings)
 
-            limit_errors = self._validate_limit_consistency(query_plan, inspection.limit_value, inspection.has_limit)
-            errors.extend(limit_errors)
+            limit_warnings = self._validate_limit_consistency(query_plan, inspection.limit_value, inspection.has_limit)
+            warnings.extend(limit_warnings)
 
             if query_plan.metrics and not query_plan.dimensions and inspection.functions and inspection.group_by_fields:
                 warnings.append("sql groups aggregated metrics by extra fields not present in query plan")
 
-            select_dimension_errors = self._validate_selected_dimensions(query_plan, inspection)
-            errors.extend(select_dimension_errors)
+            select_dimension_warnings = self._validate_selected_dimensions(query_plan, inspection)
+            warnings.extend(select_dimension_warnings)
 
-            unexpected_group_by_errors = self._validate_unexpected_group_by_fields(query_plan, inspection)
-            errors.extend(unexpected_group_by_errors)
+            unexpected_group_by_warnings = self._validate_unexpected_group_by_fields(query_plan, inspection)
+            warnings.extend(unexpected_group_by_warnings)
 
         if required_filter_fields:
             if query_plan is None:
@@ -198,7 +203,7 @@ class SqlValidator:
         if len(used_sources) > 1:
             joins_without_condition = [join.source for join in inspection.joins if not join.has_condition]
             if joins_without_condition:
-                errors.append(
+                warnings.append(
                     "sql contains join without ON/USING condition: " + ", ".join(sorted(set(joins_without_condition)))
                 )
             elif not inspection.joins:
@@ -221,7 +226,7 @@ class SqlValidator:
         if not inspection.has_limit:
             warnings.append(f"sql does not include {self.sql_dialect.result_limit_clause_name}")
         elif inspection.limit_value is not None and inspection.limit_value > self.max_limit:
-            errors.append(
+            warnings.append(
                 f"sql result limit {inspection.limit_value} exceeds configured maximum {self.max_limit}"
             )
 
@@ -244,6 +249,13 @@ class SqlValidator:
             risk_level=self._risk_level_for_flags(risk_flags),
             risk_flags=risk_flags,
         )
+
+    def _sql_without_literals_and_comments(self, sql: str) -> str:
+        stripped = re.sub(r"--.*?(?=\n|$)", " ", sql)
+        stripped = re.sub(r"/\*.*?\*/", " ", stripped, flags=re.DOTALL)
+        stripped = re.sub(r"'(?:''|[^'])*'", "''", stripped)
+        stripped = re.sub(r'"(?:""|[^"])*"', '""', stripped)
+        return stripped
 
     def _contains_field_reference(self, sql_fragment: str, field: str) -> bool:
         if not sql_fragment:

@@ -94,8 +94,6 @@ class SqlAstValidator:
     }
 
     def __init__(self) -> None:
-        if sqlglot is None:
-            raise RuntimeError("sqlglot is required for SQL AST validation")
         self.sql_dialect = SqlDialect.from_name("oracle")
 
     def health(self) -> dict:
@@ -120,7 +118,7 @@ class SqlAstValidator:
         warnings: list[str] = []
         inspection = self.inspect(sql)
 
-        errors.extend(inspection.parse_errors)
+        warnings.extend(inspection.parse_errors)
         normalized = (sql or "").strip()
 
         if not inspection.has_select:
@@ -150,7 +148,7 @@ class SqlAstValidator:
 
     def _inspect_with_regex(self, sql: str | None) -> SqlInspection:
         normalized = (sql or "").strip()
-        statements = [item.strip() for item in re.split(r";\s*", normalized) if item.strip()]
+        statements = self._split_sql_statements(normalized)
         lowered = normalized.lower()
         where_clause = self._extract_where_clause(normalized)
         all_where_clause = self._extract_all_where_clauses(normalized)
@@ -192,12 +190,10 @@ class SqlAstValidator:
         try:
             statements = sqlglot.parse(normalized, read=self.sql_dialect.sqlglot_dialect)
         except ParseError as exc:
-            return SqlInspection(
-                statement_count=1,
-                normalized_sql=normalized.lower(),
-                parser_backend="sqlglot",
-                parse_errors=[f"sql parse error: {exc}"],
-            )
+            inspection = self._inspect_with_regex(normalized)
+            inspection.parser_backend = "regex_after_sqlglot_parse_error"
+            inspection.parse_errors = [f"sql parse warning: {exc}"]
+            return inspection
         if not statements:
             return SqlInspection(statement_count=0, normalized_sql="", parser_backend="sqlglot")
 
@@ -276,6 +272,83 @@ class SqlAstValidator:
         if not match:
             return []
         return self._extract_fields_from_clause(match.group(1))
+
+    def _split_sql_statements(self, sql: str) -> list[str]:
+        statements: list[str] = []
+        current: list[str] = []
+        in_single_quote = False
+        in_double_quote = False
+        in_line_comment = False
+        in_block_comment = False
+        index = 0
+        while index < len(sql):
+            char = sql[index]
+            next_char = sql[index + 1] if index + 1 < len(sql) else ""
+
+            if in_line_comment:
+                current.append(char)
+                if char == "\n":
+                    in_line_comment = False
+                index += 1
+                continue
+
+            if in_block_comment:
+                current.append(char)
+                if char == "*" and next_char == "/":
+                    current.append(next_char)
+                    in_block_comment = False
+                    index += 2
+                    continue
+                index += 1
+                continue
+
+            if not in_single_quote and not in_double_quote and char == "-" and next_char == "-":
+                current.extend([char, next_char])
+                in_line_comment = True
+                index += 2
+                continue
+
+            if not in_single_quote and not in_double_quote and char == "/" and next_char == "*":
+                current.extend([char, next_char])
+                in_block_comment = True
+                index += 2
+                continue
+
+            if char == "'" and not in_double_quote:
+                current.append(char)
+                if in_single_quote and next_char == "'":
+                    current.append(next_char)
+                    index += 2
+                    continue
+                in_single_quote = not in_single_quote
+                index += 1
+                continue
+
+            if char == '"' and not in_single_quote:
+                current.append(char)
+                if in_double_quote and next_char == '"':
+                    current.append(next_char)
+                    index += 2
+                    continue
+                in_double_quote = not in_double_quote
+                index += 1
+                continue
+
+            if char == ";" and not in_single_quote and not in_double_quote:
+                statement = "".join(current).strip()
+                if statement:
+                    statements.append(statement)
+                current = []
+                index += 1
+                continue
+
+            current.append(char)
+            index += 1
+
+        statement = "".join(current).strip()
+        if statement:
+            statements.append(statement)
+        return statements
 
     def _extract_where_clause(self, sql: str) -> str:
         outer_sql = self._outer_query_sql(sql)

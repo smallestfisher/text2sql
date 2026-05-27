@@ -166,7 +166,19 @@ class StructuredIntent(BaseModel):
             return None
         if isinstance(value, (int, float)):
             return max(0.0, min(1.0, float(value)))
-        raise ValueError("confidence must be a number")
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            normalized = raw.replace("%", "").strip()
+            try:
+                parsed = float(normalized)
+            except ValueError:
+                return None
+            if raw.endswith("%") or parsed > 1.0:
+                parsed = parsed / 100.0
+            return max(0.0, min(1.0, parsed))
+        return None
 
     def to_query_intent(self, base_query_intent: QueryIntent | None = None) -> QueryIntent:
         base = base_query_intent
