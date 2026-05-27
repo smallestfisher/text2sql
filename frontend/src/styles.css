@@ -984,7 +984,8 @@ button {
 }
 
 .message-result-card {
-  width: min(100%, 840px);
+  width: 100%;
+  max-width: min(100%, 1040px);
   display: grid;
   gap: 12px;
   padding: 14px 16px;
@@ -1042,6 +1043,7 @@ button {
   border: 1px solid rgba(149, 174, 255, 0.06);
   border-radius: var(--radius-md);
   background: rgba(10, 14, 22, 0.44);
+  max-height: min(58vh, 560px);
 }
 
 .message-result-table {
@@ -1062,6 +1064,10 @@ button {
 .message-result-table th {
   color: #d5ddf4;
   font-weight: 500;
+  position: sticky;
+  top: 0;
+  background: rgba(14, 19, 31, 0.96);
+  z-index: 1;
 }
 
 .composer-shell {

@@ -1616,8 +1616,8 @@ function ConversationResultCard(props: {
   const status = execution?.status || answer?.status || queryLog?.answer_status || "unknown";
   const rowCount = execution?.row_count ?? props.artifact.sql_audit?.row_count ?? queryLog?.row_count ?? 0;
   const showRowCount = Boolean(execution) || !isTerminalNonSqlStatus(answer?.status || queryLog?.answer_status);
-  const previewColumns = (execution?.columns || []).slice(0, 4);
-  const previewRows = (execution?.rows || []).slice(0, 5);
+  const resultColumns = execution?.columns || [];
+  const resultRows = execution?.rows || [];
   const canDownload = Boolean(
     props.token
     && props.artifact.trace?.trace_id
@@ -1655,20 +1655,20 @@ function ConversationResultCard(props: {
       {answer?.detail ? <div className="message-result-note">{answer.detail}</div> : null}
       {answer?.follow_up_hint ? <div className="message-result-note">下一步：{answer.follow_up_hint}</div> : null}
 
-      {previewRows.length ? (
+      {resultRows.length ? (
         <div className="message-result-table-wrap">
           <table className="message-result-table">
             <thead>
               <tr>
-                {previewColumns.map((column) => (
+                {resultColumns.map((column) => (
                   <th key={column}>{column}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {previewRows.map((row, index) => (
+              {resultRows.map((row, index) => (
                 <tr key={`${props.artifact.trace_id}-${index}`}>
-                  {previewColumns.map((column) => (
+                  {resultColumns.map((column) => (
                     <td key={column}>{String(row[column] ?? "")}</td>
                   ))}
                 </tr>
@@ -1751,30 +1751,12 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
         </div>
       </div>
 
-      {execution?.rows?.length ? (
-        <div className="result-table-wrap">
-          <table className="result-table">
-            <thead>
-              <tr>
-                {execution.columns.map((column) => (
-                  <th key={column}>{column}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {execution.rows.map((row, index) => (
-                <tr key={`${index}-${execution.columns.join("-")}`}>
-                  {execution.columns.map((column) => (
-                    <td key={column}>{String(row[column] ?? "")}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="detail-card">
+        <div className="detail-title">结果展示</div>
+        <div className="detail-copy">
+          {execution?.rows?.length ? "完整结果已展示在对话消息中。" : "当前没有结果行可展示。"}
         </div>
-      ) : (
-        <div className="empty-card subtle-card">当前没有结果行可展示。</div>
-      )}
+      </div>
 
       <div className="detail-card">
         <div className="detail-title">分类摘要</div>
