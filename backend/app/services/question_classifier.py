@@ -182,6 +182,30 @@ class QuestionClassifier:
                 score_details,
             )
 
+        if self._can_use_baseline_without_llm(
+            baseline_classification=baseline_classification,
+            score_gap=score_gap,
+            query_intent=query_intent,
+            session_state=session_state,
+            semantic_diff=semantic_diff,
+        ):
+            classification = baseline_classification
+            self._last_debug_info.update(
+                {
+                    "decision_source": "baseline_high_confidence",
+                    "semantic_diff": semantic_diff,
+                    "score_gap": score_gap,
+                    "score_details": score_details,
+                    "llm_hint": None,
+                    "llm_skipped_reason": "baseline_high_confidence",
+                    "baseline_classification": baseline_classification.model_dump(mode="json"),
+                    "decision": classification.question_type,
+                    "reason_code": classification.reason_code,
+                    "warnings": list(warnings),
+                }
+            )
+            return classification, warnings
+
         llm_hint = self._classify_with_llm_primary(
             original_question=question,
             query_intent=query_intent,
@@ -428,6 +452,41 @@ class QuestionClassifier:
     def _default_out_of_scope_reply(self) -> str:
         return "我可以先陪你简单聊两句，但更擅长处理业务数据查询。你也可以直接告诉我要查的指标、对象和时间范围。"
 
+    def _can_use_baseline_without_llm(
+        self,
+        *,
+        baseline_classification: QuestionClassification,
+        score_gap: float,
+        query_intent: QueryIntent,
+        session_state: SessionState,
+        semantic_diff: dict,
+    ) -> bool:
+        if score_gap < 0.25:
+            return False
+        if baseline_classification.question_type == "clarification_needed":
+            return False
+        if self._classification_conflict_signals(query_intent, semantic_diff):
+            return False
+        acceptable, _reasons = self._llm_classification_is_acceptable(
+            candidate=baseline_classification,
+            query_intent=query_intent,
+            session_state=session_state,
+        )
+        return acceptable
+
+    def _classification_conflict_signals(self, query_intent: QueryIntent, semantic_diff: dict) -> list[str]:
+        conflict_signals: list[str] = []
+        if query_intent.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
+            conflict_signals.append("follow_up_cue_but_independent_execution_possible")
+        if semantic_diff.get("introduces_new_topic_signal") and not semantic_diff.get("domain_changed"):
+            conflict_signals.append("new_topic_signal_inside_same_domain")
+        if semantic_diff.get("metrics_missing_but_context_resolvable"):
+            conflict_signals.append("metric_missing_but_session_can_supply_it")
+        if semantic_diff.get("domain_changed") and query_intent.has_follow_up_cue:
+            conflict_signals.append("domain_changed_but_user_used_follow_up_language")
+        return conflict_signals
+
+
     def _classify_with_llm_primary(
         self,
         original_question: str,
@@ -447,7 +506,6 @@ class QuestionClassifier:
             ambiguous=ambiguous,
         )
         arbitration_context["llm_role"] = "primary_classifier"
-        arbitration_context["baseline_classification"] = base_classification.model_dump(mode="json")
         prompt_payload = self.prompt_builder.build_classification_prompt(
             question=original_question,
             query_intent=query_intent,
@@ -504,15 +562,7 @@ class QuestionClassifier:
             {"question_type": question_type, "score": round(score, 3)}
             for question_type, score in ranked[:2]
         ]
-        conflict_signals: list[str] = []
-        if query_intent.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
-            conflict_signals.append("follow_up_cue_but_independent_execution_possible")
-        if semantic_diff.get("introduces_new_topic_signal") and not semantic_diff.get("domain_changed"):
-            conflict_signals.append("new_topic_signal_inside_same_domain")
-        if semantic_diff.get("metrics_missing_but_context_resolvable"):
-            conflict_signals.append("metric_missing_but_session_can_supply_it")
-        if semantic_diff.get("domain_changed") and query_intent.has_follow_up_cue:
-            conflict_signals.append("domain_changed_but_user_used_follow_up_language")
+        conflict_signals = self._classification_conflict_signals(query_intent, semantic_diff)
         return {
             "needs_arbitration": ambiguous,
             "top_candidates": top_candidates,

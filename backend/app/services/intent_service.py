@@ -25,6 +25,19 @@ class IntentService:
         session_state: SessionState | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> dict:
+        if self._can_use_parser_intent(query_intent=query_intent, session_state=session_state):
+            intent = StructuredIntent.from_query_intent(query_intent)
+            raw = {
+                "mode": "parser_shortcut",
+                "reason": "parser_intent_has_known_domain_metric_and_explicit_slots",
+            }
+            return {
+                "status": "skipped",
+                "reason": raw["reason"],
+                "intent": intent,
+                "raw": raw,
+            }
+
         prompt_payload = self.prompt_builder.build_intent_prompt(
             question=question,
             query_intent=query_intent,
@@ -44,3 +57,21 @@ class IntentService:
             "intent": intent,
             "raw": hint,
         }
+
+    def _can_use_parser_intent(
+        self,
+        *,
+        query_intent: QueryIntent,
+        session_state: SessionState | None,
+    ) -> bool:
+        if session_state is not None:
+            return False
+        if query_intent.has_follow_up_cue:
+            return False
+        if query_intent.subject_domain == "unknown":
+            return False
+        if not query_intent.matched_metrics:
+            return False
+        if not query_intent.has_explicit_slots:
+            return False
+        return True

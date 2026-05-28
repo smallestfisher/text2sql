@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import unittest
 
 from backend.app.models.query_plan import FilterItem, QueryPlan, SortItem
@@ -9,6 +10,7 @@ from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.intent_service import IntentService
 from backend.app.services.llm_client import LLMClient
+from backend.app.services.sql_dialect import SqlDialect
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.query_intent_parser import QueryIntentParser
 from backend.app.services.query_planner import QueryPlanner
@@ -17,15 +19,76 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 
 class StubRepairLLMClient(LLMClient):
     def __init__(self) -> None:
-        super().__init__(max_retries=1, repair_max_retries=3)
+        self.model_name = "test-model"
+        self.api_key = None
+        self.api_base = None
+        self.timeout_seconds = 20
+        self.max_retries = 1
+        self.repair_max_retries = 3
+        self.cache_ttl_seconds = 300
+        self.cache_max_entries = 256
+        self._response_cache = OrderedDict()
+        self._metrics = {}
+        self.sql_dialect = SqlDialect.from_name("oracle")
         self.client = object()
         self.calls = 0
 
-    def _complete(self, messages: list[dict]) -> str:
+    def _complete(self, messages: list[dict], *, task_name: str = "unknown") -> str:
         self.calls += 1
+        self._record_metric(task_name, "provider_calls")
         if self.calls < 3:
             return "not valid sql"
-        return "SELECT 1 LIMIT 1"
+        return "SELECT 1 FETCH FIRST 1 ROWS ONLY"
+
+    def _is_single_sql_statement(self, sql: str) -> bool:
+        return True
+
+
+class StubCachedLLMClient(LLMClient):
+    def __init__(self) -> None:
+        self.model_name = "test-model"
+        self.api_key = None
+        self.api_base = None
+        self.timeout_seconds = 20
+        self.max_retries = 1
+        self.repair_max_retries = 1
+        self.cache_ttl_seconds = 60
+        self.cache_max_entries = 4
+        self._response_cache = OrderedDict()
+        self._metrics = {}
+        self.sql_dialect = SqlDialect.from_name("oracle")
+        self.client = object()
+        self.calls = 0
+
+    def _complete(self, messages: list[dict], *, task_name: str = "unknown") -> str:
+        self.calls += 1
+        self._record_metric(task_name, "provider_calls")
+        return '{"subject_domain":"inventory","metrics":["inventory_qty"],"confidence":0.91}'
+
+
+class StubCachedSqlLLMClient(LLMClient):
+    def __init__(self) -> None:
+        self.model_name = "test-model"
+        self.api_key = None
+        self.api_base = None
+        self.timeout_seconds = 20
+        self.max_retries = 1
+        self.repair_max_retries = 1
+        self.cache_ttl_seconds = 60
+        self.cache_max_entries = 4
+        self._response_cache = OrderedDict()
+        self._metrics = {}
+        self.sql_dialect = SqlDialect.from_name("oracle")
+        self.client = object()
+        self.calls = 0
+
+    def _complete(self, messages: list[dict], *, task_name: str = "unknown") -> str:
+        self.calls += 1
+        self._record_metric(task_name, "provider_calls")
+        return "SELECT product_ID FROM daily_inventory FETCH FIRST 10 ROWS ONLY"
+
+    def _is_single_sql_statement(self, sql: str) -> bool:
+        return True
 
 
 class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
@@ -34,6 +97,55 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         domain_config = DomainConfigLoader().load()
         cls.domain_config = domain_config
         cls.semantic_runtime = SemanticRuntime(domain_config)
+
+
+    def test_llm_intent_generation_uses_prompt_cache(self) -> None:
+        client = StubCachedLLMClient()
+        prompt = {"question": "查询库存", "domain_hints": {"subject_domain": "inventory"}}
+
+        first = client.generate_intent(prompt)
+        second = client.generate_intent(prompt)
+
+        self.assertEqual(client.calls, 1)
+        self.assertFalse(first.get("cache_hit", False))
+        self.assertTrue(second.get("cache_hit"))
+        self.assertEqual(second["metrics"], ["inventory_qty"])
+        health = client.health()
+        self.assertEqual(health["cache_entries"], 1)
+        self.assertEqual(health["metrics"]["intent"]["requests"], 2)
+        self.assertEqual(health["metrics"]["intent"]["provider_calls"], 1)
+        self.assertEqual(health["metrics"]["intent"]["cache_hits"], 1)
+
+    def test_llm_sql_generation_uses_prompt_cache(self) -> None:
+        client = StubCachedSqlLLMClient()
+        prompt = {"question": "查询库存", "query_contract": {"tables": ["daily_inventory"]}}
+
+        first = client.generate_sql_hint(prompt)
+        second = client.generate_sql_hint(prompt)
+
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(first, second)
+        self.assertEqual(second, "SELECT product_ID FROM daily_inventory FETCH FIRST 10 ROWS ONLY;")
+        health = client.health()
+        self.assertEqual(health["cache_entries"], 1)
+        self.assertEqual(health["metrics"]["sql"]["requests"], 2)
+        self.assertEqual(health["metrics"]["sql"]["provider_calls"], 1)
+        self.assertEqual(health["metrics"]["sql"]["cache_hits"], 1)
+
+    def test_llm_cache_can_be_disabled(self) -> None:
+        client = StubCachedLLMClient()
+        client.cache_ttl_seconds = 0
+        prompt = {"question": "查询库存"}
+
+        client.generate_intent(prompt)
+        client.generate_intent(prompt)
+
+        self.assertEqual(client.calls, 2)
+        health = client.health()
+        self.assertEqual(health["cache_entries"], 0)
+        self.assertEqual(health["metrics"]["intent"]["requests"], 2)
+        self.assertEqual(health["metrics"]["intent"]["provider_calls"], 2)
+        self.assertEqual(health["metrics"]["intent"]["cache_hits"], 0)
 
     def test_repair_sql_uses_dedicated_retry_budget(self) -> None:
         client = StubRepairLLMClient()
@@ -46,8 +158,11 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         )
 
         self.assertEqual(client.calls, 3)
-        self.assertEqual(repaired_sql, "SELECT 1 LIMIT 1;")
-        self.assertEqual(client.health()["repair_max_retries"], 3)
+        self.assertEqual(repaired_sql, "SELECT 1 FETCH FIRST 1 ROWS ONLY;")
+        health = client.health()
+        self.assertEqual(health["repair_max_retries"], 3)
+        self.assertEqual(health["metrics"]["repair"]["requests"], 1)
+        self.assertEqual(health["metrics"]["repair"]["provider_calls"], 3)
 
     def test_inventory_explicit_source_group_is_profile_driven(self) -> None:
         query_plan = QueryPlan(

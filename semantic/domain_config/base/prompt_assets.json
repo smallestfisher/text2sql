@@ -46,7 +46,7 @@
       ],
       "constraints": [
         "question_type 只能从 allowed_question_types 中选择。",
-        "必须尊重结构化的 query_intent 和 session_semantic_diff。",
+        "必须尊重结构化的 classification_evidence、candidate_scores 和 arbitration_context。",
         "把 candidate_scores 当作本地证据做裁决，不要完全推翻后从零重算。",
         "结合 classification_evidence 和 arbitration_context，解释为什么最终候选优于最接近的备选。",
         "如果问题是对上一轮的细化追问，保持 inherit_context=true。",
@@ -426,13 +426,11 @@
         "time_context",
         "version_context",
         "analysis_mode",
-        "question_type",
-        "inherit_context",
         "confidence",
         "reason"
       ],
       "constraints": [
-        "优先尊重 shallow_parse 中已确定的高置信时间、版本、topN 和筛选信号。",
+        "优先尊重 shallow_signals 中已确定的高置信时间、版本、topN 和筛选信号。",
         "只能使用系统已支持的业务域，不要发明新的 subject_domain。",
         "如果 question 中的字段说法命中 domain_hints.semantic_fields.aliases，应优先返回对应 canonical field，不要自造近义字段名。",
         "dimensions 只在用户明确要求按某维度拆分、分组、分别展示或明细展示时填写；不要因为“分布”“情况”“统计”就自行补 common_categories、customer、product_ID 等业务维度。",
@@ -443,26 +441,26 @@
     },
     "sql_generation": {
       "base_preferences": [
-        "以 query_plan.tables 为真实数据库对象的首要依据。",
-        "严格遵循 query_plan 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。"
+        "以 query_contract.tables 和 allowed_sources 为真实数据库对象的首要依据。",
+        "严格遵循 query_contract 里的 dimensions、filters、sort 和 limit，除非那样会生成无效 SQL。"
       ],
       "base_constraints": [
         "优先基于真实物理表生成 MySQL 只读 SQL。",
         "优先使用 WITH CTE，不要依赖数据库里可能不存在的预建分析对象。",
-        "只能使用 tables_metadata 中出现的真实表。",
-        "query_plan 中的维度、过滤和指标名可能是语义字段，写 SQL 前必须先映射到 tables_metadata 里的真实物理列。",
-        "优先使用 field_resolution 里的 physical_candidates，不要把只存在于 query_plan 中的逻辑字段名直接写进 SQL。",
+        "只能使用 table_schemas 中出现的真实表。",
+        "query_contract 中的维度、过滤和指标名可能是语义字段，写 SQL 前必须先映射到 table_schemas 里的真实物理列。",
+        "优先使用 field_resolution 里的 physical_candidates，不要把只存在于 query_contract 中的逻辑字段名直接写进 SQL。",
         "除非用户明确要求，否则不要引用数据库里预建的展开对象或其他额外分析对象。",
         "必须包含 LIMIT。",
         "如果需求表是横表，需要时请先用 CTE 展开。",
         "不要使用 SELECT *。",
-        "如果有聚合指标，必须按照 query_plan.dimensions 完整 GROUP BY。",
-        "最终 SQL 的外层 SELECT 必须完整投影 query_plan.dimensions；不要只在 WHERE 中使用这些维度，或只在中间 CTE 里出现。",
-        "如果 query_plan.dimensions 包含逻辑时间维度，例如 biz_month，请把它映射成真实月字段或月表达式，并在外层 SELECT 中显式起别名，且该别名或同等表达式必须进入外层 GROUP BY。",
+        "如果有聚合指标，必须按照 query_contract.dimensions 完整 GROUP BY。",
+        "最终 SQL 的外层 SELECT 必须完整投影 query_contract.dimensions；不要只在 WHERE 中使用这些维度，或只在中间 CTE 里出现。",
+        "如果 query_contract.dimensions 包含逻辑时间维度，例如 biz_month，请把它映射成真实月字段或月表达式，并在外层 SELECT 中显式起别名，且该别名或同等表达式必须进入外层 GROUP BY。",
         "只返回 SQL，不要返回 markdown 或解释。"
       ],
       "latest_n_preferences": [
-        "如果 query_plan.filters 包含 latest_n 过滤，必须先定位该逻辑字段对应的真实排序字段，再限制到最新 N 个值。",
+        "如果 query_contract.filters 包含 latest_n 过滤，必须先定位该逻辑字段对应的真实排序字段，再限制到最新 N 个值。",
         "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC LIMIT N。"
       ]
     }

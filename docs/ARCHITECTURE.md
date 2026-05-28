@@ -289,6 +289,39 @@
 它调用 `LLMClient` 和 `PromptBuilder` 生成 LLM intent。  
 高层理解现在由这条链路主导。
 
+Intent prompt 当前也使用压缩输入，不再把完整 `QueryIntent` 和完整 `SessionState` 直接传给模型。输入主要包括：
+
+- `question`
+- `shallow_signals`
+- `session_focus`
+- `domain_hints.subject_domain`
+- `domain_hints.domain_tables`
+- 裁剪后的 `domain_hints.domain_fields`
+- `domain_hints.semantic_fields`
+- 当前 domain 相关的 `business_knowledge`
+- 精简后的输出字段说明
+
+其中 `shallow_signals` 只保留 parser 已经高置信识别出的 domain、metrics、entities、dimensions、filters、time/version、sort、limit、analysis mode 和追问信号；`session_focus` 只保留上一轮主题焦点，不携带 `last_sql`、完整 `last_query_plan` 或完整历史状态。
+
+当 parser 已经识别出明确业务域时，intent prompt 不再重复提供完整 `supported_domains` 列表。`domain_fields` 也不再按整域最多 120 个字段传入，而是保留当前问题命中字段、命中指标涉及字段以及少量候选字段。
+
+Intent LLM 输出字段当前收窄为：
+
+- `subject_domain`
+- `metrics`
+- `entities`
+- `dimensions`
+- `filters`
+- `time_context`
+- `version_context`
+- `analysis_mode`
+- `confidence`
+- `reason`
+
+分类相关的 `question_type` 和 `inherit_context` 不再作为 intent 阶段要求输出，它们由后续 `QuestionClassifier` 负责。
+
+为了减少不必要的 LLM 调用，`IntentService` 对简单明确的新查询支持 parser shortcut：当没有会话上下文、不是追问、parser 已经识别出已知业务域、至少一个指标和显式槽位时，直接使用 `StructuredIntent.from_query_intent()`，并在 raw metadata 中标记 `mode=parser_shortcut`。
+
 ### 7.3 IntentNormalizer
 
 [backend/app/services/intent_normalizer.py](../backend/app/services/intent_normalizer.py)
@@ -312,6 +345,38 @@
 - `LLM-primary`
 - baseline 只做轻量对照和仲裁
 - 再叠加 hard guard / relevance guard
+
+分类阶段的目标不是生成 SQL，也不是完整重做语义解析，而是判断当前问题和会话状态之间的关系：是否为追问、是否继承上下文、是否切换业务域、是否需要澄清或终止。
+
+传给分类 LLM 的 prompt 当前采用压缩后的裁决证据包：
+
+- `question`
+- `classification_evidence.current_question_signals`
+- `classification_evidence.previous_session_focus`
+- `classification_evidence.inheritance_targets`
+- `classification_evidence.delta_summary`
+- `base_classification`
+- `allowed_question_types`
+- `candidate_scores`
+- `arbitration_context`
+- 精简后的 `instructions`
+
+分类 prompt 不再传完整 `query_intent`、完整 `session_state` 和完整 `session_semantic_diff`。这些对象中真正用于裁决的信号已经被整理进 `classification_evidence`，避免把上一轮 Query Plan、SQL、完整 filter 对象和重复 diff 一起塞给模型。
+
+当 `allowed_question_types` 不包含 `follow_up` 时，分类 prompt 不会携带 `context_delta_field_guide`、`context_delta_rules` 和 `context_delta_examples`。当允许 `follow_up` 时，也只携带少量 context delta 示例，避免分类阶段被大段静态样例主导。
+
+分类阶段也支持高置信 baseline shortcut：如果本地候选分差足够大、不是澄清类、没有追问/独立执行等冲突信号，并且 baseline 分类本身通过结构校验，则直接采用 baseline，不再调用 classification LLM。trace 的 classifier debug 会标记 `decision_source=baseline_high_confidence`。
+
+分类输出仍然是 `QuestionClassification`，核心字段包括：
+
+- `question_type`
+- `subject_domain`
+- `inherit_context`
+- `confidence`
+- `reason_code`
+- `context_delta`
+- `need_clarification`
+- `clarification_question`
 
 ### 7.5 QueryPlanner
 
@@ -402,6 +467,9 @@
 
 另外，`PromptBuilder` 会通过共享的 `MetadataRegistry` 读取表元数据，并基于 `time_fields` 生成结构化 `time_resolution`，把真实时间字段的粒度、存储格式和推荐 SQL 写法显式传给模型。
 
+SQL prompt 当前也使用压缩输入：不再直接传完整 `query_plan.model_dump()`、全量 `allowed_fields` 或完整 `tables_metadata`。模型看到的是 `query_contract`、`field_resolution`、`time_resolution`、`shape_contract` 和 `table_schemas`。其中 `query_contract` 只保留生成 SQL 必需的 tables、metrics、dimensions、filters、sort、limit、time/version 和 analysis mode；`table_schemas` 只保留当前 SQL 可能用到的真实列、时间字段和关系字段。
+
+
 这也是当前 few-shot 和业务知识进入 SQL 生成的真实入口。
 
 静态指令本身当前来自：
@@ -409,6 +477,28 @@
 - `semantic/domain_config/base/prompt_assets.json`
 
 也就是说，`PromptBuilder` 现在主要负责“选哪些上下文进入 prompt”，而不是在 Python 里硬编码大段业务说明。
+
+### 8.3 LLM Prompt Cache
+
+[backend/app/services/llm_client.py](../backend/app/services/llm_client.py)
+
+`LLMClient` 内置进程内 prompt cache，用完整 system/user messages、模型名和 SQL 方言生成哈希 key。当前缓存覆盖：
+
+- intent generation
+- classification generation
+- relevance guard
+- SQL generation
+
+SQL repair 不缓存，因为 repair 输入包含错误上下文，且属于失败恢复路径。
+
+缓存配置来自环境变量：
+
+- `LLM_CACHE_TTL_SECONDS`，默认 `300`
+- `LLM_CACHE_MAX_ENTRIES`，默认 `256`
+
+命中 JSON 类响应时会在返回 payload 上附加 `cache_hit=true`；SQL 生成命中时直接返回缓存 SQL。
+
+`LLMClient.health()` 会返回 `metrics`，按 classification / intent / relevance / sql / repair 记录 `requests`、`cache_hits`、`provider_calls`、`prompt_chars`、`response_chars`、`elapsed_ms` 和 `failures`。排查提速效果时，重点看 `provider_calls` 是否下降、`cache_hits` 是否上升，以及各阶段 `prompt_chars` 是否符合预期。
 
 ---
 

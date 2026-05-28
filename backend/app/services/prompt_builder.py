@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
@@ -13,7 +14,8 @@ from backend.app.services.sql_dialect import SqlDialect
 
 
 class PromptBuilder:
-    BUSINESS_NOTES_MAX_CHARS = 2400
+    BUSINESS_NOTES_MAX_CHARS = 1600
+    BUSINESS_NOTE_MAX_ITEMS_PER_ENTRY = 3
 
     def __init__(
         self,
@@ -40,28 +42,17 @@ class PromptBuilder:
             session_state=session_state,
             semantic_diff=semantic_diff,
         )
+        allow_follow_up = "follow_up" in allowed_question_types
+        instructions = self._classification_instructions(allow_follow_up=allow_follow_up)
         return {
             "task": "question_classification",
             "question": question,
-            "query_intent": query_intent.model_dump(),
-            "session_state": session_state.model_dump() if session_state is not None else None,
-            "session_semantic_diff": semantic_diff,
             "classification_evidence": evidence,
             "base_classification": base_classification,
             "allowed_question_types": allowed_question_types,
             "candidate_scores": candidate_scores or {},
-            "arbitration_context": arbitration_context or {},
-            "instructions": {
-                "return_format": "json",
-                "fields": self._prompt_asset_strings("classification", "fields"),
-                "category_definitions": self._prompt_asset_dict("classification", "category_definitions"),
-                "context_delta_field_guide": self._prompt_asset_dict("classification", "context_delta_field_guide"),
-                "context_delta_rules": self._prompt_asset_strings("classification", "context_delta_rules"),
-                "context_delta_examples": self._classification_delta_examples(),
-                "arbitration_checklist": self._prompt_asset_strings("classification", "arbitration_checklist"),
-                "business_few_shots": self._classification_business_examples(),
-                "constraints": self._prompt_asset_strings("classification", "constraints"),
-            },
+            "arbitration_context": self._compact_mapping(arbitration_context or {}),
+            "instructions": instructions,
         }
 
     def build_relevance_prompt(
@@ -113,30 +104,32 @@ class PromptBuilder:
         subject_domain = query_intent.subject_domain
         domain_tables = self._domain_tables(subject_domain) if subject_domain != "unknown" else []
         domain_fields: list[str] = []
-        for table_name in domain_tables:
-            table_meta = self._tables_metadata.get(table_name, {})
-            columns = table_meta.get("columns", []) if isinstance(table_meta, dict) else []
-            for column in columns:
-                column_name = column.get("name") if isinstance(column, dict) else None
-                if isinstance(column_name, str) and column_name:
-                    domain_fields.append(column_name)
+        field_hint_tables = list(domain_tables)
+        if self.semantic_runtime is not None:
+            for metric_name in query_intent.matched_metrics:
+                for table_name in self.semantic_runtime.metric_tables(metric_name):
+                    if table_name not in field_hint_tables:
+                        field_hint_tables.append(table_name)
+        for table_name in field_hint_tables:
+            if self.semantic_runtime is not None:
+                domain_fields.extend(self.semantic_runtime.table_fields(table_name))
         business_notes = self._business_notes(subject_domain)
         return {
             "task": "intent_understanding",
             "question": question,
-            "shallow_parse": query_intent.model_dump(),
-            "session_state": session_state.model_dump() if session_state is not None else None,
+            "shallow_signals": self._intent_shallow_signals(query_intent),
+            "session_focus": self._intent_session_focus(session_state),
             "domain_hints": {
                 "subject_domain": subject_domain,
                 "domain_tables": domain_tables,
-                "domain_fields": sorted(set(domain_fields))[:120],
+                "domain_fields": self._intent_domain_fields(domain_fields, query_intent),
                 "semantic_fields": self._semantic_fields(subject_domain),
-                "supported_domains": self._supported_domains(),
+                "supported_domains": self._supported_domains() if subject_domain == "unknown" else [],
             },
             "business_knowledge": business_notes,
             "instructions": {
                 "return_format": "json",
-                "fields": self._prompt_asset_strings("intent_understanding", "fields"),
+                "fields": self._intent_output_fields(),
                 "constraints": self._prompt_asset_strings("intent_understanding", "constraints"),
             },
         }
@@ -148,19 +141,25 @@ class PromptBuilder:
         question: str | None = None,
     ) -> dict:
         selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
-        source_schemas = {
-            table_name: self._tables_metadata.get(table_name, {})
-            for table_name in selected_sources
-            if table_name in self._tables_metadata
-        }
         field_resolution = self._field_resolution(query_plan)
         time_resolution = self._time_resolution(query_plan)
         shape_contract = self._shape_contract(query_plan, time_resolution=time_resolution)
+        source_schemas = {
+            table_name: self._compact_table_schema(
+                table_name,
+                self._tables_metadata.get(table_name, {}),
+                query_plan=query_plan,
+                field_resolution=field_resolution,
+                time_resolution=time_resolution,
+            )
+            for table_name in selected_sources
+            if table_name in self._tables_metadata
+        }
         retrieved_examples = self._select_retrieved_examples(query_plan, retrieval)
         sql_preferences = self._prompt_asset_strings("sql_generation", "base_preferences")
         if shape_contract["required_projection"]:
             sql_preferences = [
-                "把 query_plan.dimensions 当成硬 contract：每个 dimension 都必须在最终外层 SELECT 中显式投影；只要存在聚合指标，这些 dimension 也必须在最终外层 GROUP BY 中逐一出现。",
+                "把 query_contract.dimensions 当成硬 contract：每个 dimension 都必须在最终外层 SELECT 中显式投影；只要存在聚合指标，这些 dimension 也必须在最终外层 GROUP BY 中逐一出现。",
                 *sql_preferences,
             ]
         if shape_contract["dimension_hints"]:
@@ -178,11 +177,11 @@ class PromptBuilder:
         context_budget = {
             "business_notes_max_chars": self.BUSINESS_NOTES_MAX_CHARS,
             "business_notes_mode": "ranked_relevant_chunks",
-            "tables_metadata_mode": "selected_query_plan_tables_only",
+            "table_schemas_mode": "selected_query_contract_tables_relevant_columns",
         }
         context_summary = {
             "selected_sources": selected_sources,
-            "tables_metadata_count": len(source_schemas),
+            "table_schemas_count": len(source_schemas),
             "business_notes_chars": len(business_notes),
             "business_notes_source": business_notes_source,
             "time_resolution_count": len(time_resolution),
@@ -201,13 +200,12 @@ class PromptBuilder:
                 "label": self.sql_dialect.label,
                 "result_limit_clause": self.sql_dialect.result_limit_clause_name,
             },
-            "query_plan": query_plan.model_dump(),
+            "query_contract": self._sql_query_contract(query_plan),
             "allowed_sources": selected_sources,
-            "allowed_fields": sorted(self._sql_allowed_fields(query_plan)),
             "field_resolution": field_resolution,
             "time_resolution": time_resolution,
             "shape_contract": shape_contract,
-            "tables_metadata": source_schemas,
+            "table_schemas": source_schemas,
             "business_notes": business_notes,
             "join_patterns": self._selected_join_patterns(retrieval),
             "context_budget": context_budget,
@@ -268,6 +266,146 @@ class PromptBuilder:
             return "structured_knowledge+retrieval"
         return "structured_knowledge"
 
+    def _sql_query_contract(self, query_plan: QueryPlan) -> dict:
+        payload = {
+            "subject_domain": query_plan.subject_domain,
+            "tables": query_plan.tables,
+            "metrics": query_plan.metrics,
+            "entities": query_plan.entities,
+            "dimensions": query_plan.dimensions,
+            "filters": [item.model_dump(mode="json") for item in query_plan.filters],
+            "sort": [item.model_dump(mode="json") for item in query_plan.sort],
+            "limit": query_plan.limit,
+        }
+        if query_plan.time_context and query_plan.time_context.grain != "unknown":
+            payload["time_context"] = query_plan.time_context.model_dump(mode="json")
+        if query_plan.version_context is not None:
+            payload["version_context"] = query_plan.version_context.model_dump(mode="json")
+        if query_plan.analysis_mode:
+            payload["analysis_mode"] = query_plan.analysis_mode
+        return payload
+
+    def _compact_table_schema(
+        self,
+        table_name: str,
+        payload: dict,
+        *,
+        query_plan: QueryPlan,
+        field_resolution: dict[str, dict[str, list[str]]],
+        time_resolution: dict,
+    ) -> dict:
+        relevant_columns = self._relevant_table_columns(
+            table_name,
+            query_plan=query_plan,
+            field_resolution=field_resolution,
+            time_resolution=time_resolution,
+        )
+        return self._compact_mapping(
+            {
+                "description": payload.get("description"),
+                "columns": self._compact_columns(payload.get("columns", []), relevant_columns),
+                "MAIN_KEY": payload.get("MAIN_KEY"),
+                "time_fields": payload.get("time_fields"),
+                "relationships": payload.get("relationships"),
+            }
+        )
+
+    def _compact_columns(self, raw_columns: list, relevant_columns: set[str]) -> list[str]:
+        selected: list[str] = []
+        for raw_column in raw_columns:
+            column_text = str(raw_column).strip()
+            if not column_text:
+                continue
+            column_name = column_text.split("(", 1)[0].strip()
+            if column_name not in relevant_columns:
+                continue
+            selected.append(column_text)
+        return selected
+
+    def _relevant_table_columns(
+        self,
+        table_name: str,
+        *,
+        query_plan: QueryPlan,
+        field_resolution: dict[str, dict[str, list[str]]],
+        time_resolution: dict,
+    ) -> set[str]:
+        columns: set[str] = set()
+        if self.semantic_runtime is None:
+            return columns
+        table_fields = set(self.semantic_runtime.table_fields(table_name))
+        for field in self._flatten_values(field_resolution):
+            column_name = self._column_name_from_field(field)
+            if column_name in table_fields:
+                columns.add(column_name)
+        for resolution in time_resolution.values():
+            if not isinstance(resolution, dict):
+                continue
+            for candidate in resolution.get("candidates", []):
+                if not isinstance(candidate, dict):
+                    continue
+                column_name = self._column_name_from_field(candidate.get("field"))
+                if column_name in table_fields:
+                    columns.add(column_name)
+        for item in [*query_plan.dimensions, *(filter_item.field for filter_item in query_plan.filters), *(sort_item.field for sort_item in query_plan.sort)]:
+            if item in table_fields:
+                columns.add(item)
+        for metric_name in query_plan.metrics:
+            columns.update(
+                column
+                for column in self.semantic_runtime.metric_expression_columns(metric_name, table_names=[table_name])
+                if column in table_fields
+            )
+        if self._needs_demand_horizontal_columns(table_name, query_plan):
+            columns.update(column for column in self._demand_horizontal_columns() if column in table_fields)
+        table_metadata = self._tables_metadata.get(table_name, {})
+        relationships = table_metadata.get("relationships", {}) if isinstance(table_metadata, dict) else {}
+        if isinstance(relationships, dict):
+            for source_field in relationships:
+                if source_field in table_fields:
+                    columns.add(source_field)
+        return columns
+
+    def _column_name_from_field(self, field: Any) -> str:
+        value = str(field or "").strip()
+        if not value:
+            return ""
+        return value.rsplit(".", 1)[-1]
+
+    def _needs_demand_horizontal_columns(self, table_name: str, query_plan: QueryPlan) -> bool:
+        if table_name not in {"p_demand", "v_demand"}:
+            return False
+        filter_fields = {filter_item.field for filter_item in query_plan.filters}
+        return bool(
+            {"demand_qty", "product_count"}.intersection(query_plan.metrics)
+            or {"demand_month", "biz_month"}.intersection(filter_fields)
+            or {"demand_month", "biz_month"}.intersection(query_plan.dimensions)
+        )
+
+    def _demand_horizontal_columns(self) -> tuple[str, ...]:
+        return (
+            "REQUIREMENT_QTY",
+            "NEXT_REQUIREMENT",
+            "LAST_REQUIREMENT",
+            "MONTH4",
+            "MONTH5",
+            "MONTH6",
+            "MONTH7",
+        )
+
+    def _flatten_values(self, value: Any) -> list[Any]:
+        if isinstance(value, dict):
+            flattened: list[Any] = []
+            for item in value.values():
+                flattened.extend(self._flatten_values(item))
+            return flattened
+        if isinstance(value, list):
+            flattened = []
+            for item in value:
+                flattened.extend(self._flatten_values(item))
+            return flattened
+        return [value]
+
     def _structured_business_notes_for_plan(
         self,
         query_plan: QueryPlan,
@@ -280,8 +418,8 @@ class PromptBuilder:
         sections: list[str] = []
         total_chars = 0
         for entry in selected_entries:
-            notes = entry.get("notes", [])
-            if not isinstance(notes, list) or not notes:
+            notes = self._ranked_business_note_items(entry, query_plan, selected_sources)
+            if not notes:
                 continue
             title = str(entry.get("id", "business_note"))
             tables = ", ".join(entry.get("tables", [])) if isinstance(entry.get("tables"), list) else ""
@@ -299,17 +437,51 @@ class PromptBuilder:
             total_chars = projected
             if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
                 break
-        join_pattern_sections = self._retrieved_join_pattern_blocks(retrieval)
-        for block in join_pattern_sections:
-            separator_chars = 2 if sections else 0
-            projected = total_chars + separator_chars + len(block)
-            if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
-                continue
-            sections.append(block)
-            total_chars = projected
-            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
-                break
         return "\n\n".join(sections)[: self.BUSINESS_NOTES_MAX_CHARS]
+
+    def _ranked_business_note_items(
+        self,
+        entry: dict,
+        query_plan: QueryPlan,
+        selected_sources: list[str] | None,
+    ) -> list[str]:
+        notes = [
+            str(note).strip()
+            for note in entry.get("notes", [])
+            if isinstance(note, str) and note.strip()
+        ]
+        if not notes:
+            return []
+        terms = self._business_note_terms(query_plan, selected_sources)
+        scored = []
+        for index, note in enumerate(notes):
+            lower_note = note.lower()
+            score = sum(1 for term in terms if term and term in lower_note)
+            score += self._critical_business_note_score(note)
+            scored.append((score, -index, note))
+        scored.sort(reverse=True)
+        return [note for _score, _negative_index, note in scored[: self.BUSINESS_NOTE_MAX_ITEMS_PER_ENTRY]]
+
+    def _critical_business_note_score(self, note: str) -> int:
+        critical_terms = (
+            "latest_n",
+            "最新",
+            "横向",
+            "展开",
+            "y/n",
+            "is_",
+            "time_resolution",
+            "不要自行追加",
+            "库龄",
+            "ttl",
+            "pm_version",
+            "act_type",
+            "达成率",
+            "gap",
+        )
+        lower_note = note.lower()
+        return sum(2 for term in critical_terms if term in lower_note)
+
 
     def _business_note_terms(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> set[str]:
         terms = {
@@ -451,20 +623,30 @@ class PromptBuilder:
             payload = {
                 "id": example.id,
                 "question": example.question,
-                "intent": example.intent,
+                "semantic_shape": self._example_semantic_shape(example),
                 "tables": example.tables,
                 "metrics": example.metrics,
                 "dimensions": example.dimensions,
                 "filters": [item.model_dump(mode="json") for item in example.filters],
                 "result_shape": example.result_shape,
                 "notes": example.notes,
-                "matched_features": hit.matched_features,
+                "matched_features": hit.matched_features[:5],
             }
-            payload["sql_omitted_reason"] = "reuse only semantic shape, tables, metrics, filters, and result_shape"
+            payload["sql_omitted_reason"] = "reuse semantic shape, tables, metrics, filters, and result_shape only"
             selected.append(payload)
             if len(selected) >= 2:
                 break
         return selected
+
+    def _example_semantic_shape(self, example: ExampleRecord) -> dict:
+        payload = {
+            "subject_domain": example.subject_domain,
+            "question_type": example.question_type,
+            "scenario": example.scenario,
+            "coverage_tags": example.coverage_tags[:6],
+            "join_path": example.join_path,
+        }
+        return self._compact_mapping(payload)
 
     def _selected_join_patterns(self, retrieval: RetrievalContext | None) -> list[dict]:
         if retrieval is None:
@@ -928,6 +1110,96 @@ class PromptBuilder:
                 "is_short_followup_fragment": semantic_diff.get("is_short_followup_fragment"),
             },
         }
+
+    def _classification_instructions(self, *, allow_follow_up: bool) -> dict:
+        instructions = {
+            "return_format": "json",
+            "fields": self._prompt_asset_strings("classification", "fields"),
+            "category_definitions": self._prompt_asset_dict("classification", "category_definitions"),
+            "arbitration_checklist": self._prompt_asset_strings("classification", "arbitration_checklist"),
+            "constraints": self._prompt_asset_strings("classification", "constraints"),
+        }
+        if allow_follow_up:
+            instructions.update(
+                {
+                    "context_delta_field_guide": self._prompt_asset_dict("classification", "context_delta_field_guide"),
+                    "context_delta_rules": self._prompt_asset_strings("classification", "context_delta_rules"),
+                    "context_delta_examples": self._classification_delta_examples()[:2],
+                }
+            )
+        return instructions
+
+    def _compact_mapping(self, payload: dict) -> dict:
+        compacted = {}
+        for key, value in payload.items():
+            if value in (None, "", [], {}):
+                continue
+            compacted[key] = value
+        return compacted
+
+    def _intent_shallow_signals(self, query_intent: QueryIntent) -> dict:
+        payload = {
+            "normalized_question": query_intent.normalized_question,
+            "subject_domain": query_intent.subject_domain,
+            "metrics": query_intent.matched_metrics,
+            "entities": query_intent.matched_entities,
+            "dimensions": query_intent.requested_dimensions,
+            "filters": [item.model_dump(mode="json") for item in query_intent.filters],
+            "time_context": query_intent.time_context.model_dump(mode="json"),
+            "version_context": query_intent.version_context.model_dump(mode="json") if query_intent.version_context else None,
+            "sort": [item.model_dump(mode="json") for item in query_intent.requested_sort],
+            "limit": query_intent.requested_limit,
+            "analysis_mode": query_intent.analysis_mode,
+            "has_follow_up_cue": query_intent.has_follow_up_cue,
+            "has_explicit_slots": query_intent.has_explicit_slots,
+        }
+        return self._compact_mapping(payload)
+
+    def _intent_session_focus(self, session_state: SessionState | None) -> dict | None:
+        if session_state is None:
+            return None
+        payload = {
+            "subject_domain": session_state.subject_domain,
+            "topic": session_state.topic,
+            "metrics": session_state.metrics,
+            "entities": session_state.entities,
+            "dimensions": session_state.dimensions,
+            "filter_fields": [item.field for item in session_state.filters],
+            "time_context": session_state.time_context.model_dump(mode="json") if session_state.time_context else None,
+            "version_context": session_state.version_context.model_dump(mode="json") if session_state.version_context else None,
+            "analysis_mode": session_state.analysis_mode,
+            "last_question_type": session_state.last_question_type,
+        }
+        return self._compact_mapping(payload)
+
+    def _intent_domain_fields(self, domain_fields: list[str], query_intent: QueryIntent) -> list[str]:
+        important_fields = {
+            *query_intent.requested_dimensions,
+            *(item.field for item in query_intent.filters),
+            *(item.field for item in query_intent.requested_sort),
+        }
+        metric_columns = {
+            self.semantic_runtime.metric_column(metric)
+            for metric in query_intent.matched_metrics
+            if self.semantic_runtime is not None and self.semantic_runtime.is_known_metric(metric)
+        }
+        prioritized = [field for field in sorted(set(domain_fields)) if field in important_fields or field in metric_columns]
+        remaining = [field for field in sorted(set(domain_fields)) if field not in prioritized]
+        return [*prioritized, *remaining[:40]]
+
+    def _intent_output_fields(self) -> list[str]:
+        return [
+            "subject_domain",
+            "metrics",
+            "entities",
+            "dimensions",
+            "filters",
+            "time_context",
+            "version_context",
+            "analysis_mode",
+            "confidence",
+            "reason",
+        ]
 
     def _classification_delta_examples(self) -> list[dict]:
         return self._prompt_asset_list("classification", "context_delta_examples")

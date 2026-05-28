@@ -65,6 +65,8 @@ class Settings(BaseModel):
     llm_timeout_seconds: int = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
     llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))
+    llm_cache_ttl_seconds: int = int(os.getenv("LLM_CACHE_TTL_SECONDS", "300"))
+    llm_cache_max_entries: int = int(os.getenv("LLM_CACHE_MAX_ENTRIES", "256"))
     enable_vector_retrieval: bool = _env_bool("ENABLE_VECTOR_RETRIEVAL", default=True)
     prewarm_vector_retrieval: bool = _env_bool("PREWARM_VECTOR_RETRIEVAL", default=True)
     vector_retrieval_provider: str = _default_vector_provider()

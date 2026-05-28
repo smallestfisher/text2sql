@@ -48,6 +48,17 @@
 
 ---
 
+### 1.4 LLM Cache
+
+`LLMClient` 默认启用进程内 prompt cache，配置项是：
+
+- `LLM_CACHE_TTL_SECONDS`，默认 `300`
+- `LLM_CACHE_MAX_ENTRIES`，默认 `256`
+
+如果排查时怀疑缓存影响复现，可以临时把 `LLM_CACHE_TTL_SECONDS=0` 关掉，或重启服务清空内存缓存。JSON 类 LLM 响应如果来自缓存，会带 `cache_hit=true`。
+
+排查性能时看 admin health 中的 `llm.metrics`：`requests` 是业务请求进入该 LLM 阶段的次数，`provider_calls` 是真实请求模型的次数，`cache_hits` 是缓存命中次数，`prompt_chars` / `response_chars` 可用于确认 prompt 精简是否生效。
+
 ## 2. 5 分钟排查清单
 
 拿到一个真实问题，先按这个顺序走：
@@ -190,6 +201,31 @@
 - `normalized_intent`
 - `classify_question.metadata.classifier_debug`
 
+Intent prompt 当前也已经压缩。排查 LLM intent 时，重点看：
+
+- `shallow_signals`
+- `session_focus`
+- `domain_hints.subject_domain`
+- `domain_hints.domain_tables`
+- `domain_hints.domain_fields`
+- `domain_hints.semantic_fields`
+- `business_knowledge`
+- `instructions.fields`
+
+不要期待 intent prompt 里继续出现完整 `shallow_parse` 或完整 `session_state`。如果 intent 少识别指标、维度或过滤条件，先确认 `shallow_signals` 和 `domain_hints` 里是否还保留了对应候选。若 `llm_intent.status=skipped` 且 raw mode 是 `parser_shortcut`，说明本轮没有调用 intent LLM，应优先排查 parser 和 normalizer。
+
+分类阶段目前给 LLM 的不是完整上下文，而是裁决证据包。排查分类 prompt 时，重点看：
+
+- `classification_evidence.current_question_signals`
+- `classification_evidence.previous_session_focus`
+- `classification_evidence.inheritance_targets`
+- `classification_evidence.delta_summary`
+- `base_classification`
+- `allowed_question_types`
+- `candidate_scores`
+
+不要期待分类 prompt 里还能看到完整 `query_intent`、完整 `session_state` 或完整 `session_semantic_diff`；这些内容已经被压缩成上述证据字段。若分类判断错，优先确认这些证据字段是否遗漏了关键指标、字段、时间、版本或追问提示。若 classifier debug 中 `decision_source=baseline_high_confidence`，说明本轮没有调用 classification LLM，应优先排查 baseline score、semantic diff 和 shortcut 条件。
+
 典型症状：
 
 - 明明是库存，识别成计划/实际
@@ -325,7 +361,9 @@
 
 额外检查：
 
-- `tables_metadata` 里目标表的 `time_fields.format` 是否正确
+- `semantic/tables.json` 里目标表的 `time_fields.format` 是否正确
+- SQL prompt 里的 `query_contract` 是否还保留 tables、metrics、dimensions、filters、sort、limit 等硬约束
+- SQL prompt 里的 `table_schemas` 是否还包含生成 SQL 必需的真实列
 - SQL prompt 里的 `time_resolution` 是否给出了正确的投影/过滤示例
 
 ### 6.5 SQL 校验 / Repair

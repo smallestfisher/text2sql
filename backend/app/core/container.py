@@ -117,6 +117,8 @@ class AppContainer:
             timeout_seconds=self.settings.llm_timeout_seconds,
             max_retries=self.settings.llm_max_retries,
             repair_max_retries=self.settings.sql_repair_max_retries,
+            cache_ttl_seconds=self.settings.llm_cache_ttl_seconds,
+            cache_max_entries=self.settings.llm_cache_max_entries,
         )
         self.intent_service = IntentService(
             llm_client=self.llm_client,

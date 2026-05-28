@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+from copy import deepcopy
+import hashlib
 import json
 import logging
 import re
@@ -29,6 +32,8 @@ class LLMClient:
         timeout_seconds: int = 20,
         max_retries: int = 2,
         repair_max_retries: int | None = None,
+        cache_ttl_seconds: int = 300,
+        cache_max_entries: int = 256,
     ) -> None:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for LLM SQL validation helpers")
@@ -38,6 +43,10 @@ class LLMClient:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max(1, max_retries)
         self.repair_max_retries = max(1, repair_max_retries if repair_max_retries is not None else max_retries)
+        self.cache_ttl_seconds = max(0, cache_ttl_seconds)
+        self.cache_max_entries = max(0, cache_max_entries)
+        self._response_cache: OrderedDict[str, tuple[float, object]] = OrderedDict()
+        self._metrics: dict[str, dict[str, int]] = {}
         self.sql_dialect = SqlDialect.from_name("oracle")
         self.client = None
         if api_key:
@@ -65,16 +74,25 @@ class LLMClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+        self._record_metric("classification", "requests")
+        cache_key = self._cache_key("classification", messages)
+        cached = self._cache_get(cache_key)
+        if isinstance(cached, dict):
+            self._record_metric("classification", "cache_hits")
+            cached_response = deepcopy(cached)
+            cached_response["cache_hit"] = True
+            return cached_response
         for attempt in range(1, self.max_retries + 1):
             self._raise_if_cancelled(cancellation_token, stage="classification generation")
             try:
-                content = self._complete(messages)
+                content = self._complete(messages, task_name="classification")
                 self._raise_if_cancelled(cancellation_token, stage="classification generation")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
                     parsed["model"] = self.model_name
                     parsed["attempt"] = attempt
+                    self._cache_put(cache_key, parsed)
                     return parsed
                 if attempt < self.max_retries:
                     messages.append({"role": "assistant", "content": content})
@@ -102,7 +120,8 @@ class LLMClient:
 
         system_prompt = (
             "你是一个 Text2SQL 意图理解器。"
-            "基于给定问题、浅层解析结果、会话上下文和 schema 摘要，输出结构化 intent。"
+            "基于 question、shallow_signals、session_focus 和 domain_hints，补全 prompt 要求的结构化 intent 字段。"
+            "不要输出分类阶段负责的 question_type 或 inherit_context。"
             "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
         )
         user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
@@ -110,16 +129,25 @@ class LLMClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+        self._record_metric("intent", "requests")
+        cache_key = self._cache_key("intent", messages)
+        cached = self._cache_get(cache_key)
+        if isinstance(cached, dict):
+            self._record_metric("intent", "cache_hits")
+            cached_response = deepcopy(cached)
+            cached_response["cache_hit"] = True
+            return cached_response
         for attempt in range(1, self.max_retries + 1):
             self._raise_if_cancelled(cancellation_token, stage="intent generation")
             try:
-                content = self._complete(messages)
+                content = self._complete(messages, task_name="intent")
                 self._raise_if_cancelled(cancellation_token, stage="intent generation")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
                     parsed["model"] = self.model_name
                     parsed["attempt"] = attempt
+                    self._cache_put(cache_key, parsed)
                     return parsed
                 if attempt < self.max_retries:
                     messages.append({"role": "assistant", "content": content})
@@ -156,16 +184,25 @@ class LLMClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+        self._record_metric("relevance", "requests")
+        cache_key = self._cache_key("relevance", messages)
+        cached = self._cache_get(cache_key)
+        if isinstance(cached, dict):
+            self._record_metric("relevance", "cache_hits")
+            cached_response = deepcopy(cached)
+            cached_response["cache_hit"] = True
+            return cached_response
         for attempt in range(1, self.max_retries + 1):
             self._raise_if_cancelled(cancellation_token, stage="relevance guard")
             try:
-                content = self._complete(messages)
+                content = self._complete(messages, task_name="relevance")
                 self._raise_if_cancelled(cancellation_token, stage="relevance guard")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
                     parsed["model"] = self.model_name
                     parsed["attempt"] = attempt
+                    self._cache_put(cache_key, parsed)
                     return parsed
                 if attempt < self.max_retries:
                     messages.append({"role": "assistant", "content": content})
@@ -201,13 +238,20 @@ class LLMClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+        self._record_metric("sql", "requests")
+        cache_key = self._cache_key("sql", messages)
+        cached = self._cache_get(cache_key)
+        if isinstance(cached, str):
+            self._record_metric("sql", "cache_hits")
+            return cached
         for attempt in range(1, self.max_retries + 1):
             self._raise_if_cancelled(cancellation_token, stage="sql generation")
             try:
-                content = self._complete(messages).strip()
+                content = self._complete(messages, task_name="sql").strip()
                 self._raise_if_cancelled(cancellation_token, stage="sql generation")
                 sql = self._extract_sql(content)
                 if sql and self._is_readonly_select(sql):
+                    self._cache_put(cache_key, sql)
                     return sql
                 if attempt < self.max_retries:
                     messages.append({"role": "assistant", "content": content})
@@ -278,10 +322,11 @@ class LLMClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False)},
         ]
+        self._record_metric("repair", "requests")
         for attempt in range(1, self.repair_max_retries + 1):
             self._raise_if_cancelled(cancellation_token, stage="sql repair")
             try:
-                content = self._complete(messages).strip()
+                content = self._complete(messages, task_name="repair").strip()
                 self._raise_if_cancelled(cancellation_token, stage="sql repair")
                 repaired = self._extract_sql(content)
                 if repaired and self._is_readonly_select(repaired):
@@ -322,16 +367,78 @@ class LLMClient:
             "max_retries": self.max_retries,
             "repair_max_retries": self.repair_max_retries,
             "sql_dialect": self.sql_dialect.name,
+            "cache_ttl_seconds": self.cache_ttl_seconds,
+            "cache_max_entries": self.cache_max_entries,
+            "cache_entries": len(self._response_cache),
+            "metrics": deepcopy(self._metrics),
         }
+
+    def clear_metrics(self) -> None:
+        self._metrics.clear()
+
+    def clear_cache(self) -> None:
+        self._response_cache.clear()
+
+    def _record_metric(self, task_name: str, metric_name: str, value: int = 1) -> None:
+        metrics = self._metrics.setdefault(
+            task_name,
+            {
+                "requests": 0,
+                "cache_hits": 0,
+                "provider_calls": 0,
+                "failures": 0,
+                "prompt_chars": 0,
+                "response_chars": 0,
+                "elapsed_ms": 0,
+            },
+        )
+        metrics[metric_name] = metrics.get(metric_name, 0) + value
+
+    def _cache_enabled(self) -> bool:
+        return self.cache_ttl_seconds > 0 and self.cache_max_entries > 0
+
+    def _cache_key(self, task_name: str, messages: list[dict]) -> str:
+        payload = {
+            "task": task_name,
+            "model": self.model_name,
+            "sql_dialect": self.sql_dialect.name,
+            "messages": messages,
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, cache_key: str) -> object | None:
+        if not self._cache_enabled():
+            return None
+        entry = self._response_cache.get(cache_key)
+        if entry is None:
+            return None
+        cached_at, value = entry
+        if time.time() - cached_at > self.cache_ttl_seconds:
+            self._response_cache.pop(cache_key, None)
+            return None
+        self._response_cache.move_to_end(cache_key)
+        logger.info("llm cache hit model=%s key=%s", self.model_name, cache_key[:12])
+        return deepcopy(value)
+
+    def _cache_put(self, cache_key: str, value: object) -> None:
+        if not self._cache_enabled():
+            return
+        self._response_cache[cache_key] = (time.time(), deepcopy(value))
+        self._response_cache.move_to_end(cache_key)
+        while len(self._response_cache) > self.cache_max_entries:
+            self._response_cache.popitem(last=False)
 
     def _require_enabled(self, task_name: str) -> None:
         if self.enabled:
             return
         raise LLMServiceError(f"llm is required but not configured for {task_name}")
 
-    def _complete(self, messages: list[dict]) -> str:
+    def _complete(self, messages: list[dict], *, task_name: str = "unknown") -> str:
         started_at = time.perf_counter()
         prompt_chars = sum(len(str(message.get("content") or "")) for message in messages)
+        self._record_metric(task_name, "provider_calls")
+        self._record_metric(task_name, "prompt_chars", prompt_chars)
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -340,22 +447,28 @@ class LLMClient:
                 timeout=self.timeout_seconds,
             )
             content = response.choices[0].message.content or ""
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            self._record_metric(task_name, "response_chars", len(content))
+            self._record_metric(task_name, "elapsed_ms", elapsed_ms)
             logger.info(
                 "timing stage=llm.complete model=%s messages=%s prompt_chars=%s response_chars=%s elapsed_ms=%s",
                 self.model_name,
                 len(messages),
                 prompt_chars,
                 len(content),
-                int((time.perf_counter() - started_at) * 1000),
+                elapsed_ms,
             )
             return content
         except Exception:
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            self._record_metric(task_name, "failures")
+            self._record_metric(task_name, "elapsed_ms", elapsed_ms)
             logger.warning(
                 "timing stage=llm.complete model=%s messages=%s prompt_chars=%s status=failed elapsed_ms=%s",
                 self.model_name,
                 len(messages),
                 prompt_chars,
-                int((time.perf_counter() - started_at) * 1000),
+                elapsed_ms,
             )
             raise
 

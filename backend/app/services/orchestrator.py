@@ -569,7 +569,14 @@ class ConversationOrchestrator:
                     "risk_flags": sql_risk_flags,
                 },
             )
-            if sql_errors and llm_sql and not plan_errors and sql_prompt is not None:
+            validation_repair_allowed, validation_repair_reason = self._should_repair_validation_errors(
+                errors=sql_errors,
+                sql=sql,
+                llm_sql=llm_sql,
+                plan_errors=plan_errors,
+                sql_prompt=sql_prompt,
+            )
+            if validation_repair_allowed:
                 stage_started_at = time.perf_counter()
                 repaired_sql = self.llm_client.repair_sql(
                     prompt_payload=sql_prompt,
@@ -583,6 +590,7 @@ class ConversationOrchestrator:
                     "repair_sql_after_validation",
                     stage_started_at,
                     repaired=bool(repaired_sql),
+                    repair_reason=validation_repair_reason,
                 )
                 if repaired_sql and sql_errors:
                     logger.info(
@@ -630,6 +638,7 @@ class ConversationOrchestrator:
                     "risk_level": sql_risk_level,
                     "risk_flags": sql_risk_flags,
                     "repair_used": bool(sql_hint_metadata.get("repair_used")),
+                    "repair_skipped_reason": validation_repair_reason if sql_errors and not validation_repair_allowed else None,
                 },
             )
             logger.info(
@@ -676,13 +685,13 @@ class ConversationOrchestrator:
                 inputs={"sql_preview": self._preview_text(sql), "blocked_by_errors": bool(plan_errors or sql_errors)},
                 outputs={"execution": self._execution_summary(execution)},
             )
-            if (
-                execution is not None
-                and not execution.executed
-                and llm_sql
-                and sql_prompt is not None
-                and self.llm_client.enabled
-            ):
+            execution_repair_allowed, execution_repair_reason = self._should_repair_execution_failure(
+                execution=execution,
+                sql=sql,
+                llm_sql=llm_sql,
+                sql_prompt=sql_prompt,
+            )
+            if execution_repair_allowed:
                 stage_started_at = time.perf_counter()
                 repaired_sql = self.llm_client.repair_sql(
                     prompt_payload=sql_prompt,
@@ -696,6 +705,7 @@ class ConversationOrchestrator:
                     "repair_sql_after_execution",
                     stage_started_at,
                     repaired=bool(repaired_sql),
+                    repair_reason=execution_repair_reason,
                 )
                 if repaired_sql:
                     stage_started_at = time.perf_counter()
@@ -1018,7 +1028,100 @@ class ConversationOrchestrator:
             "follow_up": query_intent.has_follow_up_cue,
         }
 
-    @staticmethod
+    def _should_repair_validation_errors(
+        self,
+        *,
+        errors: list[str],
+        sql: str | None,
+        llm_sql: str | None,
+        plan_errors: list[str],
+        sql_prompt: dict | None,
+    ) -> tuple[bool, str]:
+        if not errors:
+            return False, "no_validation_errors"
+        if sql is None:
+            return False, "sql_missing"
+        if not llm_sql:
+            return False, "sql_not_from_llm"
+        if plan_errors:
+            return False, "plan_has_errors"
+        if sql_prompt is None:
+            return False, "sql_prompt_missing"
+        non_repairable = [error for error in errors if not self._validation_error_is_repairable(error)]
+        if non_repairable:
+            return False, "non_repairable_validation_error"
+        return True, "repairable_validation_error"
+
+    def _validation_error_is_repairable(self, error: str) -> bool:
+        normalized = error.lower()
+        if "sql is empty" in normalized:
+            return False
+        if "forbidden keyword detected" in normalized:
+            return False
+        repairable_markers = (
+            "only select statements are allowed",
+            "multiple sql statements are not allowed",
+            "sql references unknown sources",
+            "sql is missing required permission filters",
+            "incompatible time literals",
+        )
+        return any(marker in normalized for marker in repairable_markers)
+
+    def _should_repair_execution_failure(
+        self,
+        *,
+        execution,
+        sql: str | None,
+        llm_sql: str | None,
+        sql_prompt: dict | None,
+    ) -> tuple[bool, str]:
+        if execution is None:
+            return False, "execution_missing"
+        if execution.executed:
+            return False, "execution_succeeded"
+        if sql is None:
+            return False, "sql_missing"
+        if not llm_sql:
+            return False, "sql_not_from_llm"
+        if sql_prompt is None:
+            return False, "sql_prompt_missing"
+        if not self.llm_client.enabled:
+            return False, "llm_disabled"
+        if execution.error_category in {"governance", "permission", "auth"}:
+            return False, "non_repairable_execution_category"
+        if not execution.errors:
+            return False, "execution_error_missing"
+        if not any(self._execution_error_is_repairable(error) for error in execution.errors):
+            return False, "non_repairable_execution_error"
+        return True, "repairable_execution_error"
+
+    def _execution_error_is_repairable(self, error: str) -> bool:
+        normalized = error.lower()
+        non_repairable_markers = (
+            "comments are not allowed",
+            "for update is not allowed",
+            "into outfile is not allowed",
+            "maximum length",
+            "permission denied",
+            "not authorized",
+        )
+        if any(marker in normalized for marker in non_repairable_markers):
+            return False
+        repairable_markers = (
+            "syntax",
+            "invalid identifier",
+            "unknown column",
+            "unknown table",
+            "doesn't exist",
+            "does not exist",
+            "ambiguous",
+            "missing",
+            "ora-009",
+            "ora-01722",
+            "ora-018",
+        )
+        return any(marker in normalized for marker in repairable_markers)
+
     def _classification_summary(classification) -> dict | None:
         if classification is None:
             return None
