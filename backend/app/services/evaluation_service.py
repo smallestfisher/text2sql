@@ -9,7 +9,7 @@ import uuid
 from backend.app.config import EVAL_CASES_PATH
 from backend.app.models.api import PlanRequest
 from backend.app.models.conversation import ChatMessage
-from backend.app.models.example_library import ExampleRecord
+from backend.app.models.example_library import ExampleTemplateRecord
 from backend.app.models.auth import UserContext
 from backend.app.models.evaluation import (
     EvaluationCase,
@@ -212,7 +212,7 @@ class EvaluationService:
         scenario: str | None = None,
         coverage_tags: list[str] | None = None,
         notes: str | None = None,
-    ) -> ExampleRecord:
+    ) -> ExampleTemplateRecord:
         if self.runtime_log_repository is None:
             raise RuntimeError("runtime log repository is not configured")
         record = self.runtime_log_repository.get_query_log(trace_id)
@@ -227,37 +227,23 @@ class EvaluationService:
         if not snapshot.sql:
             raise ValueError("query log does not contain SQL, cannot materialize example")
 
-        normalized_question = (snapshot.query_intent.normalized_question or record.question).strip()
-        effective_scenario = scenario or self._default_example_scenario(snapshot.classification.question_type)
         merged_tags = list(dict.fromkeys([
-            "real",
             snapshot.classification.subject_domain,
             snapshot.classification.question_type,
+            *([scenario] if scenario else []),
             *(coverage_tags or []),
         ]))
-        return ExampleRecord(
+        return ExampleTemplateRecord(
             id=example_id or self._generate_example_id(
                 trace_id,
                 snapshot.classification.subject_domain,
                 snapshot.classification.question_type,
             ),
             question=record.question,
-            normalized_question=normalized_question,
-            intent=self._generate_example_intent(
-                snapshot.classification.subject_domain,
-                snapshot.classification.question_type,
-                effective_scenario,
-            ),
-            scenario=effective_scenario,
-            coverage_tags=merged_tags,
             subject_domain=snapshot.classification.subject_domain,
-            question_type=snapshot.classification.question_type,
-            tables=list(snapshot.query_plan.tables),
-            entities=list(snapshot.query_plan.entities),
             metrics=list(snapshot.query_plan.metrics),
             dimensions=list(snapshot.query_plan.dimensions),
-            filters=list(snapshot.query_plan.filters),
-            join_path=list(snapshot.query_plan.join_path),
+            tags=merged_tags,
             sql=snapshot.sql,
             result_shape=self._derive_example_result_shape(snapshot.query_plan),
             notes=notes or f"materialized from runtime query log {trace_id}",
@@ -443,30 +429,6 @@ class EvaluationService:
         domain_prefix = (subject_domain or "unknown").replace("-", "_").replace(" ", "_")
         question_prefix = (question_type or "new").replace("-", "_").replace(" ", "_")
         return f"runtime_{domain_prefix}_{question_prefix}_{trace_id[-8:]}"
-
-    def _generate_example_intent(
-        self,
-        subject_domain: str | None,
-        question_type: str | None,
-        scenario: str | None,
-    ) -> str:
-        parts = [subject_domain or "unknown", question_type or "new"]
-        if scenario:
-            parts.append(scenario)
-        return "_".join(part.replace("-", "_").replace(" ", "_") for part in parts if part)
-
-    def _default_example_scenario(self, question_type: str | None) -> str:
-        if question_type == "follow_up":
-            return "runtime_follow_up"
-        if question_type == "clarification_needed":
-            return "runtime_clarification"
-        if question_type == "new_related":
-            return "runtime_new_related"
-        if question_type == "new_unrelated":
-            return "runtime_new_unrelated"
-        if question_type == "invalid":
-            return "runtime_invalid"
-        return "runtime_captured"
 
     def _get_case(self, case_id: str) -> EvaluationCase:
         with self._cases_lock:

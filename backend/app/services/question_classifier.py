@@ -99,7 +99,18 @@ class QuestionClassifier:
             )
             return classification, warnings
 
-        if not query_intent.matched_metrics and query_intent.subject_domain == "unknown":
+        if (
+            not query_intent.matched_metrics
+            and query_intent.subject_domain == "unknown"
+            and (
+                session_state is None
+                or not (
+                    query_intent.has_follow_up_cue
+                    or query_intent.has_explicit_slots
+                    or query_intent.matched_entities
+                )
+            )
+        ):
             classification = QuestionClassification(
                 question_type="clarification_needed",
                 subject_domain="unknown",
@@ -424,7 +435,14 @@ class QuestionClassifier:
             return True
         if query_intent.matched_metrics:
             return False
-        if query_intent.has_follow_up_cue and session_state is not None:
+        if (
+            session_state is not None
+            and (
+                query_intent.has_follow_up_cue
+                or query_intent.has_explicit_slots
+                or query_intent.matched_entities
+            )
+        ):
             return False
         return True
 
@@ -478,9 +496,13 @@ class QuestionClassifier:
         conflict_signals: list[str] = []
         if query_intent.has_follow_up_cue and semantic_diff.get("can_execute_without_context"):
             conflict_signals.append("follow_up_cue_but_independent_execution_possible")
-        if semantic_diff.get("introduces_new_topic_signal") and not semantic_diff.get("domain_changed"):
+        if (
+            semantic_diff.get("introduces_new_topic_signal")
+            and not semantic_diff.get("domain_changed")
+            and not semantic_diff.get("only_updates_dimensions")
+        ):
             conflict_signals.append("new_topic_signal_inside_same_domain")
-        if semantic_diff.get("metrics_missing_but_context_resolvable"):
+        if semantic_diff.get("metrics_missing_but_context_resolvable") and not semantic_diff.get("only_updates_dimensions"):
             conflict_signals.append("metric_missing_but_session_can_supply_it")
         if semantic_diff.get("domain_changed") and query_intent.has_follow_up_cue:
             conflict_signals.append("domain_changed_but_user_used_follow_up_language")

@@ -179,7 +179,7 @@ export const api = {
     return request("/api/chat/sessions", {
       method: "POST",
       token,
-      body: { title },
+      body: title === undefined ? {} : { title },
     });
   },
   listSessions(token: string): Promise<SessionCollectionResponse> {

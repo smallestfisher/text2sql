@@ -197,6 +197,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertIn("product_attributes", sanitized.tables)
         self.assertEqual(sanitized.dimensions, [])
         self.assertEqual(sanitized.sort, [])
+        self.assertIn(FilterItem(field="demand_qty", op=">", value=0), sanitized.filters)
 
     def test_plan_actual_support_table_rule_appends_product_attributes(self) -> None:
         query_plan = QueryPlan(

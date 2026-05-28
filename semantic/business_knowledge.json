@@ -33,7 +33,7 @@
       "notes": [
         "当需求问题涉及产品属性过滤时，可以直接通过 p_demand/v_demand.FGCODE = product_attributes.product_ID 关联产品属性维表。",
         "像 Oxide 这类产品属性过滤应落在 product_attributes 上；生产环境中 IS_xxx 字段使用 Y/N 标记，例如 product_attributes.IS_OXIDE = 'Y'。",
-        "如果问题要求的是产品数量而不是需求量，目标指标通常是 COUNT(DISTINCT product_attributes.product_ID)，但目标需求月份仍然必须基于横表展开后的 demand_month 过滤。"
+        "如果问题要求的是产品数量/型号数量，目标指标通常同时返回 COUNT(DISTINCT product_attributes.product_ID) 和 SUM(NVL(demand_qty, 0))，目标需求月份仍然必须基于横表展开后的 demand_month 过滤；需求场景下的产品数量默认只统计 NVL(demand_qty, 0) > 0 的产品。"
       ]
     },
     {
@@ -77,7 +77,7 @@
       "keywords": ["plan", "actual", "投入", "产出", "factory", "work_date"],
       "notes": [
         "daily_PLAN 通常用于计划投入量和计划产出量查询。",
-        "计划投入的 Glass / panel 字段分别是 target_IN_glass_qty、target_in_panel_qty；计划产出的 Glass / panel 字段分别是 target_Out_glass_qty、target_Out_panel_qty。",
+        "计划投入的 Glass / panel 字段分别是 target_IN_glass_qty、target_IN_panel_qty；计划产出的 Glass / panel 字段分别是 target_Out_glass_qty、target_Out_panel_qty。",
         "target_Out_TTL_panel_qty 表示全部品产出 panel 量，仅适用于需要全部品口径或 MDL 相关口径的问题。",
         "当问题需要计划和实际产出对比时，daily_PLAN 通常与 production_actuals 关联。"
       ]
@@ -96,14 +96,16 @@
       "id": "plan_actual_approved_actual_gap_rate",
       "domains": ["plan_actual"],
       "tables": ["monthly_plan_approved", "production_actuals"],
-      "keywords": ["审批版", "实际", "投入", "Gap", "达成率", "monthly_plan_approved", "production_actuals", "target_IN_glass_qty", "GLS_qty", "target_in_panel_qty", "Panel_qty"],
+      "keywords": ["审批版", "实际", "投入", "Gap", "达成率", "monthly_plan_approved", "production_actuals", "target_IN_glass_qty", "GLS_qty", "target_IN_panel_qty", "Panel_qty"],
       "notes": [
         "问句同时出现审批版、实际、Gap、达成率，且语义是投入时，应同时查询审批投入和实际投入，再计算差异与达成率，不能只返回单侧事实值。",
         "审批侧来源是 monthly_plan_approved；实际侧来源是 production_actuals，且实际投入必须过滤 act_type=投入。",
-        "如果问题按工厂对比，审批侧工厂通常来自 monthly_plan_approved.factory_code，实际侧工厂通常来自 production_actuals.FACTORY，对齐后再做聚合或关联。",
-        "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或按 PLAN_date 的 YYYYMMDD 格式映射到 YYYYMM；实际侧应按 work_date 的 YYYYMMDD 格式映射到 YYYYMM，例如 SUBSTRING(work_date, 1, 6)。",
-        "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 或显式 panel 口径时，审批侧改用 target_in_panel_qty，对应实际侧 Panel_qty。",
-        "Gap 默认定义为 实际投入 - 审批投入；达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
+        "审批版与实际对比时，禁止直接把 monthly_plan_approved 明细行和 production_actuals 明细行 join 后再 SUM；这会让两侧物量按明细行数互相重复放大。",
+        "必须先分别在审批侧 CTE 和实际侧 CTE 内按对齐粒度聚合，例如 biz_month、factory；再把两个已聚合 CTE 按 biz_month、factory join，最后计算 Gap 和达成率。",
+        "如果问题按工厂对比，审批侧工厂通常来自 monthly_plan_approved.factory_code，实际侧工厂通常来自 production_actuals.FACTORY；这些字段应在各自聚合 CTE 内分组，再在聚合结果之间对齐。",
+        "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或按 PLAN_date 的 YYYYMMDD 格式映射到 YYYYMM；实际侧应按 work_date 的 YYYYMMDD 格式映射到 YYYYMM，例如 SUBSTR(work_date, 1, 6)。",
+        "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 或显式 panel 口径时，审批侧改用 target_IN_panel_qty，对应实际侧 Panel_qty。",
+        "Gap 默认定义为 实际投入 - 审批投入，SQL 输出列 input_gap_qty 必须写成 actual_input_qty - approved_input_qty，不要写成 approved_input_qty - actual_input_qty。达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
       ]
     },
     {

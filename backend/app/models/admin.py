@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from .conversation import ChatSession
-from .example_library import ExampleRecord
+from .example_library import ExampleRecord, ExampleTemplateRecord
 from .session_state import SessionState
 
 
@@ -33,6 +33,7 @@ class ExampleMutationResponse(BaseModel):
     created: bool | None = None
     updated: bool | None = None
     example: ExampleRecord
+    template: ExampleTemplateRecord
     count: int | None = None
 
 

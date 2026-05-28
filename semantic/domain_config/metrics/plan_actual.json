@@ -51,7 +51,7 @@
       "definitions": [
         {
           "table": "monthly_plan_approved",
-          "expression": "sum(target_in_panel_qty)",
+          "expression": "sum(target_IN_panel_qty)",
           "grain": "month_or_day"
         }
       ]
@@ -230,7 +230,7 @@
       "definitions": [
         {
           "table": "monthly_plan_approved",
-          "expression": "sum(target_in_panel_qty)",
+          "expression": "sum(target_IN_panel_qty)",
           "grain": "month_or_day"
         },
         {
@@ -274,7 +274,7 @@
       "definitions": [
         {
           "table": "monthly_plan_approved",
-          "expression": "sum(target_in_panel_qty)",
+          "expression": "sum(target_IN_panel_qty)",
           "grain": "month_or_day"
         },
         {

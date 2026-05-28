@@ -323,6 +323,8 @@ class QueryPlanner:
             tables=tables,
             time_context=time_context,
             version_context=version_context,
+            inherit_context=classification.inherit_context,
+            context_delta=classification.context_delta,
             analysis_mode=analysis_mode,
             sort=sort,
             limit=limit,

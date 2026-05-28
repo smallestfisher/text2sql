@@ -327,11 +327,11 @@ function App() {
     setAdminError("");
   }
 
-  async function createSession(title = "新对话") {
+  async function createSession() {
     if (!token || chatPending) {
       return;
     }
-    const response = await api.createSession(token, title);
+    const response = await api.createSession(token);
     await refreshSessions(token, response.session.id);
     setSidebarOpen(false);
   }
@@ -753,7 +753,7 @@ function App() {
                       <div key={session.id} className={`session-item${session.id === selectedSessionId ? " is-active" : ""}`}>
                         <div className="session-item-top">
                           <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)} disabled={chatPending}>
-                            <div className="session-item-title">{session.title || "未命名会话"}</div>
+                            <div className="session-item-title">{formatSessionTitle(session.title)}</div>
                           </button>
                           <div className="session-item-time">{formatDate(session.updated_at)}</div>
                         </div>
@@ -1543,7 +1543,7 @@ function AdminView(props: {
                       {replayExecution.rows.slice(0, 20).map((row, index) => (
                         <tr key={`${index}-${replayExecution.columns.join("-")}`}>
                           {replayExecution.columns.map((column) => (
-                            <td key={column}>{String(row[column] ?? "")}</td>
+                            <td key={column}>{formatResultCell(row[column])}</td>
                           ))}
                         </tr>
                       ))}
@@ -1669,7 +1669,7 @@ function ConversationResultCard(props: {
               {resultRows.map((row, index) => (
                 <tr key={`${props.artifact.trace_id}-${index}`}>
                   {resultColumns.map((column) => (
-                    <td key={column}>{String(row[column] ?? "")}</td>
+                    <td key={column}>{formatResultCell(row[column])}</td>
                   ))}
                 </tr>
               ))}
@@ -2187,6 +2187,25 @@ function buildContextChips(state: SessionState | null) {
 
 function describeProgressStage(stage: string) {
   return getProgressStageMeta(stage).label;
+}
+
+function formatSessionTitle(title?: string | null) {
+  const normalized = (title || "").trim();
+  return normalized || "新对话";
+}
+
+function formatResultCell(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && !Number.isInteger(value) ? value.toFixed(2) : String(value);
+  }
+  if (typeof value === "string" && /^-?\d+\.\d+$/.test(value.trim())) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue.toFixed(2) : value;
+  }
+  return String(value);
 }
 
 function describeResponseStatus(status: string) {

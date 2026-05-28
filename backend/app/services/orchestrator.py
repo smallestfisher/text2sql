@@ -1122,6 +1122,7 @@ class ConversationOrchestrator:
         )
         return any(marker in normalized for marker in repairable_markers)
 
+    @staticmethod
     def _classification_summary(classification) -> dict | None:
         if classification is None:
             return None

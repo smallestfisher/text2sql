@@ -85,6 +85,13 @@
             "biz_month",
             "PM_VERSION"
           ],
+          "add_filters": [
+            {
+              "field": "demand_qty",
+              "op": ">",
+              "value": 0
+            }
+          ],
           "clear_sort_if_all_fields": [
             "biz_month"
           ]

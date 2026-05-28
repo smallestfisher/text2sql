@@ -25,9 +25,12 @@ class SessionStateService:
             or state.entities
         )
         state.tables = query_plan.tables or state.tables
-        state.metrics = (
-            query_plan.context_delta.replace_metrics or query_plan.metrics or state.metrics
-        )
+        if query_plan.analysis_mode == "detail" and not query_plan.metrics:
+            state.metrics = []
+        else:
+            state.metrics = (
+                query_plan.context_delta.replace_metrics or query_plan.metrics or state.metrics
+            )
         state.dimensions = (
             query_plan.context_delta.replace_dimensions
             or query_plan.dimensions

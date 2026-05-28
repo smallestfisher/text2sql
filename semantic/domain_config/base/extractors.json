@@ -217,6 +217,15 @@
         ]
       },
       {
+        "name": "detail_by_fg_product",
+        "type": "regex",
+        "field": "FGCODE",
+        "pattern": "(?:具体型号|型号明细|产品明细|哪些产品|哪些型号|产品清单|型号清单|列出.*(?:产品|型号)|给出.*(?:产品|型号))",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
         "name": "group_by_factory_code",
         "type": "regex",
         "field": "factory_code",
@@ -349,6 +358,13 @@
       {
         "mode": "distribution",
         "pattern": "分布|分布情况",
+        "flags": [
+          "ignorecase"
+        ]
+      },
+      {
+        "mode": "detail",
+        "pattern": "(?:具体型号|型号明细|产品明细|哪些产品|哪些型号|产品清单|型号清单|列出.*(?:产品|型号)|给出.*(?:产品|型号))",
         "flags": [
           "ignorecase"
         ]

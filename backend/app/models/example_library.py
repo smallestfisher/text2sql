@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .query_plan import FilterItem, QuestionType, SubjectDomain
 
@@ -23,3 +23,17 @@ class ExampleRecord(BaseModel):
     sql: str
     result_shape: str | None = None
     notes: str | None = None
+
+
+class ExampleTemplateRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    question: str
+    sql: str
+    subject_domain: SubjectDomain | None = None
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    result_shape: str | None = None

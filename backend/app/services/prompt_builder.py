@@ -7,9 +7,11 @@ from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
+from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.models.session_state import SessionState
 from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_dialect import SqlDialect
 
 
@@ -25,6 +27,12 @@ class PromptBuilder:
         self.semantic_runtime = semantic_runtime
         self.metadata_registry = metadata_registry or MetadataRegistry()
         self.sql_dialect = SqlDialect.from_name("oracle")
+        self.sql_ast_validator = SqlAstValidator()
+        self.example_factory = (
+            ExampleFactory(semantic_runtime.domain_config, semantic_runtime)
+            if semantic_runtime is not None
+            else None
+        )
 
     def build_classification_prompt(
         self,
@@ -141,8 +149,8 @@ class PromptBuilder:
         question: str | None = None,
     ) -> dict:
         selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
-        field_resolution = self._field_resolution(query_plan)
         time_resolution = self._time_resolution(query_plan)
+        field_resolution = self._field_resolution(query_plan, time_resolution=time_resolution)
         shape_contract = self._shape_contract(query_plan, time_resolution=time_resolution)
         source_schemas = {
             table_name: self._compact_table_schema(
@@ -165,6 +173,11 @@ class PromptBuilder:
         if shape_contract["dimension_hints"]:
             sql_preferences = [
                 *shape_contract["dimension_hints"],
+                *sql_preferences,
+            ]
+        if query_plan.analysis_mode == "detail":
+            sql_preferences = [
+                "analysis_mode=detail 表示明细查询：不要沿用上一轮 COUNT/SUM 聚合；优先投影 query_contract.dimensions 中的字段，并用 DISTINCT 去重。",
                 *sql_preferences,
             ]
         if self._has_latest_n_filter(query_plan):
@@ -228,7 +241,7 @@ class PromptBuilder:
         examples: dict[str, ExampleRecord] = {}
         for index, item in enumerate(payload if isinstance(payload, list) else []):
             try:
-                example = ExampleRecord(**item)
+                example = self.example_factory.normalize(item) if self.example_factory else ExampleRecord(**item)
             except Exception as exc:
                 raise RuntimeError(f"invalid example record at index {index}: {exc}") from exc
             examples[example.id] = example
@@ -632,11 +645,25 @@ class PromptBuilder:
                 "notes": example.notes,
                 "matched_features": hit.matched_features[:5],
             }
-            payload["sql_omitted_reason"] = "reuse semantic shape, tables, metrics, filters, and result_shape only"
+            if self._example_sql_is_prompt_safe(example):
+                payload["sql"] = example.sql
+            else:
+                payload["sql_omitted_reason"] = "example SQL failed Oracle read-only prompt safety checks"
             selected.append(payload)
             if len(selected) >= 2:
                 break
         return selected
+
+    def _example_sql_is_prompt_safe(self, example: ExampleRecord) -> bool:
+        errors, _warnings = self.sql_ast_validator.validate(example.sql)
+        if errors:
+            return False
+        inspection = self.sql_ast_validator.inspect(example.sql)
+        if not inspection.has_select or inspection.statement_count != 1:
+            return False
+        lowered_sql = example.sql.lower()
+        mysql_only_tokens = (" limit ", "date_format", "str_to_date", "date_add", "curdate", "`")
+        return not any(token in f" {lowered_sql} " for token in mysql_only_tokens)
 
     def _example_semantic_shape(self, example: ExampleRecord) -> dict:
         payload = {
@@ -736,12 +763,17 @@ class PromptBuilder:
             )
         return fields or self._allowed_fields(query_plan)
 
-    def _field_resolution(self, query_plan: QueryPlan) -> dict[str, dict[str, list[str]]]:
+    def _field_resolution(
+        self,
+        query_plan: QueryPlan,
+        time_resolution: dict | None = None,
+    ) -> dict[str, dict]:
         return {
             "dimensions": self._field_resolution_map(query_plan, query_plan.dimensions),
             "filters": self._field_resolution_map(
                 query_plan,
                 [item.field for item in query_plan.filters],
+                time_resolution=time_resolution,
             ),
             "metrics": {
                 metric_name: self._physical_metric_candidates(query_plan, metric_name)
@@ -758,13 +790,88 @@ class PromptBuilder:
         self,
         query_plan: QueryPlan,
         fields: list[str],
-    ) -> dict[str, list[str]]:
-        resolved: dict[str, list[str]] = {}
+        time_resolution: dict | None = None,
+    ) -> dict[str, dict | list[str]]:
+        resolved: dict[str, dict | list[str]] = {}
+        time_resolution = time_resolution or {}
         for field in fields:
             physical_candidates = self._physical_candidates(query_plan, field)
             if physical_candidates:
-                resolved[field] = physical_candidates
+                if self._requires_horizontal_demand_month_expansion(query_plan, field):
+                    resolved[field] = {
+                        "physical_candidates": physical_candidates,
+                        "filter_examples": [
+                            "先在 CTE 中把 p_demand/v_demand 横表展开为 demand_month，再过滤 demand_month；不要直接用 base MONTH 当目标需求月份。"
+                        ],
+                    }
+                    continue
+                if self._requires_horizontal_demand_qty_filter(query_plan, field):
+                    resolved[field] = {
+                        "physical_candidates": physical_candidates,
+                        "filter_examples": [
+                            "先在 CTE 中把 p_demand/v_demand 横表展开为 demand_qty，再过滤 NVL(demand_qty, 0) > 0；不要只过滤某一个横表月份数量列。"
+                        ],
+                    }
+                    continue
+                time_filter_examples = self._time_filter_examples(field, time_resolution, query_plan=query_plan)
+                if time_filter_examples:
+                    resolved[field] = {
+                        "physical_candidates": physical_candidates,
+                        "filter_examples": time_filter_examples,
+                    }
+                else:
+                    resolved[field] = physical_candidates
         return resolved
+
+    def _time_filter_examples(
+        self,
+        logical_field: str,
+        time_resolution: dict,
+        *,
+        query_plan: QueryPlan,
+    ) -> list[str]:
+        if logical_field not in {"biz_date", "biz_month", "demand_month"}:
+            return []
+        candidates = time_resolution.get(logical_field, {}).get("candidates", [])
+        examples: list[str] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if not self._time_candidate_belongs_to_query_tables(candidate, query_plan):
+                continue
+            for key in ("month_filter_example", "month_range_filter_example", "day_filter_example"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value and value not in examples:
+                    examples.append(value)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key in ("month_filter_example", "month_range_filter_example", "day_filter_example"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value and value not in examples:
+                    examples.append(value)
+        return examples[:6]
+
+    def _requires_horizontal_demand_month_expansion(self, query_plan: QueryPlan, logical_field: str) -> bool:
+        if logical_field not in {"biz_month", "demand_month"}:
+            return False
+        if query_plan.subject_domain != "demand":
+            return False
+        return any(table_name in {"p_demand", "v_demand"} for table_name in query_plan.tables)
+
+    def _requires_horizontal_demand_qty_filter(self, query_plan: QueryPlan, logical_field: str) -> bool:
+        if logical_field != "demand_qty":
+            return False
+        if query_plan.subject_domain != "demand":
+            return False
+        return any(table_name in {"p_demand", "v_demand"} for table_name in query_plan.tables)
+
+    def _time_candidate_belongs_to_query_tables(self, candidate: dict, query_plan: QueryPlan) -> bool:
+        field = str(candidate.get("field") or "")
+        if "." not in field:
+            return False
+        table_name = field.split(".", 1)[0]
+        return table_name in set(query_plan.tables)
 
     def _physical_candidates(self, query_plan: QueryPlan, logical_field: str) -> list[str]:
         if self.semantic_runtime is None:

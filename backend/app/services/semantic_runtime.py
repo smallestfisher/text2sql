@@ -511,6 +511,88 @@ class SemanticRuntime:
             replace_analysis_mode=query_intent.analysis_mode,
         )
 
+    def merge_with_session(
+        self,
+        *,
+        session_state: SessionState,
+        query_intent: QueryIntent,
+        context_delta: ContextDelta,
+    ) -> QueryIntent:
+        clear_metrics_for_detail = bool(
+            context_delta.replace_analysis_mode == "detail"
+            and context_delta.replace_dimensions
+            and not context_delta.replace_metrics
+        )
+        metrics = (
+            list(context_delta.replace_metrics)
+            if context_delta.replace_metrics
+            else ([] if clear_metrics_for_detail else list(session_state.metrics))
+        )
+        dimensions = (
+            list(context_delta.replace_dimensions)
+            if context_delta.replace_dimensions
+            else list(session_state.dimensions)
+        )
+        entities = (
+            list(context_delta.replace_entities)
+            if context_delta.replace_entities
+            else (list(query_intent.matched_entities) or list(session_state.entities))
+        )
+
+        filters = [] if context_delta.clear_filters else list(session_state.filters)
+        remove_fields = set(context_delta.remove_filters)
+        if remove_fields:
+            filters = [item for item in filters if item.field not in remove_fields]
+        filters_by_key = {self._filter_merge_key(item): item for item in filters}
+        for item in context_delta.add_filters:
+            filters_by_key[self._filter_merge_key(item)] = item
+
+        time_context = session_state.time_context or TimeContext()
+        if context_delta.replace_time_context.grain != "unknown":
+            time_context = context_delta.replace_time_context
+        elif query_intent.time_context.grain != "unknown":
+            time_context = query_intent.time_context
+
+        version_context = (
+            context_delta.replace_version_context
+            or query_intent.version_context
+            or session_state.version_context
+        )
+        analysis_mode = (
+            context_delta.replace_analysis_mode
+            or query_intent.analysis_mode
+            or session_state.analysis_mode
+        )
+        requested_sort = (
+            list(context_delta.replace_sort)
+            if context_delta.replace_sort
+            else (list(query_intent.requested_sort) or list(session_state.sort))
+        )
+        requested_limit = (
+            context_delta.replace_limit
+            if context_delta.replace_limit is not None
+            else (query_intent.requested_limit or session_state.limit)
+        )
+
+        return QueryIntent(
+            normalized_question=query_intent.normalized_question,
+            matched_metrics=self._unique_strings(metrics),
+            matched_entities=self._unique_strings(entities),
+            requested_dimensions=self._unique_strings(dimensions),
+            filters=list(filters_by_key.values()),
+            time_context=time_context,
+            version_context=version_context,
+            requested_sort=requested_sort,
+            requested_limit=requested_limit,
+            analysis_mode=analysis_mode,
+            subject_domain=session_state.subject_domain,
+            has_follow_up_cue=query_intent.has_follow_up_cue,
+            has_explicit_slots=query_intent.has_explicit_slots,
+        )
+
+    def _filter_merge_key(self, filter_item: FilterItem) -> str:
+        return f"{filter_item.field}:{filter_item.op}"
+
     def session_semantic_diff(
         self,
         query_intent: QueryIntent,
@@ -903,6 +985,15 @@ class SemanticRuntime:
             }
             if clear_dimensions_if_subset and set(compiled.dimensions).issubset(clear_dimensions_if_subset):
                 compiled.dimensions = []
+            for item in rule.get("add_filters", []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    filter_item = FilterItem.model_validate(item)
+                except Exception:
+                    continue
+                if not self._has_equivalent_filter(compiled.filters, filter_item):
+                    compiled.filters.append(filter_item)
             clear_sort_if_all_fields = {
                 str(item)
                 for item in rule.get("clear_sort_if_all_fields", [])
@@ -914,6 +1005,14 @@ class SemanticRuntime:
             ):
                 compiled.sort = []
         return compiled
+
+    def _has_equivalent_filter(self, filters: list[FilterItem], candidate: FilterItem) -> bool:
+        return any(
+            item.field == candidate.field
+            and item.op == candidate.op
+            and item.value == candidate.value
+            for item in filters
+        )
 
     def _apply_explicit_source_table(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
@@ -949,6 +1048,8 @@ class SemanticRuntime:
             for table in compiled.tables
             if table != explicit_source and table not in competing_tables
         ]
+        if not compiled.metrics:
+            other_tables = []
         compiled.tables = [explicit_source, *other_tables]
         return compiled
 

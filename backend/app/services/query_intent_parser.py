@@ -63,6 +63,7 @@ class QueryIntentParser:
         )
         has_explicit_slots = bool(
             matched_metrics
+            or matched_entities
             or requested_dimensions
             or filters
             or time_context.grain != "unknown"

@@ -7,8 +7,9 @@ import re
 import threading
 
 from backend.app.models.classification import QueryIntent
-from backend.app.models.example_library import ExampleRecord
+from backend.app.models.example_library import ExampleRecord, ExampleTemplateRecord
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
+from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
@@ -33,6 +34,7 @@ class RetrievalService:
         self.domain_config = domain_config
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
         self.metadata_registry = metadata_registry or MetadataRegistry()
+        self.example_factory = ExampleFactory(domain_config, self.semantic_runtime)
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
         self.vector_corpus_store_service = vector_corpus_store_service
         self.vector_top_k = vector_top_k
@@ -152,10 +154,11 @@ class RetrievalService:
             "vector_sync": self.last_vector_sync_summary,
         }
 
-    def validate_example(self, payload: dict | ExampleRecord) -> ExampleRecord:
-        if isinstance(payload, ExampleRecord):
-            return payload
-        return ExampleRecord(**payload)
+    def validate_example(self, payload: dict | ExampleTemplateRecord) -> ExampleRecord:
+        return self.example_factory.normalize(payload)
+
+    def dump_example_template(self, payload: dict | ExampleTemplateRecord) -> dict:
+        return self.example_factory.dump_template(payload)
 
     def _load_examples(self) -> list[ExampleRecord]:
         payload = self.metadata_registry.examples_template
