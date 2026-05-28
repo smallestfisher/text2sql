@@ -105,7 +105,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(intent.requested_dimensions, ["biz_month"])
         self.assertIn(FilterItem(field="factory", op="=", value="ARRAY"), intent.filters)
         self.assertIn(FilterItem(field="act_type", op="=", value="投入"), intent.filters)
-        self.assertIn(FilterItem(field="IS_OXIDE", op="=", value="1"), intent.filters)
+        self.assertIn(FilterItem(field="IS_OXIDE", op="=", value="Y"), intent.filters)
 
         prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
         llm_client = LLMClient()

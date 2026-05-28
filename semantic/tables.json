@@ -189,12 +189,12 @@
       "application (应用领域: Mobile/TV等)",
       "CUT_NUM (切割数量:Glass切多少Panel)",
       "common_categories (常用分类)",
-      "IS_OXIDE (是否OXide产品)",
-      "IS_XPS (是否XPS产品)",
-      "IS_sloc (是否Sloc产品)",
-      "IS_cOATER (是否cOATER产品)",
-      "IS_OA (是否OA产品)",
-      "IS_Notch (是否NotchR产品)"
+      "IS_OXIDE (是否OXide产品，Y=是，N=否)",
+      "IS_XPS (是否XPS产品，Y=是，N=否)",
+      "IS_sloc (是否Sloc产品，Y=是，N=否)",
+      "IS_cOATER (是否cOATER产品，Y=是，N=否)",
+      "IS_OA (是否OA产品，Y=是，N=否)",
+      "IS_Notch (是否NotchR产品，Y=是，N=否)"
     ],
     "MAIN_KEY": "product_ID"
   },
