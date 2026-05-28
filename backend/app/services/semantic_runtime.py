@@ -649,16 +649,33 @@ class SemanticRuntime:
         previous_has_version = bool(
             session_state.version_context is not None and session_state.version_context.value
         )
+        current_time_matches_session = bool(
+            current_has_time
+            and previous_has_time
+            and session_state.time_context is not None
+            and query_intent.time_context.model_dump(mode="json")
+            == session_state.time_context.model_dump(mode="json")
+        )
+        current_version_matches_session = bool(
+            current_has_version
+            and previous_has_version
+            and session_state.version_context is not None
+            and query_intent.version_context is not None
+            and query_intent.version_context.model_dump(mode="json")
+            == session_state.version_context.model_dump(mode="json")
+        )
+        effective_current_has_time = current_has_time and not current_time_matches_session
+        effective_current_has_version = current_has_version and not current_version_matches_session
         metric_changed = bool(current_metrics - previous_metrics)
-        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_has_dimensions and not current_has_time and not current_has_version and not current_has_sort and not current_has_limit
-        only_updates_dimensions = current_has_dimensions and not current_metrics and not current_filter_fields and not current_has_time and not current_has_version and not current_has_sort and not current_has_limit
-        only_updates_time = current_has_time and not current_metrics and not current_entities and not current_filter_fields and not current_has_version and not current_has_sort and not current_has_limit
-        only_updates_version = current_has_version and not current_metrics and not current_entities and not current_filter_fields and not current_has_time and not current_has_sort and not current_has_limit
-        only_updates_sort = current_has_sort and not metric_changed and not current_entities and not current_filter_fields and not current_has_time and not current_has_version and not current_has_dimensions
-        only_updates_limit = current_has_limit and not metric_changed and not current_entities and not current_filter_fields and not current_has_time and not current_has_version and not current_has_dimensions
+        only_updates_filters = bool(current_filter_fields) and not current_metrics and not current_has_dimensions and not effective_current_has_time and not effective_current_has_version and not current_has_sort and not current_has_limit
+        only_updates_dimensions = current_has_dimensions and not current_metrics and not current_filter_fields and not effective_current_has_time and not effective_current_has_version and not current_has_sort and not current_has_limit
+        only_updates_time = effective_current_has_time and not current_metrics and not current_entities and not current_filter_fields and not effective_current_has_version and not current_has_sort and not current_has_limit
+        only_updates_version = effective_current_has_version and not current_metrics and not current_entities and not current_filter_fields and not effective_current_has_time and not current_has_sort and not current_has_limit
+        only_updates_sort = current_has_sort and not metric_changed and not current_entities and not current_filter_fields and not effective_current_has_time and not effective_current_has_version and not current_has_dimensions
+        only_updates_limit = current_has_limit and not metric_changed and not current_entities and not current_filter_fields and not effective_current_has_time and not effective_current_has_version and not current_has_dimensions
         can_execute_without_context = bool(
             query_intent.matched_metrics
-            and (parsed_domain_known or current_has_time or current_filter_fields or current_entities)
+            and (parsed_domain_known or effective_current_has_time or current_filter_fields or current_entities)
             and not (only_updates_sort or only_updates_limit)
         )
         metrics_missing_but_context_resolvable = bool(
@@ -674,10 +691,27 @@ class SemanticRuntime:
                 or query_intent.has_follow_up_cue
             )
         )
+        context_dependent_detail_request = bool(
+            not current_metrics
+            and current_has_dimensions
+            and query_intent.analysis_mode == "detail"
+            and session_state.metrics
+            and not current_filter_fields
+            and not effective_current_has_time
+            and not effective_current_has_version
+            and not current_has_sort
+            and not current_has_limit
+            and not (parsed_domain_known and query_intent.subject_domain != session_state.subject_domain)
+        )
         introduces_new_topic_signal = bool(
             (parsed_domain_known and query_intent.subject_domain != session_state.subject_domain)
             or (current_metrics and not reused_metric_count)
-            or (current_entities and not reused_entity_count and not query_intent.has_follow_up_cue)
+            or (
+                current_entities
+                and not reused_entity_count
+                and not query_intent.has_follow_up_cue
+                and not context_dependent_detail_request
+            )
         )
         is_short_followup_fragment = bool(
             len(query_intent.normalized_question) <= 12
@@ -721,11 +755,12 @@ class SemanticRuntime:
             "has_independent_target": bool(query_intent.matched_metrics or parsed_domain_known),
             "can_execute_without_context": can_execute_without_context,
             "is_short_followup_fragment": is_short_followup_fragment,
-            "explicit_time_or_version_slot": current_has_time or current_has_version,
+            "explicit_time_or_version_slot": effective_current_has_time or effective_current_has_version,
             "metric_overlap_ratio": round(reused_metric_count / max(1, len(current_metrics)), 3),
             "entity_overlap_ratio": round(reused_entity_count / max(1, len(current_entities)), 3),
             "filter_overlap_ratio": round(reused_filter_count / max(1, len(current_filter_fields)), 3),
             "metrics_missing_but_context_resolvable": metrics_missing_but_context_resolvable,
+            "context_dependent_detail_request": context_dependent_detail_request,
             "introduces_new_topic_signal": introduces_new_topic_signal,
             "time_grain_changed": (
                 previous_has_time
@@ -739,6 +774,8 @@ class SemanticRuntime:
             ),
             "time_was_implicit": previous_has_time and not current_has_time,
             "version_was_implicit": previous_has_version and not current_has_version,
+            "time_matches_session": current_time_matches_session,
+            "version_matches_session": current_version_matches_session,
         }
 
     def infer_domain(

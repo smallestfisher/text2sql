@@ -333,6 +333,7 @@ class QuestionClassifier:
             scores["follow_up"] += 0.45 if query_intent.has_follow_up_cue else 0.0
             scores["follow_up"] += 0.18 if strong_follow_up else 0.0
             scores["follow_up"] += 0.32 if explicit_update else 0.0
+            scores["follow_up"] += 0.30 if semantic_diff.get("context_dependent_detail_request") else 0.0
             scores["follow_up"] += 0.22 if semantic_diff.get("metrics_missing_but_context_resolvable") else 0.0
             scores["follow_up"] += 0.12 if semantic_diff.get("is_short_followup_fragment") else 0.0
             scores["follow_up"] += 0.10 if query_intent.subject_domain == "unknown" else 0.0
@@ -348,6 +349,7 @@ class QuestionClassifier:
             scores["new_related"] -= 0.18 if query_intent.has_follow_up_cue else 0.0
             scores["new_related"] -= 0.16 if explicit_update else 0.0
             scores["new_related"] -= 0.16 if semantic_diff.get("metrics_missing_but_context_resolvable") else 0.0
+            scores["new_related"] -= 0.24 if semantic_diff.get("context_dependent_detail_request") else 0.0
 
         if "new_unrelated" in scores:
             scores["new_unrelated"] += 0.62 if semantic_diff.get("domain_changed") else 0.0

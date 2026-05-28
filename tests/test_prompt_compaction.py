@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 
 from backend.app.models.classification import QueryIntent
-from backend.app.models.query_plan import FilterItem, QueryPlan
+from backend.app.models.query_plan import FilterItem, QueryPlan, TimeContext, TimeRange, VersionContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import SessionState
 from backend.app.models.api import ExecutionResponse
@@ -87,6 +87,25 @@ class EmptyIntentNoClassificationLLMClient:
 
     def check_question_relevance(self, prompt_payload, cancellation_token=None):
         return None
+
+
+class ContextEchoDetailLLMClient(EmptyIntentNoClassificationLLMClient):
+    def generate_intent(self, prompt_payload, cancellation_token=None):
+        self.intent_calls += 1
+        return {
+            "subject_domain": "demand",
+            "metrics": [],
+            "entities": ["stage_product"],
+            "dimensions": ["FGCODE"],
+            "filters": [],
+            "time_context": {
+                "grain": "month",
+                "range": {"start": "2026-05-01", "end": "2026-05-31"},
+            },
+            "version_context": {"field": "PM_VERSION", "value": "LATEST_N:1"},
+            "analysis_mode": "detail",
+            "confidence": 0.9,
+        }
 
 
 class PromptCompactionTests(unittest.TestCase):
@@ -507,6 +526,59 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertEqual(prompt["query_contract"]["metrics"], [])
         self.assertIn("FGCODE", prompt["shape_contract"]["required_projection"])
         self.assertIn("DISTINCT 去重", "\n".join(prompt["instructions"]["sql_preferences"]))
+
+    def test_detail_follow_up_inherits_context_when_llm_echoes_session_time_version(self) -> None:
+        llm_client = ContextEchoDetailLLMClient()
+        planner = QueryPlanner(
+            self.domain_config,
+            llm_client,
+            self.prompt_builder,
+            IntentService(llm_client, self.prompt_builder),
+            IntentNormalizer(self.semantic_runtime),
+            semantic_runtime=self.semantic_runtime,
+        )
+        session_state = SessionState(
+            session_id="sess_detail",
+            subject_domain="demand",
+            tables=["p_demand", "product_attributes"],
+            metrics=["product_count", "demand_qty"],
+            filters=[
+                FilterItem(field="source_table", op="=", value="p_demand"),
+                FilterItem(field="IS_OXIDE", op="=", value="Y"),
+                FilterItem(field="demand_month", op="=", value="202605"),
+                FilterItem(field="PM_VERSION", op="latest_n", value={"count": 1, "source_table": "p_demand"}),
+                FilterItem(field="demand_qty", op=">", value=0),
+            ],
+            time_context=TimeContext(
+                grain="month",
+                range=TimeRange(start="2026-05-01", end="2026-05-31"),
+            ),
+            version_context=VersionContext(field="PM_VERSION", value="LATEST_N:1"),
+        )
+
+        trace = planner.build_planning_trace(
+            question="对应的具体型号是什么",
+            session_state=session_state,
+        )
+        query_plan = planner.build_plan_from_intent(
+            query_intent=trace["query_intent"],
+            classification=trace["classification"],
+            session_state=session_state,
+        )
+
+        self.assertEqual(trace["classification"].question_type, "follow_up")
+        self.assertTrue(trace["classification"].inherit_context)
+        self.assertFalse(trace["query_intent"].has_follow_up_cue)
+        self.assertEqual(llm_client.classification_calls, 0)
+        self.assertTrue(trace["semantic_diff"]["context_dependent_detail_request"])
+        self.assertEqual(query_plan.metrics, [])
+        self.assertEqual(query_plan.tables, ["p_demand", "product_attributes"])
+        self.assertIn("FGCODE", query_plan.dimensions)
+        self.assertIn(FilterItem(field="source_table", op="=", value="p_demand"), query_plan.filters)
+        self.assertIn(FilterItem(field="IS_OXIDE", op="=", value="Y"), query_plan.filters)
+        self.assertIn(FilterItem(field="PM_VERSION", op="latest_n", value={"count": 1, "source_table": "p_demand"}), query_plan.filters)
+        self.assertIn(FilterItem(field="demand_qty", op=">", value=0), query_plan.filters)
+        self.assertNotIn("v_demand", query_plan.tables)
 
     def test_sql_prompt_includes_physical_time_filter_examples_for_plan_actual_compare(self) -> None:
         query_plan = QueryPlan(
