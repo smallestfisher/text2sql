@@ -51,36 +51,13 @@ class QueryPlanCompiler:
     ) -> QueryPlan:
         ordered_tables = list(query_plan.tables)
         existing_tables = set(ordered_tables)
-        metric_tables = {
-            table
-            for metric in query_plan.metrics
-            for table in self.semantic_runtime.metric_tables(metric)
-        }
-        allowed_domain_tables = (
-            set(self.semantic_runtime.domain_tables(query_plan.subject_domain))
-            if query_plan.subject_domain != "unknown"
-            else set()
-        )
 
         for hit in retrieval.hits[:4]:
             candidate_tables = self._hit_tables(hit)
             if not candidate_tables:
                 continue
-            candidate_tables = {
-                table
-                for table in candidate_tables
-                if self._table_allowed_by_retrieval_hint(
-                    table,
-                    metric_tables=metric_tables,
-                    allowed_domain_tables=allowed_domain_tables,
-                )
-            }
-            if not candidate_tables:
-                continue
 
             if hit.source_type == "join_pattern":
-                if existing_tables and not existing_tables.intersection(candidate_tables):
-                    continue
                 for table in candidate_tables:
                     if table not in existing_tables and self.semantic_runtime.is_known_table(table):
                         ordered_tables.append(table)
@@ -88,14 +65,18 @@ class QueryPlanCompiler:
                 continue
 
             if hit.source_type == "example":
-                if metric_tables and not metric_tables.intersection(candidate_tables):
-                    continue
-                if existing_tables and not existing_tables.intersection(candidate_tables):
+                if not existing_tables and hit.score < 2.0:
                     continue
                 for table in candidate_tables:
                     if table not in existing_tables and self.semantic_runtime.is_known_table(table):
                         ordered_tables.append(table)
                         existing_tables.add(table)
+
+            if hit.source_type == "knowledge" and hit.metadata.get("kind") == "table_metadata":
+                table = hit.metadata.get("table")
+                if isinstance(table, str) and table not in existing_tables and self.semantic_runtime.is_known_table(table):
+                    ordered_tables.append(table)
+                    existing_tables.add(table)
 
         return query_plan.model_copy(deep=True, update={"tables": ordered_tables})
 
@@ -113,18 +94,3 @@ class QueryPlanCompiler:
         if not isinstance(tables, list):
             return set()
         return {str(item) for item in tables if item}
-
-    def _table_allowed_by_retrieval_hint(
-        self,
-        table: str,
-        *,
-        metric_tables: set[str],
-        allowed_domain_tables: set[str],
-    ) -> bool:
-        if table in metric_tables:
-            return True
-        if table in {"product_attributes", "product_mapping"}:
-            return True
-        # Retrieval hints may introduce support/dimension tables, but should not
-        # automatically widen a single-domain fact query into an extra fact table.
-        return False

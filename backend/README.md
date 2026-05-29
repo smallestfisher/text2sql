@@ -45,7 +45,7 @@ LLM_MODEL="Qwen/Qwen3-14B"
 - `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索。
 - `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时同步预热向量索引。
 - `ENABLE_CHITCHAT_MODE=false`：控制闲聊回复能力。
-- `LLM_MAX_RETRIES`：首轮分类、intent、SQL 生成重试次数。
+- `LLM_MAX_RETRIES`：semantic bundle 和 SQL 首轮生成重试次数。
 - `SQL_REPAIR_MAX_RETRIES`：SQL repair fallback 独立重试次数。
 
 ## 数据库初始化

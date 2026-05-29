@@ -50,98 +50,42 @@ class LLMClient:
         self.sql_dialect = SqlDialect.from_name("oracle")
         self.client = None
         if api_key:
-            self.client = OpenAI(api_key=api_key, base_url=api_base)
+            self.client = OpenAI(api_key=api_key, base_url=api_base, max_retries=0)
 
     @property
     def enabled(self) -> bool:
         return self.client is not None
 
-    def generate_classification_hint(
+    def generate_question_context(
         self,
         prompt_payload: dict,
         cancellation_token: CancellationToken | None = None,
     ) -> dict:
-        self._require_enabled("classification generation")
+        self._require_enabled("question context generation")
 
         system_prompt = (
-            "你是一个用于 Text2SQL 会话分类的裁决模型。"
-            "不要脱离现有结构化候选从零随意重分类，而是根据 prompt 中给出的本地候选和证据做裁决。"
-            "你的任务是选出最连贯、最符合约束的分类；如果选择 follow_up，还要生成最小可执行的 context_delta。"
-            "只返回紧凑 JSON，不要输出 markdown 或额外解释。只能选择 prompt 明确允许的取值。"
-        )
-        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        self._record_metric("classification", "requests")
-        cache_key = self._cache_key("classification", messages)
-        cached = self._cache_get(cache_key)
-        if isinstance(cached, dict):
-            self._record_metric("classification", "cache_hits")
-            cached_response = deepcopy(cached)
-            cached_response["cache_hit"] = True
-            return cached_response
-        for attempt in range(1, self.max_retries + 1):
-            self._raise_if_cancelled(cancellation_token, stage="classification generation")
-            try:
-                content = self._complete(messages, task_name="classification")
-                self._raise_if_cancelled(cancellation_token, stage="classification generation")
-                parsed = self._extract_json(content)
-                if parsed:
-                    parsed["mode"] = "live"
-                    parsed["model"] = self.model_name
-                    parsed["attempt"] = attempt
-                    self._cache_put(cache_key, parsed)
-                    return parsed
-                if attempt < self.max_retries:
-                    messages.append({"role": "assistant", "content": content})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "只返回合法 JSON，并且只保留要求的字段。",
-                        }
-                    )
-            except Exception as exc:
-                if attempt >= self.max_retries:
-                    raise LLMServiceError(
-                        f"llm call failed during classification generation: {exc}"
-                    ) from exc
-                time.sleep(min(0.4 * attempt, 1.0))
-
-        raise LLMServiceError("llm returned invalid JSON during classification generation")
-
-    def generate_intent(
-        self,
-        prompt_payload: dict,
-        cancellation_token: CancellationToken | None = None,
-    ) -> dict:
-        self._require_enabled("intent generation")
-
-        system_prompt = (
-            "你是一个 Text2SQL 意图理解器。"
-            "基于 question、shallow_signals、session_focus 和 domain_hints，补全 prompt 要求的结构化 intent 字段。"
-            "不要输出分类阶段负责的 question_type 或 inherit_context。"
+            "你是 Text2SQL 系统的问题上下文整理器。"
+            "你只负责判断当前问题是否可回答、是否依赖上下文，并在追问时改写成完整自然语言问题。"
+            "不要生成 SQL，不要输出 metrics、dimensions、filters、contract_hint、calculation_contract。"
             "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
         )
-        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
         ]
-        self._record_metric("intent", "requests")
-        cache_key = self._cache_key("intent", messages)
+        self._record_metric("question_context", "requests")
+        cache_key = self._cache_key("question_context", messages)
         cached = self._cache_get(cache_key)
         if isinstance(cached, dict):
-            self._record_metric("intent", "cache_hits")
+            self._record_metric("question_context", "cache_hits")
             cached_response = deepcopy(cached)
             cached_response["cache_hit"] = True
             return cached_response
         for attempt in range(1, self.max_retries + 1):
-            self._raise_if_cancelled(cancellation_token, stage="intent generation")
+            self._raise_if_cancelled(cancellation_token, stage="question context generation")
             try:
-                content = self._complete(messages, task_name="intent")
-                self._raise_if_cancelled(cancellation_token, stage="intent generation")
+                content = self._complete(messages, task_name="question_context")
+                self._raise_if_cancelled(cancellation_token, stage="question context generation")
                 parsed = self._extract_json(content)
                 if parsed:
                     parsed["mode"] = "live"
@@ -160,66 +104,21 @@ class LLMClient:
             except Exception as exc:
                 if attempt >= self.max_retries:
                     raise LLMServiceError(
-                        f"llm call failed during intent generation: {exc}"
+                        f"llm call failed during question context generation: {exc}"
                     ) from exc
                 time.sleep(min(0.4 * attempt, 1.0))
 
-        raise LLMServiceError("llm returned invalid JSON during intent generation")
+        raise LLMServiceError("llm returned invalid JSON during question context generation")
 
-    def check_question_relevance(
+    def generate_semantic_bundle(
         self,
         prompt_payload: dict,
         cancellation_token: CancellationToken | None = None,
     ) -> dict:
-        self._require_enabled("relevance guard")
-
-        system_prompt = (
-            "你是一个 Text2SQL 系统的相关性守卫模型。"
-            "判断用户输入是否属于应该继续留在 SQL 工作流中的业务数据查询或业务追问。"
-            "如果它是业务数据请求，只是信息不完整，也应继续留在范围内。"
-            "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
+        return self.generate_question_context(
+            prompt_payload,
+            cancellation_token=cancellation_token,
         )
-        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        self._record_metric("relevance", "requests")
-        cache_key = self._cache_key("relevance", messages)
-        cached = self._cache_get(cache_key)
-        if isinstance(cached, dict):
-            self._record_metric("relevance", "cache_hits")
-            cached_response = deepcopy(cached)
-            cached_response["cache_hit"] = True
-            return cached_response
-        for attempt in range(1, self.max_retries + 1):
-            self._raise_if_cancelled(cancellation_token, stage="relevance guard")
-            try:
-                content = self._complete(messages, task_name="relevance")
-                self._raise_if_cancelled(cancellation_token, stage="relevance guard")
-                parsed = self._extract_json(content)
-                if parsed:
-                    parsed["mode"] = "live"
-                    parsed["model"] = self.model_name
-                    parsed["attempt"] = attempt
-                    self._cache_put(cache_key, parsed)
-                    return parsed
-                if attempt < self.max_retries:
-                    messages.append({"role": "assistant", "content": content})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "只返回合法 JSON，并且只保留要求的字段。",
-                        }
-                    )
-            except Exception as exc:
-                if attempt >= self.max_retries:
-                    raise LLMServiceError(
-                        f"llm call failed during relevance guard: {exc}"
-                    ) from exc
-                time.sleep(min(0.4 * attempt, 1.0))
-
-        raise LLMServiceError("llm returned invalid JSON during relevance guard")
 
     def generate_sql_hint(
         self,
@@ -290,8 +189,8 @@ class LLMClient:
         constraints = [
             "只能基于原始 prompt 上下文修复 SQL。",
             "精确返回一条只读 SELECT 或 WITH ... SELECT 语句。",
-            "必须继续满足 query_plan.tables、filters、dimensions、sort 和 limit 这些硬约束。",
-            "如果 errors 指出缺失 required dimensions，先修复最终外层 SELECT 和最终外层 GROUP BY 的 shape。",
+            "必须继续只使用原始 prompt 中 available_tables 提供的真实表和字段。",
+            "如果 errors 指出未知表、未知字段、方言错误或缺少行数限制，优先修复这些安全和物理 schema 问题。",
             "不要输出 markdown 或解释。",
             f"必须包含 {self.sql_dialect.result_limit_clause_name}。",
         ]
@@ -316,7 +215,7 @@ class LLMClient:
         system_prompt = (
             f"你负责修复 {self.sql_dialect.label} Text2SQL 的输出。"
             "只返回一条修正后的只读 SQL 语句。"
-            "优先保证最终外层 SELECT / GROUP BY 的输出 shape 与 query_plan.dimensions 一致。"
+            "优先保证 SQL 只使用原始 prompt 提供的真实表字段，并符合 Oracle 语法。"
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -337,8 +236,8 @@ class LLMClient:
                         {
                             "role": "user",
                             "content": (
-                                "精确返回一条合法的只读 SQL 语句。若缺少 required dimensions，"
-                                f"先补齐最终外层 SELECT 和 GROUP BY，并包含 {self.sql_dialect.result_limit_clause_name}。不要额外文字。"
+                                "精确返回一条合法的只读 SQL 语句，"
+                                f"只使用原始 prompt 的 available_tables，并包含 {self.sql_dialect.result_limit_clause_name}。不要额外文字。"
                             ),
                         }
                     )
@@ -459,16 +358,18 @@ class LLMClient:
                 elapsed_ms,
             )
             return content
-        except Exception:
+        except Exception as exc:
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             self._record_metric(task_name, "failures")
             self._record_metric(task_name, "elapsed_ms", elapsed_ms)
             logger.warning(
-                "timing stage=llm.complete model=%s messages=%s prompt_chars=%s status=failed elapsed_ms=%s",
+                "timing stage=llm.complete model=%s messages=%s prompt_chars=%s status=failed elapsed_ms=%s error_type=%s error=%s",
                 self.model_name,
                 len(messages),
                 prompt_chars,
                 elapsed_ms,
+                type(exc).__name__,
+                exc,
             )
             raise
 

@@ -167,17 +167,17 @@ def generate_sql(
         default_user_context=request.user_context,
     )
     query_plan = request.query_plan
-    plan_result = container.query_plan_validator.validate_detailed(
-        query_plan=query_plan,
-        domain_config=container.domain_config,
-    )
-    plan_errors = plan_result.errors
-    plan_warnings = plan_result.warnings
+    plan_errors: list[str] = []
+    plan_warnings: list[str] = []
     sql_prompt = None
     generated_sql = None
     skip_warning = _sql_skip_warning(query_plan)
-    if not plan_errors and skip_warning is None:
-        retrieval = container.retrieval_service.retrieve(_resolve_sql_generation_intent(request))
+    if skip_warning is None:
+        retrieval = container.retrieval_service.retrieve_text(
+            question=request.question or query_plan.semantic_brief or "",
+            semantic_brief=query_plan.semantic_brief,
+            conversation_summary=None,
+        )
         sql_prompt = container.prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question=request.question)
         generated_sql = container.llm_client.generate_sql_hint(sql_prompt)
     required_filter_fields: list[str] = []
@@ -187,13 +187,12 @@ def generate_sql(
     sql_risk_flags: list[str] = []
     if skip_warning is not None:
         sql_errors = [skip_warning]
-    if generated_sql is None and not plan_errors and skip_warning is None:
+    if generated_sql is None and skip_warning is None:
         sql_errors = ["sql is empty"]
     elif generated_sql is not None:
         sql_result = container.sql_validator.validate_detailed(
             generated_sql,
             container.domain_config,
-            query_plan=query_plan,
             required_filter_fields=required_filter_fields,
         )
         sql_errors = sql_result.errors
@@ -211,7 +210,6 @@ def generate_sql(
                 repaired_result = container.sql_validator.validate_detailed(
                     repaired_sql,
                     container.domain_config,
-                    query_plan=query_plan,
                     required_filter_fields=required_filter_fields,
                 )
                 if not repaired_result.errors:

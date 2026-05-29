@@ -19,21 +19,20 @@ from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.evaluation_service import EvaluationService
 from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.feedback_service import FeedbackService
-from backend.app.services.intent_service import IntentService
-from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
-from backend.app.services.query_plan_compiler import QueryPlanCompiler
+from backend.app.services.question_context_service import QuestionContextService
 from backend.app.services.query_plan_validator import QueryPlanValidator
 from backend.app.services.query_planner import QueryPlanner
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.runtime_admin_service import RuntimeAdminService
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.semantic_bundle_service import SemanticBundleService
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
 from backend.app.services.session_workspace_service import SessionWorkspaceService
@@ -120,25 +119,24 @@ class AppContainer:
             cache_ttl_seconds=self.settings.llm_cache_ttl_seconds,
             cache_max_entries=self.settings.llm_cache_max_entries,
         )
-        self.intent_service = IntentService(
+        self.semantic_bundle_service = SemanticBundleService(
             llm_client=self.llm_client,
             prompt_builder=self.prompt_builder,
         )
-        self.intent_normalizer = IntentNormalizer(self.semantic_runtime)
+        self.question_context_service = QuestionContextService(
+            llm_client=self.llm_client,
+            prompt_builder=self.prompt_builder,
+        )
         self.query_planner = QueryPlanner(
             domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
             llm_client=self.llm_client,
             prompt_builder=self.prompt_builder,
-            intent_service=self.intent_service,
-            intent_normalizer=self.intent_normalizer,
+            semantic_bundle_service=self.semantic_bundle_service,
+            question_context_service=self.question_context_service,
             enable_chitchat_mode=self.settings.enable_chitchat_mode,
         )
         self.query_plan_validator = QueryPlanValidator(semantic_runtime=self.semantic_runtime)
-        self.query_plan_compiler = QueryPlanCompiler(
-            semantic_runtime=self.semantic_runtime,
-            default_limit=self.settings.default_sql_limit,
-        )
         self.session_state_service = SessionStateService()
         self.execution_cache_service = ExecutionCacheService(
             ttl_seconds=self.settings.execution_cache_ttl_seconds,
@@ -223,8 +221,6 @@ class AppContainer:
 
         self.orchestrator = ConversationOrchestrator(
             query_planner=self.query_planner,
-            query_plan_validator=self.query_plan_validator,
-            query_plan_compiler=self.query_plan_compiler,
             session_state_service=self.session_state_service,
             sql_validator=self.sql_validator,
             sql_executor=self.sql_executor,

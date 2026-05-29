@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from backend.app.models.query_plan import QueryPlan
-from backend.app.models.session_state import SessionState
+from backend.app.models.query_plan import FilterItem, QueryPlan
+from backend.app.models.session_state import QueryTurnRecord, SessionState
 
 
 class SessionStateService:
@@ -11,10 +11,11 @@ class SessionStateService:
         self,
         query_plan: QueryPlan,
         previous_state: SessionState | None,
+        question: str | None = None,
         sql: str | None = None,
     ) -> SessionState:
         if previous_state is None or not query_plan.inherit_context:
-            return self._new_state(query_plan, sql, previous_state)
+            return self._new_state(query_plan, sql, previous_state, question)
 
         state = previous_state.model_copy(deep=True)
         state.topic = query_plan.subject_domain
@@ -62,6 +63,10 @@ class SessionStateService:
         state.last_query_plan = query_plan
         state.last_sql = sql
         state.last_result_shape = self._result_shape(query_plan)
+        state.last_semantic_brief = query_plan.semantic_brief
+        state.last_effective_question = question
+        state.recent_turns = self._append_turn(previous_state, query_plan, question)
+        state.conversation_summary = self._conversation_summary(state.recent_turns)
         return state
 
     def _new_state(
@@ -69,9 +74,10 @@ class SessionStateService:
         query_plan: QueryPlan,
         sql: str | None,
         previous_state: SessionState | None,
+        question: str | None,
     ) -> SessionState:
         session_id = previous_state.session_id if previous_state else "session_pending"
-        return SessionState(
+        state = SessionState(
             session_id=session_id,
             topic=query_plan.subject_domain,
             subject_domain=query_plan.subject_domain,
@@ -89,7 +95,12 @@ class SessionStateService:
             last_query_plan=query_plan,
             last_sql=sql,
             last_result_shape=self._result_shape(query_plan),
+            last_semantic_brief=query_plan.semantic_brief,
+            last_effective_question=question,
+            recent_turns=self._append_turn(previous_state, query_plan, question),
         )
+        state.conversation_summary = self._conversation_summary(state.recent_turns)
+        return state
 
     def _merge_filters(self, current_filters, new_filters, remove_fields=None):
         remove_fields = set(remove_fields or [])
@@ -111,3 +122,71 @@ class SessionStateService:
         if query_plan.metrics:
             return "metric_only"
         return "unknown"
+
+    def _append_turn(
+        self,
+        previous_state: SessionState | None,
+        query_plan: QueryPlan,
+        question: str | None,
+    ) -> list[QueryTurnRecord]:
+        turns = list(previous_state.recent_turns if previous_state else [])
+        turns.append(
+            QueryTurnRecord(
+                question=question,
+                effective_question=question,
+                summary=self._query_summary(query_plan),
+                semantic_brief=query_plan.semantic_brief,
+                query_contract={},
+            )
+        )
+        return turns[-4:]
+
+    def _conversation_summary(self, turns: list[QueryTurnRecord]) -> str:
+        lines: list[str] = []
+        for turn in turns[-4:]:
+            parts: list[str] = []
+            if turn.question:
+                parts.append(f"用户：{turn.question}")
+            if turn.effective_question and turn.effective_question != turn.question:
+                parts.append(f"改写后：{turn.effective_question}")
+            if turn.semantic_brief:
+                parts.append(f"摘要：{turn.semantic_brief}")
+            elif turn.summary:
+                parts.append(f"摘要：{turn.summary}")
+            if parts:
+                lines.append("；".join(parts))
+        return "\n".join(lines)
+
+    def _query_contract(self, query_plan: QueryPlan) -> dict:
+        return {
+            "question_type": query_plan.question_type,
+            "subject_domain": query_plan.subject_domain,
+            "tables": list(query_plan.tables),
+            "metrics": list(query_plan.metrics),
+            "dimensions": list(query_plan.dimensions),
+            "filters": [item.model_dump(mode="json") for item in query_plan.filters],
+            "time_context": query_plan.time_context.model_dump(mode="json"),
+            "version_context": query_plan.version_context.model_dump(mode="json") if query_plan.version_context else None,
+            "analysis_mode": query_plan.analysis_mode,
+            "sort": [item.model_dump(mode="json") for item in query_plan.sort],
+            "limit": query_plan.limit,
+            "semantic_brief": query_plan.semantic_brief,
+            "calculation_contract": dict(query_plan.calculation_contract),
+        }
+
+    def _query_summary(self, query_plan: QueryPlan) -> str:
+        parts = [query_plan.subject_domain]
+        if query_plan.metrics:
+            parts.append("metrics=" + ",".join(query_plan.metrics))
+        if query_plan.dimensions:
+            parts.append("by=" + ",".join(query_plan.dimensions))
+        filter_text = self._filter_summary(query_plan.filters)
+        if filter_text:
+            parts.append("filters=" + filter_text)
+        return " | ".join(parts)
+
+    def _filter_summary(self, filters: list[FilterItem]) -> str:
+        values = []
+        for item in filters[:8]:
+            values.append(f"{item.field}{item.op}{item.value}")
+        return ",".join(values)

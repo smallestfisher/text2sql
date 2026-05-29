@@ -20,10 +20,6 @@
         "actual_input_panel_qty",
         "actual_output_qty",
         "actual_output_panel_qty",
-        "input_gap_qty",
-        "input_panel_gap_qty",
-        "input_achievement_rate",
-        "input_panel_achievement_rate",
         "defect_qty"
       ],
       "field_aliases": {
@@ -77,22 +73,6 @@
           "GLS_qty"
         ],
         "actual_output_panel_qty": [
-          "Panel_qty"
-        ],
-        "input_gap_qty": [
-          "target_IN_glass_qty",
-          "GLS_qty"
-        ],
-        "input_panel_gap_qty": [
-          "target_IN_panel_qty",
-          "Panel_qty"
-        ],
-        "input_achievement_rate": [
-          "target_IN_glass_qty",
-          "GLS_qty"
-        ],
-        "input_panel_achievement_rate": [
-          "target_IN_panel_qty",
           "Panel_qty"
         ],
         "defect_qty": [

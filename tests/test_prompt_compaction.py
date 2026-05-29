@@ -4,18 +4,15 @@ import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from backend.app.models.classification import QueryIntent
 from backend.app.models.query_plan import FilterItem, QueryPlan, TimeContext, TimeRange, VersionContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
-from backend.app.models.session_state import SessionState
+from backend.app.models.session_state import QueryTurnRecord, SessionState
 from backend.app.models.api import ExecutionResponse
 from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.metadata_service import MetadataService
 from backend.app.services.intent_normalizer import IntentNormalizer
-from backend.app.services.intent_service import IntentService
 from backend.app.services.orchestrator import ConversationOrchestrator
-from backend.app.services.question_classifier import QuestionClassifier
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.prompt_builder import PromptBuilder
@@ -47,64 +44,50 @@ class StaticExampleRegistry:
 
 class CountingLLMClient:
     def __init__(self) -> None:
-        self.intent_calls = 0
-        self.classification_calls = 0
-
-    def generate_intent(self, prompt_payload, cancellation_token=None):
-        self.intent_calls += 1
-        return {
-            "subject_domain": "inventory",
-            "metrics": ["inventory_qty"],
-            "confidence": 0.8,
-        }
-
-    def generate_classification_hint(self, prompt_payload, cancellation_token=None):
-        self.classification_calls += 1
-        return {
-            "question_type": "follow_up",
-            "subject_domain": "inventory",
-            "inherit_context": True,
-            "confidence": 0.8,
-            "context_delta": {"replace_metrics": ["inventory_qty"]},
-        }
-
-    def check_question_relevance(self, prompt_payload, cancellation_token=None):
-        return None
+        self.enabled = True
 
 
-class EmptyIntentNoClassificationLLMClient:
+class SemanticBundleDetailLLMClient:
     def __init__(self) -> None:
-        self.intent_calls = 0
-        self.classification_calls = 0
+        self.enabled = True
 
-    def generate_intent(self, prompt_payload, cancellation_token=None):
-        self.intent_calls += 1
-        return {}
-
-    def generate_classification_hint(self, prompt_payload, cancellation_token=None):
-        self.classification_calls += 1
-        raise AssertionError("classification LLM should not run for clear detail follow-up")
-
-    def check_question_relevance(self, prompt_payload, cancellation_token=None):
-        return None
-
-
-class ContextEchoDetailLLMClient(EmptyIntentNoClassificationLLMClient):
-    def generate_intent(self, prompt_payload, cancellation_token=None):
-        self.intent_calls += 1
+    def generate_semantic_bundle(self, prompt_payload, cancellation_token=None):
+        latest_contract = prompt_payload.get("latest_query_contract", {})
         return {
+            "decision": "answerable",
             "subject_domain": "demand",
-            "metrics": [],
-            "entities": ["stage_product"],
-            "dimensions": ["FGCODE"],
-            "filters": [],
-            "time_context": {
-                "grain": "month",
-                "range": {"start": "2026-05-01", "end": "2026-05-31"},
+            "user_intent": "给出上一轮这些产品的具体型号。",
+            "semantic_brief": "查询上一轮需求产品集合的具体型号列表，沿用上一轮来源、产品属性、月份和需求量过滤条件。",
+            "knowledge_brief": "具体型号使用FGCODE维度，明细查询不保留产品数量聚合指标。",
+            "contract_hint": {
+                "metrics": [],
+                "entities": ["stage_product"],
+                "dimensions": ["FGCODE"],
+                "filters": latest_contract.get("filters", []),
+                "analysis_mode": "detail",
             },
-            "version_context": {"field": "PM_VERSION", "value": "LATEST_N:1"},
-            "analysis_mode": "detail",
-            "confidence": 0.9,
+        }
+
+
+class ContextEchoDetailLLMClient(SemanticBundleDetailLLMClient):
+    def generate_semantic_bundle(self, prompt_payload, cancellation_token=None):
+        latest_contract = prompt_payload.get("latest_query_contract", {})
+        filters = latest_contract.get("filters", [])
+        return {
+            "decision": "answerable",
+            "subject_domain": "demand",
+            "user_intent": "给出上一轮结果对应的具体型号。",
+            "semantic_brief": "查询上一轮需求产品集合对应的具体型号，沿用月份、版本、产品属性和需求量过滤条件。",
+            "knowledge_brief": "具体型号使用FGCODE维度，按明细去重展示。",
+            "contract_hint": {
+                "metrics": [],
+                "entities": ["stage_product"],
+                "dimensions": ["FGCODE"],
+                "filters": filters,
+                "time_context": latest_contract.get("time_context"),
+                "version_context": latest_contract.get("version_context"),
+                "analysis_mode": "detail",
+            },
         }
 
 
@@ -116,183 +99,61 @@ class PromptCompactionTests(unittest.TestCase):
         cls.semantic_runtime = SemanticRuntime(domain_config)
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
 
-    def test_classification_prompt_omits_full_intent_and_session_payloads(self) -> None:
-        query_intent = QueryIntent(
-            normalized_question="继续按客户拆分",
-            matched_metrics=["inventory_qty"],
-            requested_dimensions=["customer"],
-            filters=[FilterItem(field="biz_month", op="=", value="202604")],
-            subject_domain="inventory",
-            has_follow_up_cue=True,
-        )
+    def test_semantic_bundle_prompt_uses_conversation_brief_and_table_metadata(self) -> None:
         session_state = SessionState(
-            session_id="sess_1",
-            subject_domain="inventory",
-            metrics=["inventory_qty"],
+            session_id="sess_rewrite_brief",
+            subject_domain="plan_actual",
+            tables=["production_actuals", "product_attributes"],
+            metrics=["actual_input_qty"],
             dimensions=["biz_month"],
-            filters=[FilterItem(field="source_table", op="=", value="oms_inventory")],
+            last_semantic_brief="查询actual_input_qty；业务域是计划实际；按biz_month展示；条件为factory=ARRAY、IS_OXIDE=Y。",
+            recent_turns=[
+                QueryTurnRecord(
+                    question="2026年Array工厂Oxide类产品，每个月分别投入多少物量",
+                    semantic_brief="查询actual_input_qty；业务域是计划实际；按biz_month展示；条件为factory=ARRAY、IS_OXIDE=Y。",
+                    query_contract={
+                        "subject_domain": "plan_actual",
+                        "tables": ["production_actuals", "product_attributes"],
+                        "metrics": ["actual_input_qty"],
+                    },
+                )
+            ],
         )
 
-        prompt = self.prompt_builder.build_classification_prompt(
-            question="继续按客户拆分",
-            query_intent=query_intent,
+        prompt = self.prompt_builder.build_semantic_bundle_prompt(
+            original_question="XPS呢",
+            effective_question="XPS呢",
             session_state=session_state,
-            semantic_diff={"only_updates_filters": False, "can_execute_without_context": False},
-            base_classification={"question_type": "follow_up", "subject_domain": "inventory"},
-            allowed_question_types=["follow_up", "new_related", "clarification_needed"],
-            candidate_scores={"follow_up": 0.82, "new_related": 0.31},
-            arbitration_context={"needs_arbitration": False, "baseline_classification": {}},
+            parser_signals={"subject_domain": "plan_actual"},
         )
 
-        self.assertNotIn("query_intent", prompt)
-        self.assertNotIn("session_state", prompt)
-        self.assertNotIn("session_semantic_diff", prompt)
-        self.assertIn("classification_evidence", prompt)
-        self.assertNotIn("baseline_classification", prompt["arbitration_context"])
-        self.assertLessEqual(len(prompt["instructions"]["context_delta_examples"]), 2)
+        self.assertIn("conversation_brief", prompt)
+        self.assertIn("Oxide", prompt["conversation_brief"])
+        self.assertIn("product_attributes", prompt["knowledge_context"]["table_fields"])
+        table_fields = "\n".join(prompt["knowledge_context"]["table_fields"]["product_attributes"])
+        self.assertIn("IS_XPS", table_fields)
+        self.assertIn("IS_OXIDE", table_fields)
 
-    def test_classification_prompt_drops_follow_up_assets_when_not_allowed(self) -> None:
-        query_intent = QueryIntent(
-            normalized_question="查询2026年4月库存",
-            matched_metrics=["inventory_qty"],
-            subject_domain="inventory",
-        )
-
-        prompt = self.prompt_builder.build_classification_prompt(
-            question="查询2026年4月库存",
-            query_intent=query_intent,
-            session_state=SessionState(session_id="sess_1", subject_domain="demand"),
-            semantic_diff={"domain_changed": True},
-            base_classification={"question_type": "new_unrelated", "subject_domain": "inventory"},
-            allowed_question_types=["new_unrelated", "clarification_needed"],
-        )
-
-        self.assertNotIn("context_delta_field_guide", prompt["instructions"])
-        self.assertNotIn("context_delta_rules", prompt["instructions"])
-        self.assertNotIn("context_delta_examples", prompt["instructions"])
-        self.assertNotIn("business_few_shots", prompt["instructions"])
-
-    def test_intent_prompt_uses_compact_signals_and_reduced_output_fields(self) -> None:
-        query_intent = QueryIntent(
-            normalized_question="最新P版，2026年5月Oxide产品数量是多少",
-            matched_metrics=["product_count", "demand_qty"],
-            requested_dimensions=["biz_month"],
-            filters=[FilterItem(field="PM_VERSION", op="latest_n", value={"count": 1, "source_table": "p_demand"})],
-            subject_domain="demand",
-            has_follow_up_cue=False,
-            has_explicit_slots=True,
-        )
-        session_state = SessionState(
-            session_id="sess_2",
-            subject_domain="demand",
-            metrics=["product_count", "demand_qty"],
+    def test_sql_prompt_includes_semantic_brief(self) -> None:
+        query_plan = QueryPlan(
+            question_type="new",
+            subject_domain="plan_actual",
+            tables=["production_actuals", "product_attributes"],
+            metrics=["actual_input_qty"],
             dimensions=["biz_month"],
-            filters=[FilterItem(field="source_table", op="=", value="p_demand")],
-            last_question_type="new",
+            filters=[FilterItem(field="IS_XPS", op="=", value="Y")],
+            semantic_brief="查询XPS类产品的actual_input_qty，并按biz_month展示。",
         )
 
-        prompt = self.prompt_builder.build_intent_prompt(
-            question="最新P版，2026年5月Oxide产品数量是多少",
-            query_intent=query_intent,
-            session_state=session_state,
-        )
+        prompt = self.prompt_builder.build_sql_prompt(query_plan, question="2026年Array工厂XPS类产品，每个月分别投入多少物量")
 
-        self.assertIn("shallow_signals", prompt)
-        self.assertIn("session_focus", prompt)
-        self.assertNotIn("shallow_parse", prompt)
-        self.assertNotIn("session_state", prompt)
-        self.assertNotIn("business_few_shots", prompt["instructions"])
-        self.assertNotIn("question_type", prompt["instructions"]["fields"])
-        self.assertNotIn("inherit_context", prompt["instructions"]["fields"])
-        self.assertLessEqual(len(prompt["domain_hints"]["domain_fields"]), 25)
-        self.assertEqual(prompt["business_knowledge"], "")
-        self.assertEqual(prompt["domain_hints"]["focus_tables"][0], "p_demand")
-        self.assertIn("product_attributes", prompt["domain_hints"]["focus_tables"])
-        self.assertIn("product_ID", prompt["domain_hints"]["domain_fields"])
-        self.assertIn("PM_VERSION", prompt["domain_hints"]["domain_fields"])
+        self.assertEqual(prompt["semantic_brief"], query_plan.semantic_brief)
+        self.assertEqual(prompt["query_contract"]["semantic_brief"], query_plan.semantic_brief)
 
-    def test_intent_prompt_hides_supported_domains_when_domain_is_known(self) -> None:
-        query_intent = QueryIntent(
-            normalized_question="查询2026年4月库存",
-            matched_metrics=["inventory_qty"],
-            subject_domain="inventory",
-        )
-
-        prompt = self.prompt_builder.build_intent_prompt(
-            question="查询2026年4月库存",
-            query_intent=query_intent,
-            session_state=None,
-        )
-
-        self.assertEqual(prompt["domain_hints"]["supported_domains"], [])
-
-    def test_prompt_assets_are_aligned_with_compact_contracts(self) -> None:
+    def test_prompt_assets_keep_only_sql_generation_assets(self) -> None:
         assets = self.prompt_builder._prompt_assets()
 
-        classification_constraints = "\n".join(assets["classification"]["constraints"])
-        intent_constraints = "\n".join(assets["intent_understanding"]["constraints"])
-
-        self.assertNotIn("query_intent", classification_constraints)
-        self.assertNotIn("session_semantic_diff", classification_constraints)
-        self.assertIn("classification_evidence", classification_constraints)
-        self.assertNotIn("shallow_parse", intent_constraints)
-        self.assertIn("shallow_signals", intent_constraints)
-        self.assertNotIn("question_type", assets["intent_understanding"]["fields"])
-        self.assertNotIn("inherit_context", assets["intent_understanding"]["fields"])
-    def test_intent_service_skips_llm_for_clear_parser_intent_without_session(self) -> None:
-        llm_client = CountingLLMClient()
-        service = IntentService(llm_client, self.prompt_builder)
-        query_intent = QueryIntent(
-            normalized_question="查询2026年4月库存",
-            matched_metrics=["inventory_qty"],
-            filters=[FilterItem(field="biz_month", op="=", value="202604")],
-            subject_domain="inventory",
-            has_explicit_slots=True,
-        )
-
-        result = service.generate_intent(
-            question="查询2026年4月库存",
-            query_intent=query_intent,
-            session_state=None,
-        )
-
-        self.assertEqual(result["status"], "skipped")
-        self.assertEqual(result["raw"]["mode"], "parser_shortcut")
-        self.assertEqual(result["intent"].source, "parser")
-        self.assertEqual(llm_client.intent_calls, 0)
-
-    def test_classifier_skips_llm_for_high_confidence_baseline(self) -> None:
-        llm_client = CountingLLMClient()
-        classifier = QuestionClassifier(
-            semantic_runtime=self.prompt_builder.semantic_runtime,
-            llm_client=llm_client,
-            prompt_builder=self.prompt_builder,
-        )
-        query_intent = QueryIntent(
-            normalized_question="查询2026年4月库存",
-            matched_metrics=["inventory_qty"],
-            filters=[FilterItem(field="biz_month", op="=", value="202604")],
-            subject_domain="inventory",
-            has_explicit_slots=True,
-        )
-        session_state = SessionState(
-            session_id="sess_1",
-            subject_domain="demand",
-            metrics=["demand_qty"],
-        )
-
-        classification, warnings = classifier.classify(
-            question="查询2026年4月库存",
-            query_intent=query_intent,
-            session_state=session_state,
-        )
-
-        self.assertEqual(classification.question_type, "new_unrelated")
-        self.assertEqual(classification.subject_domain, "inventory")
-        self.assertEqual(classifier.last_debug_info()["decision_source"], "baseline_high_confidence")
-        self.assertEqual(classifier.last_debug_info()["llm_skipped_reason"], "baseline_high_confidence")
-        self.assertEqual(llm_client.classification_calls, 0)
-        self.assertEqual(warnings, [])
+        self.assertEqual(sorted(assets.keys()), ["sql_generation"])
 
     def test_orchestrator_validation_repair_gate_only_allows_repairable_errors(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
@@ -433,8 +294,24 @@ class PromptCompactionTests(unittest.TestCase):
             limit=50,
         )
 
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="demand_latest_p_202605_oxide_product_count_001",
+                    score=5.0,
+                    summary="latest P demand oxide product count example",
+                    matched_features=[
+                        "metrics:product_count,demand_qty",
+                        "filters:PM_VERSION,biz_month,demand_qty",
+                    ],
+                )
+            ]
+        )
+
         prompt = self.prompt_builder.build_sql_prompt(
             query_plan,
+            retrieval=retrieval,
             question="最新P版，2026年5月Oxide产品数量是多少",
         )
 
@@ -448,20 +325,25 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn("IS_OXIDE", attributes_schema_text)
         self.assertIn("Y=是，N=否", attributes_schema_text)
         self.assertIn("IS_xxx 字段使用 Y/N 标记", prompt["business_notes"])
+        self.assertIn("目标需求月份仍然必须基于横表展开后的 demand_month 过滤", prompt["business_notes"])
+        self.assertIn("目标需求月份不能简单理解成 base MONTH 本身", prompt["business_notes"])
         filter_resolution = prompt["field_resolution"]["filters"]["biz_month"]
-        self.assertIn("p_demand.MONTH", filter_resolution["physical_candidates"])
-        self.assertIn("先在 CTE 中把 p_demand/v_demand 横表展开为 demand_month", filter_resolution["filter_examples"][0])
-        self.assertNotIn("p_demand.MONTH = '202605'", "\n".join(filter_resolution["filter_examples"]))
+        self.assertIn("p_demand.MONTH", filter_resolution)
+        self.assertNotIn("先在 CTE 中把 p_demand/v_demand 横表展开为 demand_month", str(filter_resolution))
+        self.assertNotIn("p_demand.MONTH = '202605'", str(filter_resolution))
         demand_qty_resolution = prompt["field_resolution"]["filters"]["demand_qty"]
-        self.assertIn("NVL(demand_qty, 0) > 0", demand_qty_resolution["filter_examples"][0])
+        self.assertNotIn("NVL(demand_qty, 0) > 0", str(demand_qty_resolution))
+        examples = prompt["instructions"]["few_shot"]["retrieved_examples"]
+        self.assertEqual(examples[0]["id"], "demand_latest_p_202605_oxide_product_count_001")
+        self.assertIn("demand_unpivot", examples[0]["sql"])
+        self.assertIn("NVL(demand_unpivot.demand_qty, 0) > 0", examples[0]["sql"])
 
     def test_demand_product_count_question_also_requests_total_demand(self) -> None:
-        llm_client = EmptyIntentNoClassificationLLMClient()
+        llm_client = SemanticBundleDetailLLMClient()
         planner = QueryPlanner(
             self.domain_config,
             llm_client,
             self.prompt_builder,
-            IntentService(llm_client, self.prompt_builder),
             IntentNormalizer(self.semantic_runtime),
             semantic_runtime=self.semantic_runtime,
         )
@@ -478,12 +360,11 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn(FilterItem(field="demand_qty", op=">", value=0), query_plan.filters)
 
     def test_detail_follow_up_replaces_product_count_with_product_model_list(self) -> None:
-        llm_client = EmptyIntentNoClassificationLLMClient()
+        llm_client = SemanticBundleDetailLLMClient()
         planner = QueryPlanner(
             self.domain_config,
             llm_client,
             self.prompt_builder,
-            IntentService(llm_client, self.prompt_builder),
             IntentNormalizer(self.semantic_runtime),
             semantic_runtime=self.semantic_runtime,
         )
@@ -508,10 +389,12 @@ class PromptCompactionTests(unittest.TestCase):
             query_intent=trace["query_intent"],
             classification=trace["classification"],
             session_state=session_state,
+            semantic_bundle=trace["semantic_bundle"],
         )
 
-        self.assertEqual(trace["classification"].question_type, "follow_up")
-        self.assertEqual(llm_client.classification_calls, 0)
+        self.assertEqual(trace["classification"].question_type, "new")
+        self.assertEqual(trace["semantic_bundle"].decision, "answerable")
+        self.assertEqual(trace["contract_compilation"]["source"], "semantic_bundle_contract_hint")
         self.assertEqual(query_plan.analysis_mode, "detail")
         self.assertEqual(query_plan.metrics, [])
         self.assertIn("FGCODE", query_plan.dimensions)
@@ -536,7 +419,6 @@ class PromptCompactionTests(unittest.TestCase):
             self.domain_config,
             llm_client,
             self.prompt_builder,
-            IntentService(llm_client, self.prompt_builder),
             IntentNormalizer(self.semantic_runtime),
             semantic_runtime=self.semantic_runtime,
         )
@@ -567,13 +449,14 @@ class PromptCompactionTests(unittest.TestCase):
             query_intent=trace["query_intent"],
             classification=trace["classification"],
             session_state=session_state,
+            semantic_bundle=trace["semantic_bundle"],
         )
 
-        self.assertEqual(trace["classification"].question_type, "follow_up")
-        self.assertTrue(trace["classification"].inherit_context)
+        self.assertEqual(trace["classification"].question_type, "new")
+        self.assertFalse(trace["classification"].inherit_context)
         self.assertFalse(trace["query_intent"].has_follow_up_cue)
-        self.assertEqual(llm_client.classification_calls, 0)
-        self.assertTrue(trace["semantic_diff"]["context_dependent_detail_request"])
+        self.assertEqual(trace["semantic_bundle"].decision, "answerable")
+        self.assertEqual(trace["contract_compilation"]["source"], "semantic_bundle_contract_hint")
         self.assertEqual(query_plan.metrics, [])
         self.assertEqual(query_plan.tables, ["p_demand", "product_attributes"])
         self.assertIn("FGCODE", query_plan.dimensions)

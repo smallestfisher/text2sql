@@ -7,6 +7,7 @@ from .answer import AnswerPayload
 from .auth import UserContext
 from .classification import QuestionClassification, QueryIntent
 from .query_plan import QueryPlan
+from .question_context import QuestionContext
 from .retrieval import RetrievalContext
 from .session_state import SessionState
 from .trace import TraceRecord
@@ -99,6 +100,7 @@ class ExecutionResponse(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    question_context: QuestionContext | None = None
     classification: QuestionClassification
     query_intent: QueryIntent
     retrieval: RetrievalContext | None = None

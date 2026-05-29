@@ -10,7 +10,7 @@ LLM-first Text2SQL 工程：用户用自然语言提问，系统基于真实表�
 - Oracle SQL 生成、repair、`sqlglot` 解析和 validator 都固定使用 Oracle 规则。
 - MySQL runtime 保存用户、会话、trace、query log、SQL audit、feedback、eval 和 retrieval corpus。
 - LLM、`sqlglot`、业务库、runtime 库、metadata 文件都是启动时 fail-fast 依赖。
-- 准确率问题优先修语义资产、业务知识、retrieval、prompt 和 validator，不回退到本地 SQL 模板分支。
+- 准确率问题优先修样例、业务知识、表结构说明、retrieval、prompt 和 validator，不回退到本地 SQL 模板分支。
 
 ## 快速启动
 
@@ -136,7 +136,7 @@ OPENAI_API_BASE="https://api.siliconflow.cn/v1"
 - `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索，默认开启。
 - `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时同步预热向量索引。
 - `ENABLE_CHITCHAT_MODE=false`：默认关闭闲聊回复。
-- `LLM_MAX_RETRIES`：首轮分类、intent、SQL 生成重试次数。
+- `LLM_MAX_RETRIES`：semantic bundle 和 SQL 首轮生成重试次数。
 - `SQL_REPAIR_MAX_RETRIES`：SQL repair fallback 独立重试次数。
 
 完整后端配置见 [backend/README.md](backend/README.md)。
@@ -163,4 +163,4 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 - 事实型说明只放在当前文档；阶段性计划过期后直接删除。
 - 根 README 只保留启动、配置和导航，不承载架构细节。
 - API 和后端运行细节放 `backend/README.md`。
-- 准确率问题优先修 `semantic/`、`examples/`、retrieval、prompt 和 validator。
+- 准确率问题优先修 `examples/`、`semantic/business_knowledge.json`、`semantic/tables.json`、retrieval、prompt 和 validator。

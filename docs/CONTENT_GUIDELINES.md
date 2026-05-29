@@ -25,7 +25,7 @@
 - 只是补充某个字段含义、同义词或表选择规则。
 - SQL 还没有被执行或人工验过。
 - 问题只覆盖一次性口径，后续不希望模型泛化。
-- 需要更新的是表结构、字段说明、指标定义或维度边界；这类内容优先改 `semantic/tables.json` 或 `semantic/domain_config/*`。
+- 需要更新的是真实表结构、字段说明或字段存储格式；这类内容优先改 `semantic/tables.json`。
 
 ### 1.2 写入知识库
 
@@ -40,7 +40,7 @@
 
 不适合写知识库的情况：
 
-- 规则已经属于指标、维度、实体或字段语义定义，应放到 `semantic/domain_config/*`。
+- 规则必须依赖完整 SQL 结构才能说清楚，应写样例；能用自然语言稳定描述的业务口径优先写知识库。
 - 规则只有在一个完整 SQL 结构里才说得清楚，应写样例。
 - 内容只是排查记录、历史原因或人的备忘；这类信息不会稳定帮助 SQL 生成。
 
@@ -72,8 +72,8 @@
 - `question`：写真实用户会问的自然语言，不要写成开发者说明或 SQL 需求说明。
 - `sql`：必须是单条 Oracle 只读 `SELECT` 或 `WITH ... SELECT`。不要写 DDL、DML、多语句、临时表创建或过程调用。
 - `subject_domain`：使用已存在的业务域，例如 `demand`、`inventory`、`plan_actual`、`sales_financial`。
-- `metrics`：使用语义配置中已有或准备维护的指标名，不要临时造一个只在样例里出现的名称。
-- `dimensions`：使用逻辑维度名，例如 `biz_month`、`factory`、`common_categories`；不要把 CTE 里的临时别名当成长期维度。
+- `metrics`：写检索友好的指标或口径标签，优先使用已有名称；不要为了样例临时制造复杂结构化指标体系。
+- `dimensions`：写检索友好的维度或输出粒度标签，例如 `biz_month`、`factory`、`common_categories`；不要把 CTE 里的临时别名当成长期维度。
 - `tags`：写检索友好的短标签，优先放表名、关键业务词、SQL 形态和风险点，例如 `horizontal_table`、`latest_version`、`aggregate_then_join`。
 - `result_shape`：当输出形态对模型有约束时填写，例如 `metric_only`、`single_row_age_bucket_distribution`、`biz_month,factory`。
 - `notes`：只写会影响 SQL 生成的短提醒，不写排查历史、长篇解释或无关背景。
@@ -145,7 +145,7 @@
 ## 4. 维护流程
 
 1. 从真实失败问题开始，看 trace、retrieval、prompt 和 SQL audit，确认失败原因。
-2. 按第 1 节判断修改目标：样例、知识库、语义配置、join pattern 或 eval case。
+2. 按第 1 节判断修改目标：样例、知识库、表结构说明、join pattern 或 eval case。
 3. 编辑 JSON 时保持格式稳定，不做无关排序或大面积重排。
 4. 修改后执行语义配置检查：
 

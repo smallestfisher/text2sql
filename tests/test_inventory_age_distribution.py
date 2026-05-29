@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from backend.app.models.classification import QueryIntent
 from backend.app.models.intent import StructuredIntent
 from backend.app.models.query_plan import FilterItem, QueryPlan
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.intent_normalizer import IntentNormalizer
-from backend.app.services.intent_service import IntentService
-from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -23,7 +20,6 @@ class InventoryAgeDistributionTests(unittest.TestCase):
         cls.semantic_runtime = SemanticRuntime(domain_config)
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
         cls.intent_normalizer = IntentNormalizer(cls.semantic_runtime)
-        cls.intent_service = IntentService(LLMClient(), cls.prompt_builder)
 
     def test_intent_normalizer_preserves_distribution_mode(self) -> None:
         intent = StructuredIntent(
@@ -40,28 +36,23 @@ class InventoryAgeDistributionTests(unittest.TestCase):
 
         self.assertEqual(normalized["intent"].analysis_mode, "distribution")
 
-    def test_intent_prompt_contains_generic_dimension_and_latest_guidance(self) -> None:
-        query_intent = QueryIntent(
-            normalized_question=QUESTION.lower(),
-            matched_metrics=["inventory_qty"],
-            matched_entities=[],
-            requested_dimensions=[],
-            filters=[FilterItem(field="source_table", op="=", value="oms_inventory")],
-            subject_domain="inventory",
-            analysis_mode="distribution",
-            has_explicit_slots=True,
-        )
-
-        prompt = self.prompt_builder.build_intent_prompt(
-            question=QUESTION,
-            query_intent=query_intent,
+    def test_semantic_bundle_prompt_contains_generic_dimension_and_latest_guidance(self) -> None:
+        prompt = self.prompt_builder.build_semantic_bundle_prompt(
+            original_question=QUESTION,
+            effective_question=QUESTION,
             session_state=None,
+            parser_signals={
+                "subject_domain": "inventory",
+                "matched_metrics": ["inventory_qty"],
+                "filters": [{"field": "source_table", "op": "=", "value": "oms_inventory"}],
+                "filter_fields": ["source_table"],
+                "analysis_mode": "distribution",
+            },
         )
         constraints = "\n".join(prompt["instructions"]["constraints"])
-        business_knowledge = prompt["business_knowledge"]
+        business_knowledge = prompt["knowledge_context"]["business_knowledge"]
 
         self.assertIn("不要因为“分布”“情况”“统计”就自行补", constraints)
-        self.assertIn("biz_month", constraints)
         self.assertIn("不要自行追加 common_categories", business_knowledge)
         self.assertIn("默认取 oms_inventory.report_month 的最新月份", business_knowledge)
         self.assertIn("<3M = ONE_AGE_panel_qty + TWO_AGE_panel_qty + THREE_AGE_panel_qty", business_knowledge)

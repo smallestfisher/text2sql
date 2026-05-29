@@ -15,6 +15,7 @@ class StructuredIntent(BaseModel):
     source: IntentSource
     normalized_question: str
     subject_domain: SubjectDomain = "unknown"
+    tables: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
@@ -64,6 +65,7 @@ class StructuredIntent(BaseModel):
             source="llm",
             normalized_question=normalized_question,
             subject_domain=cls._parse_subject_domain(payload.get("subject_domain")),
+            tables=cls._parse_string_list(payload.get("tables"), field_name="tables"),
             metrics=cls._parse_string_list(payload.get("metrics"), field_name="metrics"),
             entities=cls._parse_string_list(payload.get("entities"), field_name="entities"),
             dimensions=cls._parse_string_list(payload.get("dimensions"), field_name="dimensions"),

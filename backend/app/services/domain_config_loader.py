@@ -5,18 +5,42 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from backend.app.config import DOMAIN_CONFIG_PATH
+from backend.app.config import TABLES_METADATA_PATH
 
 
 class DomainConfigLoader:
-    """Loads the semantic config manifest and merges included fragments."""
+    """Builds the minimal runtime schema boundary from table metadata.
 
-    def __init__(self, domain_config_path=DOMAIN_CONFIG_PATH) -> None:
-        self.domain_config_path = domain_config_path
+    The Text2SQL main path no longer loads structured business semantics from
+    semantic/domain_config/*. Business meaning is supplied as text through
+    business_knowledge, examples and join_patterns; this loader only exposes the
+    physical table boundary still needed by SQL validation and legacy admin
+    summaries during the migration.
+    """
+
+    def __init__(self, tables_metadata_path=TABLES_METADATA_PATH) -> None:
+        self.tables_metadata_path = tables_metadata_path
 
     @lru_cache(maxsize=1)
     def load(self) -> dict[str, Any]:
-        return self._load_document(self.domain_config_path, visited=())
+        tables_metadata = self._load_tables_metadata()
+        table_names = list(tables_metadata.keys())
+        return {
+            "version": "text-context-schema-boundary",
+            "domains": [],
+            "entities": [],
+            "metrics": [],
+            "query_profiles": {},
+            "question_understanding": {},
+            "domain_inference": {},
+            "field_semantics": [],
+            "extractors": {},
+            "prompt_assets": {},
+            "semantic_graph": {
+                "nodes": table_names,
+                "edges": self._relationship_edges(tables_metadata),
+            },
+        }
 
     def summary(self) -> dict[str, Any]:
         domain_config = self.load()
@@ -29,6 +53,43 @@ class DomainConfigLoader:
                 node for node in domain_config.get("semantic_graph", {}).get("nodes", [])
             ],
         }
+
+    def _load_tables_metadata(self) -> dict[str, Any]:
+        with self.tables_metadata_path.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+        if not isinstance(payload, dict):
+            raise ValueError(f"tables metadata must be a JSON object: {self.tables_metadata_path}")
+        return payload
+
+    def _relationship_edges(self, tables_metadata: dict[str, Any]) -> list[dict[str, str]]:
+        edges: list[dict[str, str]] = []
+        table_names = set(tables_metadata.keys())
+        for source_table, payload in tables_metadata.items():
+            if not isinstance(payload, dict):
+                continue
+            relationships = payload.get("relationships", {})
+            if not isinstance(relationships, dict):
+                continue
+            for source_field, raw_targets in relationships.items():
+                for target in str(raw_targets or "").split(","):
+                    target = target.strip()
+                    if not target or "." not in target:
+                        continue
+                    target_table, target_field = target.split(".", 1)
+                    if target_table not in table_names:
+                        continue
+                    edges.append(
+                        {
+                            "from": source_table,
+                            "to": target_table,
+                            "on": f"{source_table}.{source_field} = {target_table}.{target_field}",
+                            "source": source_table,
+                            "target": target_table,
+                            "source_field": str(source_field),
+                            "target_field": target_field,
+                        }
+                    )
+        return edges
 
     def _load_document(
         self,

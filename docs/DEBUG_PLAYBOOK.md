@@ -19,9 +19,8 @@
 2. `semantic/business_knowledge.json`
 3. `examples/nl2sql_examples.template.json`
 4. `semantic/join_patterns.json`
-5. `semantic/domain_config/base/prompt_assets.json`
-6. `semantic/domain_config/query_profiles/*.json`
-7. PromptBuilder / retrieval / validator
+5. RetrievalService / PromptBuilder
+6. validator / SQL safety boundary
 
 不要一上来就加本地 SQL 模板或单题规则分支。
 
@@ -81,7 +80,7 @@
 
 最短分流判断：
 
-- 没听懂问题：先查 intent / classification / field semantics
+- 没听懂问题：先查 semantic bundle / contract compile / field semantics
 - Query Plan 错：先查 planner / compiler / semantic config
 - SQL 错：先查 retrieval / prompt / validator
 - SQL 对但结果错：先查真实数据、时间、版本、口径
@@ -164,7 +163,7 @@
 
 当前主链路可以按下面几层排查：
 
-1. intent / classification
+1. semantic bundle / contract compile
 2. retrieval
 3. query plan
 4. sql generation
@@ -179,70 +178,49 @@
 
 ## 6. 各层怎么查
 
-### 6.1 Intent / Classification
+### 6.1 Semantic Bundle / Contract Compile
 
-先看：
+先看 planning 阶段输出：
 
+- `semantic_bundle.context_decision`
+- `semantic_bundle.effective_question`
+- `semantic_bundle.decision`
+- `semantic_bundle.subject_domain`
+- `semantic_bundle.semantic_brief`
+- `semantic_bundle.knowledge_brief`
+- `semantic_bundle.contract_hint`
+- `contract_compilation.status`
+- `contract_compilation.warnings`
 - `query_intent.matched_metrics`
-- `query_intent.matched_entities`
 - `query_intent.filters`
 - `query_intent.time_context`
 - `query_intent.version_context`
-- `query_intent.subject_domain`
-- `classification.question_type`
-- `classification.reason_code`
-- `classification.inherit_context`
-- `classification.context_delta`
 
-再看 trace 里的：
+当前追问补全、上下文替换和业务理解优先由 semantic bundle LLM 决策。排查时重点看：
 
-- `parse_intent`
-- `llm_intent`
-- `normalized_intent`
-- `classify_question.metadata.classifier_debug`
+- `conversation_brief` 是否包含最近几轮必要上下文
+- `latest_query_contract` 是否足够精简且可复用
+- `knowledge_context.business_knowledge` 是否有相关业务知识
+- `knowledge_context.table_fields` 是否包含相关物理字段
+- `parser_observations` 是否只是辅助，而不是唯一依据
 
-Intent prompt 当前也已经压缩。排查 LLM intent 时，重点看：
-
-- `shallow_signals`
-- `session_focus`
-- `domain_hints.subject_domain`
-- `domain_hints.domain_tables`
-- `domain_hints.domain_fields`
-- `domain_hints.semantic_fields`
-- `business_knowledge`
-- `instructions.fields`
-
-不要期待 intent prompt 里继续出现完整 `shallow_parse` 或完整 `session_state`。如果 intent 少识别指标、维度或过滤条件，先确认 `shallow_signals` 和 `domain_hints` 里是否还保留了对应候选。若 `llm_intent.status=skipped` 且 raw mode 是 `parser_shortcut`，说明本轮没有调用 intent LLM，应优先排查 parser 和 normalizer。
-
-分类阶段目前给 LLM 的不是完整上下文，而是裁决证据包。排查分类 prompt 时，重点看：
-
-- `classification_evidence.current_question_signals`
-- `classification_evidence.previous_session_focus`
-- `classification_evidence.inheritance_targets`
-- `classification_evidence.delta_summary`
-- `base_classification`
-- `allowed_question_types`
-- `candidate_scores`
-
-不要期待分类 prompt 里还能看到完整 `query_intent`、完整 `session_state` 或完整 `session_semantic_diff`；这些内容已经被压缩成上述证据字段。若分类判断错，优先确认这些证据字段是否遗漏了关键指标、字段、时间、版本或追问提示。若 classifier debug 中 `decision_source=baseline_high_confidence`，说明本轮没有调用 classification LLM，应优先排查 baseline score、semantic diff 和 shortcut 条件。
+如果“XPS呢”这类追问没有替换上一轮 Oxide，优先看 semantic bundle 的 `effective_question` 和 `contract_hint.filters`。`filters` 必须是 `{field, op, value}` 对象数组；不要通过本地规则把字符串过滤条件猜成字段。
 
 典型症状：
 
-- 明明是库存，识别成计划/实际
-- 时间没提出来
-- 版本没提出来
-- 追问被当成新问题
+- `effective_question` 没有补全上下文
+- `semantic_brief` 仍描述上一轮对象
+- `contract_hint.filters` 输出了字符串或漏了关键字段
+- `contract_compilation.warnings` 提示字段被丢弃
 - 信息足够却一直 `clarification_needed`
 
 优先修：
 
-- `semantic/domain_config/base/field_semantics.json`
-- `semantic/domain_config/base/domain_inference.json`
-- `semantic/domain_config/base/prompt_assets.json`
-- `QueryIntentParser`
-- `IntentService`
-- `IntentNormalizer`
-- `QuestionClassifier`
+- `semantic/business_knowledge.json`
+- `semantic/tables.json`
+- `PromptBuilder.build_semantic_bundle_prompt` 的上下文选择
+- `SemanticBundleService` 的输出校验
+- contract 边界收口是否过度丢弃模型已经理解出的字段
 
 ### 6.2 Retrieval
 
@@ -324,16 +302,17 @@ Intent prompt 当前也已经压缩。排查 LLM intent 时，重点看：
 
 优先修：
 
-- `semantic/domain_config/*`
+- `semantic/business_knowledge.json`
+- `examples/nl2sql_examples.template.json`
+- `semantic/tables.json`
 - `QueryPlanner`
 - `QueryPlanCompiler`
 - `QueryPlanValidator`
 
 当前要特别注意：
 
-- support table 补全优先看 `query_profiles.support_tables`
-- 显式 `source_table` 互斥优先看 `query_profiles.exclusive_source_groups`
-- 少量 plan 后处理优先看 `query_profiles.post_process_rules`
+- 如果 plan 必须依赖某个业务规则才选对表，优先把规则写成知识库或样例，让 retrieval 和 SQL prompt 直接携带该依据。
+- `QueryPlan` 是兼容对象，不应继续扩展成新的业务规则引擎。
 
 ### 6.4 SQL 生成
 
@@ -353,7 +332,6 @@ Intent prompt 当前也已经压缩。排查 LLM intent 时，重点看：
 优先修：
 
 - `PromptBuilder`
-- `semantic/domain_config/base/prompt_assets.json`
 - `semantic/tables.json`
 - `semantic/business_knowledge.json`
 - `examples`
@@ -527,8 +505,6 @@ Intent prompt 当前也已经压缩。排查 LLM intent 时，重点看：
 
 - `semantic/business_knowledge.json`
 - demand 相关 example
-- `semantic/domain_config/base/prompt_assets.json`
-- `semantic/domain_config/query_profiles/demand.json`
 - PromptBuilder 的上下文构造
 - validator 的结构约束
 
@@ -550,7 +526,7 @@ Intent prompt 当前也已经压缩。排查 LLM intent 时，重点看：
 
 最简单判断：
 
-- 如果系统没听懂“这句话在说哪个字段/指标/版本/时间”，先修语义配置
+- 如果系统没听懂“这句话在说哪个字段/指标/版本/时间”，先补知识库、样例或表字段说明
 - 如果系统已经听懂，但 SQL 结构总是生成错，优先补 example / prompt / validator
 
 ### 10.3 不要长期保留误导性样本

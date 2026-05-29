@@ -21,16 +21,16 @@ def retrieve_preview(
     http_request: Request,
     container: AppContainer = Depends(get_container),
 ) -> dict:
-    query_intent = container.query_planner.parser.parse(
+    question_context = container.question_context_service.build(
         question=request.question,
         session_state=request.session_state,
     )
-    retrieval = container.retrieval_service.retrieve(query_intent)
+    retrieval = container.retrieval_service.retrieve_text(
+        question=question_context.effective_question,
+        semantic_brief=question_context.semantic_brief,
+        conversation_summary=question_context.conversation_summary,
+    )
     return {
-        "query_intent": query_intent.model_dump(),
+        "question_context": question_context.model_dump(),
         "retrieval": retrieval.model_dump(),
-        "session_semantic_diff": container.semantic_runtime.session_semantic_diff(
-            query_intent,
-            request.session_state,
-        ),
     }

@@ -25,7 +25,6 @@ from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.progress_service import ProgressService
-from backend.app.services.question_classifier import QuestionClassifier
 from backend.app.services.session_workspace_service import SessionWorkspaceService
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.llm_client import LLMClient, sqlglot as llm_sqlglot
@@ -62,6 +61,17 @@ class VectorRetrieverTests(unittest.TestCase):
 
 
 class RetrievalServiceFailFastTests(unittest.TestCase):
+    def test_retrieval_corpus_excludes_domain_config_metrics(self) -> None:
+        domain_config = DomainConfigLoader().load()
+        service = RetrievalService(domain_config=domain_config)
+
+        source_types = {document["source_type"] for document in service.corpus_documents}
+
+        self.assertIn("example", source_types)
+        self.assertIn("knowledge", source_types)
+        self.assertIn("join_pattern", source_types)
+        self.assertNotIn("metric", source_types)
+
     def test_retrieval_service_raises_when_vector_client_is_missing(self) -> None:
         domain_config = DomainConfigLoader().load()
         retriever = VectorRetriever(provider="siliconflow", api_key=None, dimensions=128)
@@ -457,26 +467,6 @@ class StructuredIntentFailFastTests(unittest.TestCase):
             payload={"confidence": "high"},
         )
         self.assertIsNone(intent.confidence)
-
-
-class QuestionClassifierFailFastTests(unittest.TestCase):
-    def test_invalid_context_delta_raises(self) -> None:
-        classifier = QuestionClassifier(
-            llm_client=SimpleNamespace(),
-            prompt_builder=SimpleNamespace(),
-        )
-        query_intent = QueryIntent(
-            normalized_question="只看天津",
-            matched_metrics=["inventory_qty"],
-            subject_domain="inventory",
-        )
-
-        with self.assertRaisesRegex(ValueError, "classification context_delta is invalid"):
-            classifier._context_delta_from_hint(
-                hint={"context_delta": {"add_filters": ["bad"]}},
-                query_intent=query_intent,
-                inherit_context=True,
-            )
 
 
 if __name__ == "__main__":

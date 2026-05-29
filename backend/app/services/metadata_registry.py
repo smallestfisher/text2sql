@@ -6,7 +6,6 @@ from pathlib import Path
 
 from backend.app.config import (
     BUSINESS_KNOWLEDGE_PATH,
-    DOMAIN_CONFIG_PATH,
     EXAMPLES_TEMPLATE_PATH,
     JOIN_PATTERNS_PATH,
     QUERY_PLAN_SCHEMA_PATH,
@@ -18,7 +17,6 @@ from backend.app.config import (
 class MetadataRegistry:
     def __init__(self, paths: dict[str, Path] | None = None) -> None:
         self.paths = paths or {
-            "domain_config": DOMAIN_CONFIG_PATH,
             "business_knowledge": BUSINESS_KNOWLEDGE_PATH,
             "examples_template": EXAMPLES_TEMPLATE_PATH,
             "tables_metadata": TABLES_METADATA_PATH,

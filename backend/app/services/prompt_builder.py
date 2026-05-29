@@ -34,134 +34,75 @@ class PromptBuilder:
             else None
         )
 
-    def build_classification_prompt(
+    def build_semantic_bundle_prompt(
         self,
-        question: str,
-        query_intent: QueryIntent,
+        *,
+        original_question: str,
+        effective_question: str,
         session_state: SessionState | None,
-        semantic_diff: dict | None,
-        base_classification: dict,
-        allowed_question_types: list[str],
-        candidate_scores: dict[str, float] | None = None,
-        arbitration_context: dict | None = None,
+        parser_signals: dict[str, Any],
     ) -> dict:
-        evidence = self._classification_evidence(
-            query_intent=query_intent,
+        _ = original_question
+        return self.build_question_context_prompt(
+            question=effective_question,
             session_state=session_state,
-            semantic_diff=semantic_diff,
+            parser_signals=parser_signals,
         )
-        allow_follow_up = "follow_up" in allowed_question_types
-        instructions = self._classification_instructions(allow_follow_up=allow_follow_up)
-        return {
-            "task": "question_classification",
-            "question": question,
-            "classification_evidence": evidence,
-            "base_classification": base_classification,
-            "allowed_question_types": allowed_question_types,
-            "candidate_scores": candidate_scores or {},
-            "arbitration_context": self._compact_mapping(arbitration_context or {}),
-            "instructions": instructions,
-        }
 
-    def build_relevance_prompt(
+    def build_question_context_prompt(
         self,
+        *,
         question: str,
-        query_intent: QueryIntent,
         session_state: SessionState | None,
+        parser_signals: dict[str, Any] | None = None,
     ) -> dict:
+        parser_signals = parser_signals or {}
+        subject_domain = str(parser_signals.get("subject_domain") or (session_state.subject_domain if session_state else "unknown"))
+        focus_tables = self._semantic_bundle_focus_tables(subject_domain, parser_signals, session_state)
         return {
-            "task": "question_relevance_guard",
+            "task": "question_context_generation",
             "question": question,
-            "semantic_signals": {
-                "subject_domain": query_intent.subject_domain,
-                "matched_metrics": query_intent.matched_metrics,
-                "matched_entities": query_intent.matched_entities,
-                "requested_dimensions": query_intent.requested_dimensions,
-                "filter_fields": [item.field for item in query_intent.filters],
-                "time_grain": query_intent.time_context.grain,
-                "has_version_context": query_intent.version_context is not None,
-                "has_follow_up_cue": query_intent.has_follow_up_cue,
-                "has_explicit_slots": query_intent.has_explicit_slots,
-            },
-            "session_context": {
-                "subject_domain": session_state.subject_domain if session_state is not None else None,
-                "metrics": session_state.metrics if session_state is not None else [],
-                "dimensions": session_state.dimensions if session_state is not None else [],
-                "filter_fields": [item.field for item in session_state.filters] if session_state is not None else [],
-            },
-            "system_scope": {
-                "supported_domains": self._supported_domains(),
-                "supported_intent": "企业业务数据分析问题，能够映射为针对 inventory、demand、plan_actual、sales_financial、dimension 等数据的只读 SQL。",
-                "in_scope_examples": self._prompt_asset_strings("relevance", "in_scope_examples"),
-                "out_of_scope_examples": self._prompt_asset_strings("relevance", "out_of_scope_examples"),
-            },
+            "conversation_summary": self._conversation_brief(session_state) if session_state is not None else "",
+            "recent_turns": [
+                self._turn_text(item)
+                for item in (session_state.recent_turns[-4:] if session_state is not None else [])
+            ],
+            "context_hints": self._compact_mapping(
+                {
+                    "parser_observations": self._compact_mapping(parser_signals),
+                    "business_knowledge_excerpt": self._business_notes(subject_domain)[:1200],
+                    "focus_tables": focus_tables,
+                    "table_fields": self._context_table_fields(focus_tables),
+                }
+            ),
             "instructions": {
                 "return_format": "json",
-                "fields": self._prompt_asset_strings("relevance", "fields"),
-                "decision_values": self._prompt_asset_dict("relevance", "decision_values"),
-                "constraints": self._prompt_asset_strings("relevance", "constraints"),
+                "fields": [
+                    "decision",
+                    "context_relation",
+                    "effective_question",
+                    "semantic_brief",
+                    "clarification_question",
+                    "reason",
+                ],
+                "decision_values": ["answerable", "clarification_needed", "invalid"],
+                "context_relation_values": ["new", "follow_up", "ambiguous"],
+                "constraints": [
+                    "只做问题上下文整理，不生成 SQL。",
+                    "如果当前问题是追问，effective_question 必须改写成不依赖上下文也能理解的完整自然语言问题。",
+                    "只能继承 conversation_summary 和 recent_turns 中明确出现的信息；不确定指代时返回 clarification_needed。",
+                    "如果用户表达替换、删除或新增条件，必须在 effective_question 中自然语言表达出来。",
+                    "semantic_brief 用自然语言说明用户真正要查什么，供后续检索和 SQL 生成使用。",
+                    "不要输出 metrics、dimensions、filters、contract_hint、calculation_contract 或任何结构化业务合同。",
+                    "不要输出 markdown。",
+                ],
             },
         }
 
-    def build_intent_prompt(
-        self,
-        question: str,
-        query_intent: QueryIntent,
-        session_state: SessionState | None,
-    ) -> dict:
-        subject_domain = (
-            query_intent.subject_domain
-            if query_intent.subject_domain != "unknown" or session_state is None
-            else session_state.subject_domain
-        )
-        domain_tables = self._domain_tables(subject_domain) if subject_domain != "unknown" else []
-        domain_fields: list[str] = []
-        field_hint_tables = list(session_state.tables if session_state is not None else domain_tables)
-        for item in query_intent.filters:
-            if (
-                item.field in {"source_table", "demand_source"}
-                and isinstance(item.value, str)
-                and self.semantic_runtime is not None
-                and self.semantic_runtime.is_known_table(item.value)
-                and item.value not in field_hint_tables
-            ):
-                field_hint_tables.append(item.value)
-        if session_state is not None:
-            for item in session_state.filters:
-                table_name = self._table_for_field(item.field, field_hint_tables)
-                if table_name and table_name not in field_hint_tables:
-                    field_hint_tables.append(table_name)
-        if self.semantic_runtime is not None:
-            for metric_name in query_intent.matched_metrics:
-                for table_name in self.semantic_runtime.metric_tables(metric_name):
-                    if table_name not in field_hint_tables:
-                        field_hint_tables.append(table_name)
-        for table_name in field_hint_tables:
-            if self.semantic_runtime is not None:
-                domain_fields.extend(self.semantic_runtime.table_fields(table_name))
-        business_notes = self._business_notes(subject_domain)
-        return {
-            "task": "intent_understanding",
-            "question": question,
-            "shallow_signals": self._intent_shallow_signals(query_intent),
-            "session_focus": self._intent_session_focus(session_state),
-            "domain_hints": {
-                "subject_domain": subject_domain,
-                "parsed_subject_domain": query_intent.subject_domain,
-                "inherited_subject_domain": session_state.subject_domain if session_state is not None else None,
-                "domain_tables": domain_tables,
-                "focus_tables": field_hint_tables,
-                "domain_fields": self._intent_domain_fields(domain_fields, query_intent),
-                "semantic_fields": self._semantic_fields(subject_domain),
-                "supported_domains": self._supported_domains() if query_intent.subject_domain == "unknown" else [],
-            },
-            "business_knowledge": "" if session_state is not None else business_notes,
-            "instructions": {
-                "return_format": "json",
-                "fields": self._intent_output_fields(),
-                "constraints": self._prompt_asset_strings("intent_understanding", "constraints"),
-            },
-        }
+    def conversation_brief(self, session_state: SessionState | None) -> str:
+        if session_state is None:
+            return ""
+        return self._conversation_brief(session_state)
 
     def build_sql_prompt(
         self,
@@ -169,7 +110,7 @@ class PromptBuilder:
         retrieval: RetrievalContext | None = None,
         question: str | None = None,
     ) -> dict:
-        selected_sources = query_plan.tables or self._domain_tables(query_plan.subject_domain) or []
+        selected_sources = self._selected_sources_for_sql(query_plan, retrieval)
         time_resolution = self._time_resolution(query_plan)
         field_resolution = self._field_resolution(query_plan, time_resolution=time_resolution)
         shape_contract = self._shape_contract(query_plan, time_resolution=time_resolution)
@@ -188,7 +129,7 @@ class PromptBuilder:
         sql_preferences = self._prompt_asset_strings("sql_generation", "base_preferences")
         if shape_contract["required_projection"]:
             sql_preferences = [
-                "把 query_contract.dimensions 当成硬 contract：每个 dimension 都必须在最终外层 SELECT 中显式投影；只要存在聚合指标，这些 dimension 也必须在最终外层 GROUP BY 中逐一出现。",
+                "如果用户问题或 semantic_brief 明确要求按某些维度拆分，最终 SELECT 和 GROUP BY 应自然体现这些维度。",
                 *sql_preferences,
             ]
         if shape_contract["dimension_hints"]:
@@ -198,7 +139,7 @@ class PromptBuilder:
             ]
         if query_plan.analysis_mode == "detail":
             sql_preferences = [
-                "analysis_mode=detail 表示明细查询：不要沿用上一轮 COUNT/SUM 聚合；优先投影 query_contract.dimensions 中的字段，并用 DISTINCT 去重。",
+                "如果用户要求明细、具体型号、列表或去重集合，不要沿用上一轮聚合口径；按问题文本选择明细字段并在需要时 DISTINCT 去重。",
                 *sql_preferences,
             ]
         if self._has_latest_n_filter(query_plan):
@@ -211,7 +152,7 @@ class PromptBuilder:
         context_budget = {
             "business_notes_max_chars": self.BUSINESS_NOTES_MAX_CHARS,
             "business_notes_mode": "ranked_relevant_chunks",
-            "table_schemas_mode": "selected_query_contract_tables_relevant_columns",
+            "table_schemas_mode": "retrieval_selected_tables_relevant_columns",
         }
         context_summary = {
             "selected_sources": selected_sources,
@@ -227,32 +168,62 @@ class PromptBuilder:
             "join_pattern_ids": self._selected_join_pattern_ids(retrieval),
         }
         return {
-            "task": "sql_generation",
+            "task": "oracle_text2sql",
             "question": question,
+            "semantic_brief": query_plan.semantic_brief,
+            "retrieval_context": {
+                "business_knowledge": business_notes,
+                "examples": retrieved_examples,
+                "join_patterns": self._selected_join_patterns(retrieval),
+            },
             "oracle_sql_rules": {
                 "name": self.sql_dialect.name,
                 "label": self.sql_dialect.label,
                 "result_limit_clause": self.sql_dialect.result_limit_clause_name,
             },
-            "query_contract": self._sql_query_contract(query_plan),
-            "allowed_sources": selected_sources,
-            "field_resolution": field_resolution,
-            "time_resolution": time_resolution,
-            "shape_contract": shape_contract,
-            "table_schemas": source_schemas,
-            "business_notes": business_notes,
-            "join_patterns": self._selected_join_patterns(retrieval),
+            "available_tables": source_schemas,
             "context_budget": context_budget,
             "context_summary": context_summary,
             "instructions": {
                 "return_format": "sql_only",
                 "constraints": self._sql_generation_constraints(),
                 "sql_preferences": sql_preferences,
-                "few_shot": {
-                    "retrieved_examples": retrieved_examples,
-                },
+            },
+            "legacy_debug": {
+                "field_resolution": field_resolution,
+                "time_resolution": time_resolution,
+                "shape_contract": shape_contract,
+                "allowed_sources": selected_sources,
             },
         }
+
+    def _selected_sources_for_sql(
+        self,
+        query_plan: QueryPlan,
+        retrieval: RetrievalContext | None,
+    ) -> list[str]:
+        selected: list[str] = []
+        for table_name in query_plan.tables:
+            if table_name in self._tables_metadata and table_name not in selected:
+                selected.append(table_name)
+        if retrieval is not None:
+            for hit in retrieval.hits:
+                for table_name in self._tables_from_retrieval_hit(hit):
+                    if table_name in self._tables_metadata and table_name not in selected:
+                        selected.append(table_name)
+        if selected:
+            return selected[:8]
+        return list(self._tables_metadata.keys())[:8]
+
+    def _tables_from_retrieval_hit(self, hit: RetrievalHit) -> list[str]:
+        tables: list[str] = []
+        metadata_tables = hit.metadata.get("tables", [])
+        if isinstance(metadata_tables, list):
+            tables.extend(str(item) for item in metadata_tables if item)
+        table = hit.metadata.get("table")
+        if isinstance(table, str) and table:
+            tables.append(table)
+        return list(dict.fromkeys(tables))
 
     def _load_tables_metadata(self) -> dict:
         return self.metadata_registry.tables_metadata
@@ -302,6 +273,7 @@ class PromptBuilder:
 
     def _sql_query_contract(self, query_plan: QueryPlan) -> dict:
         payload = {
+            "semantic_brief": query_plan.semantic_brief,
             "subject_domain": query_plan.subject_domain,
             "tables": query_plan.tables,
             "metrics": query_plan.metrics,
@@ -311,6 +283,8 @@ class PromptBuilder:
             "sort": [item.model_dump(mode="json") for item in query_plan.sort],
             "limit": query_plan.limit,
         }
+        if query_plan.calculation_contract:
+            payload["calculation_contract"] = query_plan.calculation_contract
         if query_plan.time_context and query_plan.time_context.grain != "unknown":
             payload["time_context"] = query_plan.time_context.model_dump(mode="json")
         if query_plan.version_context is not None:
@@ -390,8 +364,6 @@ class PromptBuilder:
                 for column in self.semantic_runtime.metric_expression_columns(metric_name, table_names=[table_name])
                 if column in table_fields
             )
-        if self._needs_demand_horizontal_columns(table_name, query_plan):
-            columns.update(column for column in self._demand_horizontal_columns() if column in table_fields)
         table_metadata = self._tables_metadata.get(table_name, {})
         relationships = table_metadata.get("relationships", {}) if isinstance(table_metadata, dict) else {}
         if isinstance(relationships, dict):
@@ -400,32 +372,46 @@ class PromptBuilder:
                     columns.add(source_field)
         return columns
 
+    def _calculation_contract_columns(self, calculation_contract: dict[str, Any]) -> set[str]:
+        if not isinstance(calculation_contract, dict) or not calculation_contract:
+            return set()
+        columns: set[str] = set()
+        for key in ("join_keys", "dimensions", "group_by"):
+            value = calculation_contract.get(key)
+            if isinstance(value, list):
+                columns.update(str(item) for item in value if item)
+        horizontal = calculation_contract.get("horizontal_month_mapping")
+        if isinstance(horizontal, dict):
+            for key in ("base_month_field", "target_month_field"):
+                value = horizontal.get(key)
+                if isinstance(value, str) and value:
+                    columns.add(value)
+            offset_columns = horizontal.get("offset_columns")
+            if isinstance(offset_columns, dict):
+                columns.update(str(item) for item in offset_columns.values() if item)
+        for source in calculation_contract.get("sources", []):
+            if not isinstance(source, dict):
+                continue
+            for key in ("version_field", "month_field", "base_month_field", "date_field", "value_field"):
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    columns.add(value)
+            for key in ("filters", "join_keys"):
+                value = source.get(key)
+                if not isinstance(value, list):
+                    continue
+                for item in value:
+                    if isinstance(item, dict) and isinstance(item.get("field"), str):
+                        columns.add(item["field"])
+                    elif isinstance(item, str):
+                        columns.add(item)
+        return columns
+
     def _column_name_from_field(self, field: Any) -> str:
         value = str(field or "").strip()
         if not value:
             return ""
         return value.rsplit(".", 1)[-1]
-
-    def _needs_demand_horizontal_columns(self, table_name: str, query_plan: QueryPlan) -> bool:
-        if table_name not in {"p_demand", "v_demand"}:
-            return False
-        filter_fields = {filter_item.field for filter_item in query_plan.filters}
-        return bool(
-            {"demand_qty", "product_count"}.intersection(query_plan.metrics)
-            or {"demand_month", "biz_month"}.intersection(filter_fields)
-            or {"demand_month", "biz_month"}.intersection(query_plan.dimensions)
-        )
-
-    def _demand_horizontal_columns(self) -> tuple[str, ...]:
-        return (
-            "REQUIREMENT_QTY",
-            "NEXT_REQUIREMENT",
-            "LAST_REQUIREMENT",
-            "MONTH4",
-            "MONTH5",
-            "MONTH6",
-            "MONTH7",
-        )
 
     def _flatten_values(self, value: Any) -> list[Any]:
         if isinstance(value, dict):
@@ -754,15 +740,6 @@ class PromptBuilder:
             return None
         return self.semantic_runtime.query_profile(subject_domain)
 
-    def _session_semantic_diff(
-        self,
-        query_intent: QueryIntent,
-        session_state: SessionState | None,
-    ) -> dict | None:
-        if self.semantic_runtime is None:
-            return None
-        return self.semantic_runtime.session_semantic_diff(query_intent, session_state)
-
     def _allowed_fields(self, query_plan: QueryPlan) -> set[str]:
         if self.semantic_runtime is None:
             return set()
@@ -818,22 +795,6 @@ class PromptBuilder:
         for field in fields:
             physical_candidates = self._physical_candidates(query_plan, field)
             if physical_candidates:
-                if self._requires_horizontal_demand_month_expansion(query_plan, field):
-                    resolved[field] = {
-                        "physical_candidates": physical_candidates,
-                        "filter_examples": [
-                            "先在 CTE 中把 p_demand/v_demand 横表展开为 demand_month，再过滤 demand_month；不要直接用 base MONTH 当目标需求月份。"
-                        ],
-                    }
-                    continue
-                if self._requires_horizontal_demand_qty_filter(query_plan, field):
-                    resolved[field] = {
-                        "physical_candidates": physical_candidates,
-                        "filter_examples": [
-                            "先在 CTE 中把 p_demand/v_demand 横表展开为 demand_qty，再过滤 NVL(demand_qty, 0) > 0；不要只过滤某一个横表月份数量列。"
-                        ],
-                    }
-                    continue
                 time_filter_examples = self._time_filter_examples(field, time_resolution, query_plan=query_plan)
                 if time_filter_examples:
                     resolved[field] = {
@@ -872,20 +833,6 @@ class PromptBuilder:
                 if isinstance(value, str) and value and value not in examples:
                     examples.append(value)
         return examples[:6]
-
-    def _requires_horizontal_demand_month_expansion(self, query_plan: QueryPlan, logical_field: str) -> bool:
-        if logical_field not in {"biz_month", "demand_month"}:
-            return False
-        if query_plan.subject_domain != "demand":
-            return False
-        return any(table_name in {"p_demand", "v_demand"} for table_name in query_plan.tables)
-
-    def _requires_horizontal_demand_qty_filter(self, query_plan: QueryPlan, logical_field: str) -> bool:
-        if logical_field != "demand_qty":
-            return False
-        if query_plan.subject_domain != "demand":
-            return False
-        return any(table_name in {"p_demand", "v_demand"} for table_name in query_plan.tables)
 
     def _time_candidate_belongs_to_query_tables(self, candidate: dict, query_plan: QueryPlan) -> bool:
         field = str(candidate.get("field") or "")
@@ -1009,7 +956,7 @@ class PromptBuilder:
                 "format": candidate.get("format"),
                 "projection_example": f"{projection_expr} AS biz_month",
             }
-            if sample_month:
+            if sample_month and not self._field_belongs_to_horizontal_source(field_expr):
                 month_literal = self.semantic_runtime.format_time_literal(sample_month, candidate.get("format")) or sample_month
                 payload["month_filter_example"] = f"{field_expr} = '{month_literal}'"
             candidates.append(payload)
@@ -1052,6 +999,22 @@ class PromptBuilder:
         if normalized_format == "YYYY-MM-DD":
             return f"REPLACE({self._substring_function()}({field_expression}, 1, 7), '-', '')"
         return None
+
+    def _field_belongs_to_horizontal_source(self, field_expression: str) -> bool:
+        if "." not in field_expression:
+            return False
+        table_name = field_expression.split(".", 1)[0]
+        table_metadata = self._tables_metadata.get(table_name, {})
+        if not isinstance(table_metadata, dict):
+            return False
+        description = str(table_metadata.get("description") or "").lower()
+        if "横向表" in description or "横表" in description or "horizontal" in description:
+            return True
+        columns = table_metadata.get("columns", [])
+        if not isinstance(columns, list):
+            return False
+        column_text = " ".join(str(item) for item in columns).lower()
+        return "横向" in column_text or "horizontal" in column_text
 
     def _substring_function(self) -> str:
         return "SUBSTR"
@@ -1188,85 +1151,72 @@ class PromptBuilder:
             return []
         return self.semantic_runtime.semantic_field_metadata(subject_domain=subject_domain)[:20]
 
-    def _table_for_field(self, field_name: str, preferred_tables: list[str]) -> str | None:
-        if self.semantic_runtime is None or not field_name:
-            return None
-        for table_name in preferred_tables:
-            if field_name in self.semantic_runtime.table_fields(table_name):
-                return table_name
-        for table_name in self.semantic_runtime.table_field_catalog.keys():
-            if field_name in self.semantic_runtime.table_fields(table_name):
-                return table_name
-        return None
+    def _session_query_contract(self, session_state: SessionState) -> dict:
+        if session_state.recent_turns:
+            latest_contract = session_state.recent_turns[-1].query_contract
+            if latest_contract:
+                return latest_contract
+        payload = {
+            "subject_domain": session_state.subject_domain,
+            "tables": session_state.tables,
+            "metrics": session_state.metrics,
+            "entities": session_state.entities,
+            "dimensions": session_state.dimensions,
+            "filters": [item.model_dump(mode="json") for item in session_state.filters],
+            "time_context": session_state.time_context.model_dump(mode="json") if session_state.time_context else None,
+            "version_context": session_state.version_context.model_dump(mode="json") if session_state.version_context else None,
+            "analysis_mode": session_state.analysis_mode,
+            "sort": [item.model_dump(mode="json") for item in session_state.sort],
+            "limit": session_state.limit,
+            "semantic_brief": session_state.last_semantic_brief,
+        }
+        return self._compact_mapping(payload)
 
-    def _classification_evidence(
+    def _conversation_brief(self, session_state: SessionState) -> str:
+        if session_state.conversation_summary:
+            return session_state.conversation_summary
+        turns = []
+        for turn in session_state.recent_turns[-4:]:
+            if turn.semantic_brief:
+                prefix = f"问题：{turn.question}。" if turn.question else ""
+                turns.append(prefix + turn.semantic_brief)
+            elif turn.summary:
+                turns.append(turn.summary)
+        if turns:
+            return "\n".join(f"- {item}" for item in turns)
+        if session_state.last_semantic_brief:
+            return session_state.last_semantic_brief
+        return ""
+
+    def _semantic_bundle_focus_tables(
         self,
-        query_intent: QueryIntent,
+        subject_domain: str,
+        parser_signals: dict[str, Any],
         session_state: SessionState | None,
-        semantic_diff: dict | None,
-    ) -> dict:
-        semantic_diff = semantic_diff or {}
-        return {
-            "current_question_signals": {
-                "subject_domain": query_intent.subject_domain,
-                "matched_metrics": query_intent.matched_metrics,
-                "matched_entities": query_intent.matched_entities,
-                "filter_fields": [item.field for item in query_intent.filters],
-                "time_grain": query_intent.time_context.grain,
-                "has_version_context": query_intent.version_context is not None,
-                "requested_sort": [item.model_dump() for item in query_intent.requested_sort],
-                "requested_limit": query_intent.requested_limit,
-                "has_follow_up_cue": query_intent.has_follow_up_cue,
-                "has_explicit_slots": query_intent.has_explicit_slots,
-            },
-            "previous_session_focus": {
-                "subject_domain": session_state.subject_domain if session_state is not None else None,
-                "metrics": session_state.metrics if session_state is not None else [],
-                "entities": session_state.entities if session_state is not None else [],
-                "filter_fields": [item.field for item in session_state.filters] if session_state is not None else [],
-                "time_grain": session_state.time_context.grain if session_state and session_state.time_context else "unknown",
-                "has_version_context": bool(session_state and session_state.version_context is not None),
-            },
-            "inheritance_targets": {
-                "carry_over_metrics": session_state.metrics if session_state is not None else [],
-                "carry_over_dimensions": session_state.dimensions if session_state is not None else [],
-                "carry_over_filter_fields": [item.field for item in session_state.filters] if session_state is not None else [],
-                "carry_over_time_grain": session_state.time_context.grain if session_state and session_state.time_context else "unknown",
-                "carry_over_version_field": session_state.version_context.field if session_state and session_state.version_context else None,
-            },
-            "delta_summary": {
-                "domain_changed": semantic_diff.get("domain_changed"),
-                "new_metrics": semantic_diff.get("new_metrics", []),
-                "new_entities": semantic_diff.get("new_entities", []),
-                "new_filter_fields": semantic_diff.get("new_filter_fields", []),
-                "reused_filter_fields": semantic_diff.get("reused_filter_fields", []),
-                "only_updates_filters": semantic_diff.get("only_updates_filters"),
-                "only_updates_time": semantic_diff.get("only_updates_time"),
-                "only_updates_version": semantic_diff.get("only_updates_version"),
-                "metrics_missing_but_context_resolvable": semantic_diff.get("metrics_missing_but_context_resolvable"),
-                "can_execute_without_context": semantic_diff.get("can_execute_without_context"),
-                "introduces_new_topic_signal": semantic_diff.get("introduces_new_topic_signal"),
-                "is_short_followup_fragment": semantic_diff.get("is_short_followup_fragment"),
-            },
-        }
+    ) -> list[str]:
+        tables: list[str] = []
+        for table_name in (session_state.tables if session_state is not None else []):
+            if table_name and table_name not in tables:
+                tables.append(table_name)
+        if self.semantic_runtime is not None:
+            for metric_name in parser_signals.get("matched_metrics", []) or []:
+                for table_name in self.semantic_runtime.metric_tables(str(metric_name)):
+                    if table_name and table_name not in tables:
+                        tables.append(table_name)
+            for table_name in self.semantic_runtime.domain_tables(subject_domain) or []:
+                if table_name and table_name not in tables:
+                    tables.append(table_name)
+        return tables[:8]
 
-    def _classification_instructions(self, *, allow_follow_up: bool) -> dict:
-        instructions = {
-            "return_format": "json",
-            "fields": self._prompt_asset_strings("classification", "fields"),
-            "category_definitions": self._prompt_asset_dict("classification", "category_definitions"),
-            "arbitration_checklist": self._prompt_asset_strings("classification", "arbitration_checklist"),
-            "constraints": self._prompt_asset_strings("classification", "constraints"),
-        }
-        if allow_follow_up:
-            instructions.update(
-                {
-                    "context_delta_field_guide": self._prompt_asset_dict("classification", "context_delta_field_guide"),
-                    "context_delta_rules": self._prompt_asset_strings("classification", "context_delta_rules"),
-                    "context_delta_examples": self._classification_delta_examples()[:2],
-                }
-            )
-        return instructions
+    def _context_table_fields(self, table_names: list[str]) -> dict[str, list[str]]:
+        fields: dict[str, list[str]] = {}
+        for table_name in table_names:
+            metadata = self._tables_metadata.get(table_name, {})
+            columns = metadata.get("columns", []) if isinstance(metadata, dict) else []
+            selected = [str(item) for item in columns if isinstance(item, str) and item.strip()]
+            if selected:
+                fields[table_name] = selected[:40]
+        return fields
 
     def _compact_mapping(self, payload: dict) -> dict:
         compacted = {}
@@ -1276,98 +1226,15 @@ class PromptBuilder:
             compacted[key] = value
         return compacted
 
-    def _intent_shallow_signals(self, query_intent: QueryIntent) -> dict:
-        payload = {
-            "normalized_question": query_intent.normalized_question,
-            "subject_domain": query_intent.subject_domain,
-            "metrics": query_intent.matched_metrics,
-            "entities": query_intent.matched_entities,
-            "dimensions": query_intent.requested_dimensions,
-            "filters": [item.model_dump(mode="json") for item in query_intent.filters],
-            "time_context": query_intent.time_context.model_dump(mode="json"),
-            "version_context": query_intent.version_context.model_dump(mode="json") if query_intent.version_context else None,
-            "sort": [item.model_dump(mode="json") for item in query_intent.requested_sort],
-            "limit": query_intent.requested_limit,
-            "analysis_mode": query_intent.analysis_mode,
-            "has_follow_up_cue": query_intent.has_follow_up_cue,
-            "has_explicit_slots": query_intent.has_explicit_slots,
-        }
-        return self._compact_mapping(payload)
-
-    def _intent_session_focus(self, session_state: SessionState | None) -> dict | None:
-        if session_state is None:
-            return None
-        payload = {
-            "subject_domain": session_state.subject_domain,
-            "topic": session_state.topic,
-            "tables": session_state.tables,
-            "metrics": session_state.metrics,
-            "entities": session_state.entities,
-            "dimensions": session_state.dimensions,
-            "filters": [item.model_dump(mode="json") for item in session_state.filters],
-            "filter_fields": [item.field for item in session_state.filters],
-            "time_context": session_state.time_context.model_dump(mode="json") if session_state.time_context else None,
-            "version_context": session_state.version_context.model_dump(mode="json") if session_state.version_context else None,
-            "analysis_mode": session_state.analysis_mode,
-            "last_question_type": session_state.last_question_type,
-        }
-        return self._compact_mapping(payload)
-
-    def _intent_domain_fields(self, domain_fields: list[str], query_intent: QueryIntent) -> list[str]:
-        important_fields = {
-            *query_intent.requested_dimensions,
-            *(item.field for item in query_intent.filters),
-            *(item.field for item in query_intent.requested_sort),
-        }
-        metric_columns = {
-            self.semantic_runtime.metric_column(metric)
-            for metric in query_intent.matched_metrics
-            if self.semantic_runtime is not None and self.semantic_runtime.is_known_metric(metric)
-        }
-        prioritized = [field for field in sorted(set(domain_fields)) if field in important_fields or field in metric_columns]
-        remaining = [field for field in sorted(set(domain_fields)) if field not in prioritized]
-        return [*prioritized, *remaining[:24]]
-
-    def _intent_output_fields(self) -> list[str]:
-        return [
-            "subject_domain",
-            "metrics",
-            "entities",
-            "dimensions",
-            "filters",
-            "time_context",
-            "version_context",
-            "analysis_mode",
-            "confidence",
-            "reason",
-        ]
-
-    def _classification_delta_examples(self) -> list[dict]:
-        return self._prompt_asset_list("classification", "context_delta_examples")
-
-    def _classification_business_examples(self) -> list[dict]:
-        return self._prompt_asset_list("classification", "business_few_shots")
-
     def _prompt_assets(self) -> dict:
         if self.semantic_runtime is None:
             return {}
         payload = self.semantic_runtime.domain_config.get("prompt_assets", {})
         return payload if isinstance(payload, dict) else {}
 
-    def _prompt_asset_list(self, section: str, key: str) -> list[dict]:
-        section_payload = self._prompt_assets().get(section, {})
-        if not isinstance(section_payload, dict):
-            return []
-        values = section_payload.get(key, [])
-        return values if isinstance(values, list) else []
-
     def _prompt_asset_strings(self, section: str, key: str) -> list[str]:
         values = self._prompt_asset_value(section, key)
         return [str(item) for item in values] if isinstance(values, list) else []
-
-    def _prompt_asset_dict(self, section: str, key: str) -> dict:
-        values = self._prompt_asset_value(section, key)
-        return values if isinstance(values, dict) else {}
 
     def _prompt_asset_value(self, section: str, key: str):
         section_payload = self._prompt_assets().get(section, {})

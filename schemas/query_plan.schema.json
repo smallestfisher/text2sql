@@ -156,6 +156,23 @@
       ],
       "default": null,
       "title": "Reason"
+    },
+    "semantic_brief": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Semantic Brief"
+    },
+    "calculation_contract": {
+      "default": {},
+      "title": "Calculation Contract",
+      "type": "object"
     }
   },
   "required": [
