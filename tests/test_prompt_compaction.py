@@ -204,7 +204,10 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertNotIn("business_few_shots", prompt["instructions"])
         self.assertNotIn("question_type", prompt["instructions"]["fields"])
         self.assertNotIn("inherit_context", prompt["instructions"]["fields"])
-        self.assertLessEqual(len(prompt["domain_hints"]["domain_fields"]), 41)
+        self.assertLessEqual(len(prompt["domain_hints"]["domain_fields"]), 25)
+        self.assertEqual(prompt["business_knowledge"], "")
+        self.assertEqual(prompt["domain_hints"]["focus_tables"][0], "p_demand")
+        self.assertIn("product_attributes", prompt["domain_hints"]["focus_tables"])
         self.assertIn("product_ID", prompt["domain_hints"]["domain_fields"])
         self.assertIn("PM_VERSION", prompt["domain_hints"]["domain_fields"])
 

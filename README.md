@@ -154,6 +154,7 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：端到端架构、核心对象、查询链路、retrieval、SQL 治理、runtime 落库。
 - [docs/DEBUG_PLAYBOOK.md](docs/DEBUG_PLAYBOOK.md)：单题排查、trace/replay/materialize/eval 的使用路径。
+- [docs/CONTENT_GUIDELINES.md](docs/CONTENT_GUIDELINES.md)：样例和业务知识库内容的编写规范。
 - [backend/README.md](backend/README.md)：后端运行、配置、API 分组、runtime 存储。
 - [frontend/README.md](frontend/README.md)：前端工作台、数据加载方式、主要 API 依赖。
 

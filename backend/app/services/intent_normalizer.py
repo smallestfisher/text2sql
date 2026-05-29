@@ -150,6 +150,21 @@ class IntentNormalizer:
         allowed_fields = set(self.semantic_runtime.profile_allowed_fields(subject_domain))
         for table_name in self.semantic_runtime.domain_tables(subject_domain):
             allowed_fields.update(self.semantic_runtime.table_fields(table_name))
+        profile = self.semantic_runtime.query_profile(subject_domain)
+        for rule in profile.get("support_tables", []):
+            if not isinstance(rule, dict) or not rule.get("when_table_fields"):
+                continue
+            table_name = str(rule.get("table", "")).strip()
+            excluded_fields = {
+                str(item)
+                for item in rule.get("exclude_table_fields", [])
+                if item
+            }
+            allowed_fields.update(
+                field
+                for field in self.semantic_runtime.table_fields(table_name)
+                if field not in excluded_fields
+            )
         return allowed_fields
 
     def _normalize_domain_field(self, field_name: str, subject_domain: str) -> str:

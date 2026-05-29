@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections import OrderedDict
 import unittest
 
-from backend.app.models.query_plan import FilterItem, QueryPlan, SortItem
-from backend.app.models.classification import QuestionClassification
+from backend.app.models.query_plan import ContextDelta, FilterItem, QueryPlan, SortItem, TimeContext, TimeRange
+from backend.app.models.classification import QueryIntent, QuestionClassification
 from backend.app.models.intent import StructuredIntent
+from backend.app.models.session_state import SessionState
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.intent_service import IntentService
@@ -89,6 +90,40 @@ class StubCachedSqlLLMClient(LLMClient):
 
     def _is_single_sql_statement(self, sql: str) -> bool:
         return True
+
+
+class StubFollowUpXpsIntentLLMClient:
+    def __init__(self) -> None:
+        self.intent_calls = 0
+        self.classification_calls = 0
+
+    def generate_intent(self, prompt_payload, cancellation_token=None):
+        self.intent_calls += 1
+        return {
+            "subject_domain": "plan_actual",
+            "metrics": [],
+            "entities": [],
+            "dimensions": [],
+            "filters": ["IS_XPS"],
+            "confidence": 0.86,
+        }
+
+    def generate_classification_hint(self, prompt_payload, cancellation_token=None):
+        self.classification_calls += 1
+        return {
+            "question_type": "follow_up",
+            "subject_domain": "plan_actual",
+            "inherit_context": True,
+            "confidence": 0.86,
+            "context_delta": {
+                "add_filters": [
+                    {"field": "IS_XPS", "op": "=", "value": "Y"},
+                ]
+            },
+        }
+
+    def check_question_relevance(self, prompt_payload, cancellation_token=None):
+        return None
 
 
 class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
@@ -224,7 +259,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertIn(FilterItem(field="IS_OXIDE", op="=", value="Y"), intent.filters)
 
         prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
-        llm_client = LLMClient()
+        llm_client = StubFollowUpXpsIntentLLMClient()
         planner = QueryPlanner(
             domain_config=self.domain_config,
             llm_client=llm_client,
@@ -246,6 +281,128 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(query_plan.dimensions, ["biz_month"])
         self.assertEqual(query_plan.tables, ["production_actuals", "product_attributes"])
         self.assertIn("production_actuals.product_ID = product_attributes.product_ID", query_plan.join_path)
+
+    def test_llm_filter_string_follow_up_replaces_product_attribute_flag(self) -> None:
+        llm_client = StubFollowUpXpsIntentLLMClient()
+        prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
+        planner = QueryPlanner(
+            domain_config=self.domain_config,
+            llm_client=llm_client,
+            prompt_builder=prompt_builder,
+            intent_service=IntentService(llm_client, prompt_builder),
+            intent_normalizer=IntentNormalizer(self.semantic_runtime),
+            semantic_runtime=self.semantic_runtime,
+        )
+        session_state = SessionState(
+            session_id="sess_xps",
+            subject_domain="plan_actual",
+            tables=["production_actuals", "product_attributes"],
+            metrics=["actual_input_qty"],
+            dimensions=["biz_month"],
+            filters=[
+                FilterItem(field="factory", op="=", value="ARRAY"),
+                FilterItem(field="act_type", op="=", value="投入"),
+                FilterItem(field="IS_OXIDE", op="=", value="Y"),
+            ],
+        )
+
+        trace = planner.build_planning_trace(
+            question="XPS呢",
+            session_state=session_state,
+        )
+        query_plan = planner.build_plan_from_intent(
+            classification=trace["classification"],
+            query_intent=trace["query_intent"],
+            session_state=session_state,
+        )
+
+        self.assertEqual(trace["llm_intent"]["status"], "completed")
+        self.assertEqual(trace["classification"].question_type, "follow_up")
+        self.assertEqual(llm_client.classification_calls, 1)
+        self.assertIn(FilterItem(field="IS_XPS", op="=", value="Y"), query_plan.filters)
+        self.assertNotIn(FilterItem(field="IS_OXIDE", op="=", value="Y"), query_plan.filters)
+        self.assertIn(FilterItem(field="factory", op="=", value="ARRAY"), query_plan.filters)
+        self.assertIn(FilterItem(field="act_type", op="=", value="投入"), query_plan.filters)
+        self.assertIn("product_attributes", query_plan.tables)
+
+    def test_merge_context_delta_replaces_time_and_factory_filters(self) -> None:
+        session_state = SessionState(
+            session_id="sess_context",
+            subject_domain="plan_actual",
+            tables=["production_actuals"],
+            metrics=["actual_input_qty"],
+            dimensions=["biz_month"],
+            filters=[
+                FilterItem(field="factory", op="=", value="ARRAY"),
+                FilterItem(field="act_type", op="=", value="投入"),
+                FilterItem(field="biz_month", op="=", value="202602"),
+            ],
+        )
+        query_intent = QueryIntent(
+            normalized_question="3月mdl呢",
+            filters=[
+                FilterItem(field="factory", op="=", value="MDL"),
+                FilterItem(field="biz_month", op="=", value="202603"),
+            ],
+            time_context=TimeContext(
+                grain="month",
+                range=TimeRange(start="2026-03-01", end="2026-03-31"),
+            ),
+            subject_domain="unknown",
+            has_follow_up_cue=True,
+            has_explicit_slots=True,
+        )
+
+        merged = self.semantic_runtime.merge_with_session(
+            session_state=session_state,
+            query_intent=query_intent,
+            context_delta=ContextDelta(
+                add_filters=query_intent.filters,
+                replace_time_context=query_intent.time_context,
+            ),
+        )
+
+        self.assertIn(FilterItem(field="factory", op="=", value="MDL"), merged.filters)
+        self.assertNotIn(FilterItem(field="factory", op="=", value="ARRAY"), merged.filters)
+        self.assertIn(FilterItem(field="biz_month", op="=", value="202603"), merged.filters)
+        self.assertNotIn(FilterItem(field="biz_month", op="=", value="202602"), merged.filters)
+        self.assertIn(FilterItem(field="act_type", op="=", value="投入"), merged.filters)
+
+    def test_intent_service_drops_bad_llm_filters_without_failing(self) -> None:
+        class BadFilterIntentLLMClient:
+            def generate_intent(self, prompt_payload, cancellation_token=None):
+                return {
+                    "subject_domain": "plan_actual",
+                    "metrics": ["actual_input_qty"],
+                    "filters": ["IS_NOT_A_REAL_FIELD", 7],
+                    "confidence": 0.7,
+                }
+
+        llm_client = BadFilterIntentLLMClient()
+        prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
+        service = IntentService(llm_client, prompt_builder)
+
+        result = service.generate_intent(
+            question="XPS呢",
+            query_intent=QueryIntent(
+                normalized_question="xps呢",
+                subject_domain="unknown",
+                has_follow_up_cue=True,
+                has_explicit_slots=False,
+            ),
+            session_state=SessionState(
+                session_id="sess_bad_filter",
+                subject_domain="plan_actual",
+                tables=["production_actuals", "product_attributes"],
+                metrics=["actual_input_qty"],
+                filters=[FilterItem(field="IS_OXIDE", op="=", value="Y")],
+            ),
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["intent"].subject_domain, "plan_actual")
+        self.assertEqual(result["intent"].filters, [])
+        self.assertIn("coercion_warnings", result["intent"].raw_payload)
 
     def test_normalizer_drops_output_metric_when_act_type_is_input(self) -> None:
         normalizer = IntentNormalizer(self.semantic_runtime)

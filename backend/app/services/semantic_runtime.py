@@ -487,20 +487,12 @@ class SemanticRuntime:
         return bool(self.query_profile(domain_name).get("warn_if_missing_time_filter", False))
 
     def build_context_delta(self, query_intent: QueryIntent) -> ContextDelta:
-        remove_filters: list[str] = []
-        incoming_fields = {item.field for item in query_intent.filters}
-        for fields in self.context_filter_groups().values():
-            group = set(fields)
-            if group.intersection(incoming_fields):
-                remove_filters.extend(sorted(group))
-
-        if query_intent.version_context and query_intent.version_context.field:
-            version_group = self.context_filter_groups().get("version", [])
-            remove_filters.extend(version_group or [query_intent.version_context.field])
-
         return ContextDelta(
             add_filters=query_intent.filters,
-            remove_filters=self._unique_strings(remove_filters),
+            remove_filters=self._unique_strings(
+                self._inferred_context_remove_filters(query_intent.filters)
+                + self._inferred_version_remove_filters(query_intent.version_context)
+            ),
             replace_entities=query_intent.matched_entities,
             replace_metrics=query_intent.matched_metrics,
             replace_dimensions=query_intent.requested_dimensions,
@@ -511,6 +503,63 @@ class SemanticRuntime:
             replace_analysis_mode=query_intent.analysis_mode,
         )
 
+    def _inferred_version_remove_filters(self, version_context: VersionContext | None) -> list[str]:
+        if not version_context or not version_context.field:
+            return []
+        version_group = self.context_filter_groups().get("version", [])
+        return list(version_group or [version_context.field])
+
+    def _inferred_context_remove_filters(
+        self,
+        incoming_filters: list[FilterItem],
+        session_filters: list[FilterItem] | None = None,
+    ) -> list[str]:
+        remove_filters: list[str] = []
+        incoming_fields = {item.field for item in incoming_filters}
+        for fields in self.context_filter_groups().values():
+            group = set(fields)
+            if group.intersection(incoming_fields):
+                remove_filters.extend(sorted(group))
+
+        if any(self._is_product_attribute_flag(field) for field in incoming_fields):
+            candidate_fields = set(incoming_fields)
+            if session_filters is not None:
+                candidate_fields.update(item.field for item in session_filters)
+            remove_filters.extend(
+                sorted(field for field in candidate_fields if self._is_product_attribute_flag(field))
+            )
+
+        return self._unique_strings(remove_filters)
+
+    def _complete_context_delta(
+        self,
+        context_delta: ContextDelta,
+        session_state: SessionState,
+        query_intent: QueryIntent,
+    ) -> ContextDelta:
+        inferred_remove_filters = (
+            self._inferred_context_remove_filters(
+                context_delta.add_filters,
+                session_filters=session_state.filters,
+            )
+            + self._inferred_version_remove_filters(
+                context_delta.replace_version_context or query_intent.version_context
+            )
+        )
+        if not inferred_remove_filters:
+            return context_delta
+        return context_delta.model_copy(
+            update={
+                "remove_filters": self._unique_strings(
+                    list(context_delta.remove_filters) + inferred_remove_filters
+                )
+            },
+            deep=True,
+        )
+
+    def _is_product_attribute_flag(self, field_name: str) -> bool:
+        return bool(re.fullmatch(r"IS_[A-Za-z0-9_]+", field_name or ""))
+
     def merge_with_session(
         self,
         *,
@@ -518,6 +567,11 @@ class SemanticRuntime:
         query_intent: QueryIntent,
         context_delta: ContextDelta,
     ) -> QueryIntent:
+        context_delta = self._complete_context_delta(
+            context_delta=context_delta,
+            session_state=session_state,
+            query_intent=query_intent,
+        )
         clear_metrics_for_detail = bool(
             context_delta.replace_analysis_mode == "detail"
             and context_delta.replace_dimensions

@@ -7,8 +7,9 @@
 1. `README.md`
 2. `docs/ARCHITECTURE.md`
 3. `docs/DEBUG_PLAYBOOK.md`
-4. `backend/README.md`
-5. `frontend/README.md`
+4. `docs/CONTENT_GUIDELINES.md`
+5. `backend/README.md`
+6. `frontend/README.md`
 
 ---
 
@@ -834,3 +835,5 @@ SQL 执行使用业务查询库连接。
 - validator
 
 不要把系统重新拉回“大量本地规则 + 本地 SQL 模板”的旧路径。
+
+样例和业务知识库的内容规范见 [CONTENT_GUIDELINES.md](CONTENT_GUIDELINES.md)。

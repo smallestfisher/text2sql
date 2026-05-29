@@ -109,10 +109,28 @@ class PromptBuilder:
         query_intent: QueryIntent,
         session_state: SessionState | None,
     ) -> dict:
-        subject_domain = query_intent.subject_domain
+        subject_domain = (
+            query_intent.subject_domain
+            if query_intent.subject_domain != "unknown" or session_state is None
+            else session_state.subject_domain
+        )
         domain_tables = self._domain_tables(subject_domain) if subject_domain != "unknown" else []
         domain_fields: list[str] = []
-        field_hint_tables = list(domain_tables)
+        field_hint_tables = list(session_state.tables if session_state is not None else domain_tables)
+        for item in query_intent.filters:
+            if (
+                item.field in {"source_table", "demand_source"}
+                and isinstance(item.value, str)
+                and self.semantic_runtime is not None
+                and self.semantic_runtime.is_known_table(item.value)
+                and item.value not in field_hint_tables
+            ):
+                field_hint_tables.append(item.value)
+        if session_state is not None:
+            for item in session_state.filters:
+                table_name = self._table_for_field(item.field, field_hint_tables)
+                if table_name and table_name not in field_hint_tables:
+                    field_hint_tables.append(table_name)
         if self.semantic_runtime is not None:
             for metric_name in query_intent.matched_metrics:
                 for table_name in self.semantic_runtime.metric_tables(metric_name):
@@ -129,12 +147,15 @@ class PromptBuilder:
             "session_focus": self._intent_session_focus(session_state),
             "domain_hints": {
                 "subject_domain": subject_domain,
+                "parsed_subject_domain": query_intent.subject_domain,
+                "inherited_subject_domain": session_state.subject_domain if session_state is not None else None,
                 "domain_tables": domain_tables,
+                "focus_tables": field_hint_tables,
                 "domain_fields": self._intent_domain_fields(domain_fields, query_intent),
                 "semantic_fields": self._semantic_fields(subject_domain),
-                "supported_domains": self._supported_domains() if subject_domain == "unknown" else [],
+                "supported_domains": self._supported_domains() if query_intent.subject_domain == "unknown" else [],
             },
-            "business_knowledge": business_notes,
+            "business_knowledge": "" if session_state is not None else business_notes,
             "instructions": {
                 "return_format": "json",
                 "fields": self._intent_output_fields(),
@@ -1167,6 +1188,17 @@ class PromptBuilder:
             return []
         return self.semantic_runtime.semantic_field_metadata(subject_domain=subject_domain)[:20]
 
+    def _table_for_field(self, field_name: str, preferred_tables: list[str]) -> str | None:
+        if self.semantic_runtime is None or not field_name:
+            return None
+        for table_name in preferred_tables:
+            if field_name in self.semantic_runtime.table_fields(table_name):
+                return table_name
+        for table_name in self.semantic_runtime.table_field_catalog.keys():
+            if field_name in self.semantic_runtime.table_fields(table_name):
+                return table_name
+        return None
+
     def _classification_evidence(
         self,
         query_intent: QueryIntent,
@@ -1268,9 +1300,11 @@ class PromptBuilder:
         payload = {
             "subject_domain": session_state.subject_domain,
             "topic": session_state.topic,
+            "tables": session_state.tables,
             "metrics": session_state.metrics,
             "entities": session_state.entities,
             "dimensions": session_state.dimensions,
+            "filters": [item.model_dump(mode="json") for item in session_state.filters],
             "filter_fields": [item.field for item in session_state.filters],
             "time_context": session_state.time_context.model_dump(mode="json") if session_state.time_context else None,
             "version_context": session_state.version_context.model_dump(mode="json") if session_state.version_context else None,
@@ -1292,7 +1326,7 @@ class PromptBuilder:
         }
         prioritized = [field for field in sorted(set(domain_fields)) if field in important_fields or field in metric_columns]
         remaining = [field for field in sorted(set(domain_fields)) if field not in prioritized]
-        return [*prioritized, *remaining[:40]]
+        return [*prioritized, *remaining[:24]]
 
     def _intent_output_fields(self) -> list[str]:
         return [

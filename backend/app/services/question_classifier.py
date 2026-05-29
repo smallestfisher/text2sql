@@ -228,12 +228,16 @@ class QuestionClassifier:
             cancellation_token=cancellation_token,
         )
 
-        candidate = self._apply_llm_hint(
-            hint=llm_hint,
-            query_intent=query_intent,
-            session_state=session_state,
-            base_classification=baseline_classification,
-        )
+        try:
+            candidate = self._apply_llm_hint(
+                hint=llm_hint,
+                query_intent=query_intent,
+                session_state=session_state,
+                base_classification=baseline_classification,
+            )
+        except ValueError as exc:
+            warnings.append(f"llm classification hint rejected: {exc}")
+            candidate = baseline_classification
         acceptable, rejection_reasons = self._llm_classification_is_acceptable(
             candidate=candidate,
             query_intent=query_intent,

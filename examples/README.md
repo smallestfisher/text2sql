@@ -1,5 +1,7 @@
 # NL2SQL examples
 
+完整维护规范见 [../docs/CONTENT_GUIDELINES.md](../docs/CONTENT_GUIDELINES.md)。这里保留样例文件的字段速查。
+
 `nl2sql_examples.template.json` 使用轻量样例格式。必填字段只有：
 
 - `question`: 用户自然语言问题。

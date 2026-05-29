@@ -336,6 +336,25 @@ function App() {
     setSidebarOpen(false);
   }
 
+  function primeSessionTitle(sessionId: string, title: string) {
+    const normalized = title.trim();
+    if (!normalized) {
+      return;
+    }
+    setSessions((current) => {
+      const target = current.find((session) => session.id === sessionId);
+      if (!target || target.title?.trim()) {
+        return current;
+      }
+      const updated = {
+        ...target,
+        title: normalized,
+        updated_at: new Date().toISOString(),
+      };
+      return [updated, ...current.filter((session) => session.id !== sessionId)];
+    });
+  }
+
   async function handleSend(nextQuestion?: string) {
     if (!token || chatPending) {
       return;
@@ -349,6 +368,7 @@ function App() {
     const pendingUserId = `pending-user-${pendingSeed}`;
     const pendingAssistantId = `pending-assistant-${pendingSeed}`;
     const pendingSessionId = selectedSessionId || "draft";
+    const optimisticSessionTitle = buildSessionTitle(trimmed);
 
     setChatPending(true);
     setWorkspaceError("");
@@ -375,6 +395,9 @@ function App() {
         },
       ]),
     );
+    if (selectedSessionId) {
+      primeSessionTitle(selectedSessionId, optimisticSessionTitle);
+    }
     if (nextQuestion === undefined) {
       setQuestion("");
     }
@@ -384,8 +407,7 @@ function App() {
     let streamedTraceId: string | null = null;
     try {
       if (!sessionId) {
-        const sessionTitle = trimmed.length > 18 ? `${trimmed.slice(0, 18)}...` : trimmed;
-        const created = await api.createSession(token, sessionTitle);
+        const created = await api.createSession(token, optimisticSessionTitle);
         sessionId = created.session.id;
         setSessions((current) => [created.session, ...current]);
         setSelectedSessionId(sessionId);
@@ -1096,6 +1118,11 @@ function App() {
       ) : null}
     </div>
   );
+}
+
+function buildSessionTitle(question: string) {
+  const normalized = question.trim();
+  return normalized.length > 18 ? `${normalized.slice(0, 18)}...` : normalized;
 }
 
 function AuthScreen(props: {
