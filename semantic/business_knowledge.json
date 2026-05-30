@@ -120,7 +120,7 @@
       "notes": [
         "在计划、实际、审批版生产语境中，Array工厂、Cell工厂、CF工厂、MDL工厂是明确的工厂名称。",
         "这些工厂名称通常映射到逻辑字段 factory；monthly_plan_approved 中对应 factory_code，production_actuals 中对应 FACTORY。",
-        "Array工厂通常规范化为 ARRAY，Cell工厂通常规范化为 CELL，CF工厂通常规范化为 CF，MDL工厂通常规范化为 MDL。",
+        "Array工厂通常规范化为 ARRAY，Cell工厂通常规范化为 CELL，CF工厂通常规范化为 CF，MDL工厂在当前生产计划/实际数据中通常对应物理工厂值 MODULE。",
         "当自然语言明确写成“Cell工厂”“Array工厂”“CF工厂”“MDL工厂”时，应优先理解为生产工厂过滤条件，而不是 product_mapping 中的阶段料号列。"
       ]
     },
@@ -136,7 +136,7 @@
         "必须先分别在审批侧 CTE 和实际侧 CTE 内按对齐粒度聚合，例如 biz_month、factory；再把两个已聚合 CTE 按 biz_month、factory join，最后计算 Gap 和达成率。",
         "如果问题按工厂对比，审批侧工厂通常来自 monthly_plan_approved.factory_code，实际侧工厂通常来自 production_actuals.FACTORY；这些字段应在各自聚合 CTE 内分组，再在聚合结果之间对齐。",
         "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或按 PLAN_date 的 YYYYMMDD 格式映射到 YYYYMM；实际侧应按 work_date 的 YYYYMMDD 格式映射到 YYYYMM，例如 SUBSTR(work_date, 1, 6)。",
-        "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 或显式 panel 口径时，审批侧改用 target_IN_panel_qty，对应实际侧 Panel_qty。",
+        "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 工厂或显式 panel 口径时，审批侧改用 target_IN_panel_qty，对应实际侧 Panel_qty；当前数据中 MDL 工厂对应 factory_code/FACTORY=MODULE。",
         "Gap 默认定义为 实际投入 - 审批投入，SQL 输出列 input_gap_qty 必须写成 actual_input_qty - approved_input_qty，不要写成 approved_input_qty - actual_input_qty。达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
       ]
     },
@@ -148,9 +148,24 @@
       "notes": [
         "production_actuals.act_type 的中文枚举是 投入、产出、报废，问句里出现这些词时应优先落为 act_type 过滤条件。",
         "当问题在 production_actuals 这类日事实表上使用逻辑月份筛选时，应把月份展开成整月 work_date 过滤或等价的月表达式过滤，不要错误收窄成单日。",
-        "在工厂语境下，物量口径不是统一的：当 FACTORY=MDL 时默认指 panel 数量；其他工厂默认指 GLS 数量。",
+        "在工厂语境下，物量口径不是统一的：当自然语言为 MDL 工厂时，当前数据通常对应 FACTORY=MODULE，默认指 panel 数量；其他工厂默认指 GLS 数量。",
         "如果问句显式提到 panel量 或 panel数量，应优先使用 Panel_qty；如果没有显式写 panel，且工厂不是 MDL，则优先使用 GLS_qty。",
-        "像“26年MDL工厂top10投入型号及其物量”这类问题，应基于 production_actuals，按 product_ID 分组，过滤 FACTORY=MDL 且 act_type=投入，并按 SUM(Panel_qty) 降序取前 10。"
+        "像“26年MDL工厂top10投入型号及其物量”这类问题，应基于 production_actuals，按 product_ID 分组，过滤 FACTORY=MODULE 且 act_type=投入，并按 SUM(Panel_qty) 降序取前 10。"
+      ]
+    },
+    {
+      "id": "time_comparison_yoy_mom_definition",
+      "domains": ["inventory", "demand", "plan_actual", "sales_financial"],
+      "tables": [],
+      "keywords": ["同比", "环比", "YoY", "MoM", "去年同期", "上期", "上月", "上周", "上一期", "增长率", "变化率"],
+      "notes": [
+        "同比表示与上一年同期对比。月粒度同比通常是当前月份与去年同月对比，例如 202604 的同比基期是 202504；日粒度同比通常是当前日期与去年同日对比；周粒度同比通常是当前周与去年同周对比。",
+        "环比表示与紧邻上一期对比。月粒度环比通常是当前月份与上月对比，例如 202604 的环比基期是 202603；日粒度环比通常是当前日期与前一日对比；周粒度环比通常是当前周与上一周对比。",
+        "同比或环比计算前，应先在当前期和对比期分别按用户要求的同一业务粒度聚合，例如月份、工厂、客户、产品、FGCODE、产品大类等；再把两个聚合结果按除时间以外的同一维度对齐后计算，不要把明细行直接互 join 后再汇总。",
+        "如果问题只问同比/环比差异或变化量，默认输出 current_qty、compare_qty 和 diff_qty，其中 diff_qty = current_qty - compare_qty。",
+        "如果问题问同比/环比增长率、变化率、增幅或比例，默认公式为 (current_qty - compare_qty) / NULLIF(compare_qty, 0)；若 compare_qty 为 0，则增长率返回 NULL。",
+        "如果问题只说同比或环比但未明确是差值还是增长率，默认同时返回当前期值、对比期值、差值和变化率，避免只返回单侧事实值。",
+        "同比/环比的时间对齐必须基于该事实表真实时间字段或展开后的业务月份字段。例如需求横表应先展开为 demand_month 后再做同比/环比；生产实际通常基于 work_date；OMS库存通常基于 report_month；审批计划通常基于 plan_month 或 PLAN_date 映射出的月份。"
       ]
     }
   ]

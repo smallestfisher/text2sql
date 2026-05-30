@@ -27,6 +27,7 @@ from backend.app.services.sql_validator import SqlValidator
 
 logger = logging.getLogger(__name__)
 _OMITTED = object()
+SUPPORTED_SUBJECT_DOMAINS = {"inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"}
 
 
 class ConversationOrchestrator:
@@ -215,7 +216,7 @@ class ConversationOrchestrator:
                 detail=classification.question_type,
             )
             self._sync_classification_with_query_plan(classification, query_plan)
-            terminal_reason = self._terminal_skip_reason(classification, query_plan)
+            terminal_reason = self._pre_retrieval_terminal_skip_reason(classification)
             if terminal_reason is not None:
                 self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
@@ -292,6 +293,13 @@ class ConversationOrchestrator:
                 retrieval=retrieval,
             )
             query_plan = self._apply_retrieval_tables_to_plan_shell(query_plan, retrieval)
+            classification, query_plan, question_context = self._apply_retrieval_support_to_clarification(
+                classification=classification,
+                query_plan=query_plan,
+                question_context=question_context,
+                retrieval=retrieval,
+                original_question=request.question,
+            )
             self._log_timing(trace.trace_id, "plan_shell_tables", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="plan shell table selection")
             self._log_stage_io(
@@ -1140,6 +1148,8 @@ class ConversationOrchestrator:
             return query_plan
         tables = list(query_plan.tables)
         for hit in retrieval.hits:
+            if not self._hit_matches_domain(hit, query_plan.subject_domain):
+                continue
             metadata_tables = hit.metadata.get("tables", [])
             if isinstance(metadata_tables, list):
                 for table_name in metadata_tables:
@@ -1182,12 +1192,16 @@ class ConversationOrchestrator:
     def _first_known_domain(self, *values: str | None) -> str | None:
         for value in values:
             normalized = (value or "").strip()
-            if normalized and normalized != "unknown":
+            if normalized in SUPPORTED_SUBJECT_DOMAINS and normalized != "unknown":
                 return normalized
         return None
 
     def _single_retrieval_domain(self, retrieval) -> str | None:
-        domains = [domain for domain in retrieval.domains if domain and domain != "unknown"]
+        for hit in getattr(retrieval, "hits", []) or []:
+            hit_domain = self._single_primary_domain(self._hit_domains(hit))
+            if hit_domain is not None:
+                return hit_domain
+        domains = [domain for domain in retrieval.domains if domain in SUPPORTED_SUBJECT_DOMAINS and domain != "unknown"]
         unique_domains = []
         for domain in domains:
             if domain not in unique_domains:
@@ -1211,12 +1225,91 @@ class ConversationOrchestrator:
                         table_domains.append(domain)
         return self._single_primary_domain(table_domains)
 
+    def _hit_matches_domain(self, hit, subject_domain: str) -> bool:
+        if subject_domain == "unknown":
+            return True
+        domains = self._hit_domains(hit)
+        if not domains:
+            return True
+        return subject_domain in domains or (domains == ["dimension"])
+
+    def _hit_domains(self, hit) -> list[str]:
+        domains: list[str] = []
+        metadata = getattr(hit, "metadata", {}) or {}
+        metadata_domains = metadata.get("domains", [])
+        if isinstance(metadata_domains, list):
+            for domain_name in metadata_domains:
+                if domain_name in SUPPORTED_SUBJECT_DOMAINS and domain_name != "unknown" and domain_name not in domains:
+                    domains.append(domain_name)
+        subject_domain = metadata.get("subject_domain")
+        if subject_domain in SUPPORTED_SUBJECT_DOMAINS and subject_domain != "unknown" and subject_domain not in domains:
+            domains.append(subject_domain)
+        return domains
+
     def _single_primary_domain(self, domains: list[str]) -> str | None:
         if len(domains) == 1:
             return domains[0]
         primary_domains = [domain for domain in domains if domain != "dimension"]
         if len(primary_domains) == 1:
             return primary_domains[0]
+        return None
+
+    def _apply_retrieval_support_to_clarification(
+        self,
+        *,
+        classification,
+        query_plan,
+        question_context,
+        retrieval,
+        original_question: str,
+    ):
+        if not getattr(classification, "need_clarification", False) and not getattr(query_plan, "need_clarification", False):
+            return classification, query_plan, question_context
+        if not self._retrieval_has_answer_support(retrieval):
+            return classification, query_plan, question_context
+
+        logger.info(
+            "retrieval support resolved clarification trace_domain=%s hits=%s",
+            getattr(query_plan, "subject_domain", None),
+            len(getattr(retrieval, "hits", []) or []),
+        )
+        resolved_question_type = "follow_up" if getattr(question_context, "context_relation", "new") == "follow_up" else "new"
+        classification = classification.model_copy(update={
+            "question_type": resolved_question_type,
+            "need_clarification": False,
+            "clarification_question": None,
+            "reason_code": "retrieval_supported_answerable",
+            "reason": getattr(question_context, "semantic_brief", None) or getattr(classification, "reason", None),
+        })
+        query_plan = query_plan.model_copy(update={
+            "question_type": resolved_question_type,
+            "need_clarification": False,
+            "clarification_question": None,
+            "reason_code": "retrieval_supported_answerable",
+        })
+        if question_context is not None and getattr(question_context, "decision", "answerable") == "clarification_needed":
+            question_context = question_context.model_copy(update={
+                "decision": "answerable",
+                "effective_question": getattr(question_context, "effective_question", None) or original_question,
+                "clarification_question": None,
+                "reason": "retrieval supplied semantic support after question-context clarification suggestion",
+            })
+        return classification, query_plan, question_context
+
+    def _retrieval_has_answer_support(self, retrieval) -> bool:
+        if retrieval is None:
+            return False
+        for hit in getattr(retrieval, "hits", []) or []:
+            source_type = getattr(hit, "source_type", "")
+            if source_type in {"example", "knowledge", "join_pattern"}:
+                return True
+            if source_type == "table_schema" and self._single_retrieval_domain(retrieval) is not None:
+                return True
+        return False
+
+    def _pre_retrieval_terminal_skip_reason(self, classification) -> str | None:
+        if classification.question_type == "invalid":
+            return "terminal gate: invalid question, skip retrieval and SQL generation"
         return None
 
     def _terminal_skip_reason(self, classification, query_plan) -> str | None:

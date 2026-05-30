@@ -5,6 +5,7 @@ import unittest
 
 from backend.app.models.query_plan import FilterItem, QueryPlan
 from backend.app.models.classification import QuestionClassification
+from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, SessionState
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.llm_client import LLMClient
@@ -405,6 +406,121 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         )
 
         self.assertEqual(query_plan.filters, [])
+
+    def test_domain_backfill_ignores_non_schema_domain_labels(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        orchestrator.query_planner = type(
+            "QueryPlannerStub",
+            (),
+            {"semantic_runtime": self.semantic_runtime},
+        )()
+        classification = type(
+            "ClassificationStub",
+            (),
+            {"subject_domain": "oms库存"},
+        )()
+        question_context = type(
+            "QuestionContextStub",
+            (),
+            {"subject_domain": "oms库存"},
+        )()
+        query_plan = QueryPlan(
+            question_type="new",
+            subject_domain="unknown",
+            tables=["oms_inventory"],
+        )
+        retrieval = type(
+            "RetrievalStub",
+            (),
+            {
+                "domains": ["oms库存"],
+                "hits": [type("HitStub", (), {"metadata": {"tables": ["oms_inventory"]}})()],
+            },
+        )()
+
+        _, resolved_plan, _ = orchestrator._apply_retrieval_domain_to_plan_shell(
+            classification=classification,
+            query_plan=query_plan,
+            question_context=question_context,
+            retrieval=retrieval,
+        )
+
+        self.assertEqual(resolved_plan.subject_domain, "inventory")
+
+        state = SessionStateService().build_next_state(
+            query_plan=resolved_plan,
+            previous_state=None,
+            question="oms库存，近6个月库存变化趋势",
+        )
+
+        self.assertEqual(state.subject_domain, "inventory")
+
+    def test_retrieval_support_reopens_complete_question_context_clarification(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        classification = QuestionClassification(
+            question_type="clarification_needed",
+            subject_domain="unknown",
+            need_clarification=True,
+            clarification_question="请确认版本字段的判定口径。",
+            reason_code="question_context_clarification",
+        )
+        query_plan = QueryPlan(
+            question_type="clarification_needed",
+            subject_domain="demand",
+            tables=["p_demand"],
+            need_clarification=True,
+            clarification_question="请确认版本字段的判定口径。",
+            semantic_brief="查询最新5版P版需求中202603需求量最高的FGCODE。",
+        )
+        question_context = type(
+            "QuestionContextStub",
+            (),
+            {
+                "decision": "clarification_needed",
+                "context_relation": "ambiguous",
+                "effective_question": "",
+                "semantic_brief": "查询最新5版P版需求中202603需求量最高的FGCODE。",
+                "model_copy": lambda self, update=None, deep=False: type(
+                    "QuestionContextStub",
+                    (),
+                    {
+                        **self.__dict__,
+                        **(update or {}),
+                        "model_copy": self.model_copy,
+                    },
+                )(),
+            },
+        )()
+        retrieval = RetrievalContext(
+            domains=["demand"],
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="demand_latest5_p_202604_top_fgcode_001",
+                    score=10.0,
+                    summary="最新5版p版需求中，202604需求量最多的fgcode是哪一个",
+                    metadata={"subject_domain": "demand", "tables": ["p_demand"]},
+                )
+            ],
+        )
+
+        resolved_classification, resolved_plan, resolved_context = orchestrator._apply_retrieval_support_to_clarification(
+            classification=classification,
+            query_plan=query_plan,
+            question_context=question_context,
+            retrieval=retrieval,
+            original_question="我是指的最新5版p版需求中，202603需求量最多的fgcode是哪一个",
+        )
+
+        self.assertFalse(resolved_classification.need_clarification)
+        self.assertFalse(resolved_plan.need_clarification)
+        self.assertEqual(resolved_classification.question_type, "new")
+        self.assertEqual(resolved_plan.question_type, "new")
+        self.assertEqual(resolved_context.decision, "answerable")
+        self.assertEqual(
+            resolved_context.effective_question,
+            "我是指的最新5版p版需求中，202603需求量最多的fgcode是哪一个",
+        )
 
     def test_terminal_clarification_is_saved_as_pending_context(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)

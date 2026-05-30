@@ -43,6 +43,7 @@ class SemanticRuntime:
             for table_name, payload in self.tables_metadata.items()
             if isinstance(payload, dict)
         }
+        self.table_domain_catalog = self._build_table_domain_catalog()
 
     def default_limit(self, domain_name: str, default_value: int = 200) -> int:
         _ = domain_name
@@ -93,8 +94,56 @@ class SemanticRuntime:
         return []
 
     def table_domains(self, table_name: str) -> list[str]:
-        _ = table_name
-        return []
+        return list(self.table_domain_catalog.get(table_name, []))
+
+    def _build_table_domain_catalog(self) -> dict[str, list[str]]:
+        table_domains: dict[str, list[str]] = {}
+        for template in self.metadata_registry.examples_template:
+            if not isinstance(template, dict):
+                continue
+            self._add_table_domains(
+                table_domains,
+                tables=self._tables_from_template_sql(template.get("sql")),
+                domains=[str(template.get("subject_domain") or "")],
+            )
+        for entry in self.metadata_registry.business_knowledge_entries:
+            if not isinstance(entry, dict):
+                continue
+            self._add_table_domains(
+                table_domains,
+                tables=[str(item) for item in entry.get("tables", []) if item],
+                domains=[str(item) for item in entry.get("domains", []) if item],
+            )
+        for pattern in self.metadata_registry.join_patterns:
+            if not isinstance(pattern, dict):
+                continue
+            self._add_table_domains(
+                table_domains,
+                tables=[str(item) for item in pattern.get("tables", []) if item],
+                domains=[str(item) for item in pattern.get("domains", []) if item],
+            )
+        return table_domains
+
+    def _add_table_domains(self, table_domains: dict[str, list[str]], *, tables: list[str], domains: list[str]) -> None:
+        normalized_domains = [
+            domain_name
+            for domain_name in self._unique_strings(domains)
+            if domain_name != "unknown"
+        ]
+        for table_name in self._unique_strings(tables):
+            if table_name not in self.tables_metadata:
+                continue
+            for domain_name in normalized_domains:
+                table_domains.setdefault(table_name, [])
+                if domain_name not in table_domains[table_name]:
+                    table_domains[table_name].append(domain_name)
+
+    def _tables_from_template_sql(self, sql: object) -> list[str]:
+        if not isinstance(sql, str):
+            return []
+        normalized_sql = sql.replace('"', " ")
+        candidates = re.findall(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", normalized_sql, flags=re.IGNORECASE)
+        return [table_name for table_name in self._unique_strings(candidates) if table_name in self.tables_metadata]
 
     def metric_column(self, metric_name: str) -> str:
         return metric_name
