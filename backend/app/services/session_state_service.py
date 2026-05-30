@@ -12,10 +12,11 @@ class SessionStateService:
         query_plan: QueryPlan,
         previous_state: SessionState | None,
         question: str | None = None,
+        effective_question: str | None = None,
         sql: str | None = None,
     ) -> SessionState:
         if previous_state is None or not query_plan.inherit_context:
-            return self._new_state(query_plan, sql, previous_state, question)
+            return self._new_state(query_plan, sql, previous_state, question, effective_question)
 
         state = previous_state.model_copy(deep=True)
         state.topic = query_plan.subject_domain
@@ -64,8 +65,8 @@ class SessionStateService:
         state.last_sql = sql
         state.last_result_shape = self._result_shape(query_plan)
         state.last_semantic_brief = query_plan.semantic_brief
-        state.last_effective_question = question
-        state.recent_turns = self._append_turn(previous_state, query_plan, question)
+        state.last_effective_question = effective_question or question
+        state.recent_turns = self._append_turn(previous_state, query_plan, question, effective_question)
         state.conversation_summary = self._conversation_summary(state.recent_turns)
         if not query_plan.need_clarification:
             state.pending_clarification = None
@@ -77,6 +78,7 @@ class SessionStateService:
         sql: str | None,
         previous_state: SessionState | None,
         question: str | None,
+        effective_question: str | None,
     ) -> SessionState:
         session_id = previous_state.session_id if previous_state else "session_pending"
         state = SessionState(
@@ -98,8 +100,8 @@ class SessionStateService:
             last_sql=sql,
             last_result_shape=self._result_shape(query_plan),
             last_semantic_brief=query_plan.semantic_brief,
-            last_effective_question=question,
-            recent_turns=self._append_turn(previous_state, query_plan, question),
+            last_effective_question=effective_question or question,
+            recent_turns=self._append_turn(previous_state, query_plan, question, effective_question),
             pending_clarification=None,
         )
         state.conversation_summary = self._conversation_summary(state.recent_turns)
@@ -131,12 +133,13 @@ class SessionStateService:
         previous_state: SessionState | None,
         query_plan: QueryPlan,
         question: str | None,
+        effective_question: str | None = None,
     ) -> list[QueryTurnRecord]:
         turns = list(previous_state.recent_turns if previous_state else [])
         turns.append(
             QueryTurnRecord(
                 question=question,
-                effective_question=question,
+                effective_question=effective_question or question,
                 summary=self._query_summary(query_plan),
                 semantic_brief=query_plan.semantic_brief,
             )

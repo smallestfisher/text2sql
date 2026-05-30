@@ -1,22 +1,24 @@
 from __future__ import annotations
 
-from collections import Counter
 from collections import deque
 import calendar
 import re
-from datetime import date
 
 from backend.app.models.query_plan import FilterItem
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.query_plan import SortItem
-from backend.app.models.query_plan import TimeContext
-from backend.app.models.query_plan import TimeRange
 from backend.app.models.query_plan import VersionContext
-from backend.app.models.session_state import SessionState
 from backend.app.services.metadata_registry import MetadataRegistry
 
 
 class SemanticRuntime:
+    """Runtime helpers for the table schema boundary.
+
+    Business interpretation now comes from retrieved knowledge, join patterns
+    and examples. This class intentionally keeps only deterministic table,
+    field, join and time-literal utilities used by prompts and validation.
+    """
+
     def __init__(
         self,
         domain_config: dict,
@@ -24,29 +26,13 @@ class SemanticRuntime:
     ) -> None:
         self.domain_config = domain_config
         self.metadata_registry = metadata_registry or MetadataRegistry()
-        self.metric_catalog = {
-            item["name"]: item for item in domain_config.get("metrics", [])
-        }
-        self.entity_catalog = {
-            item["name"]: item for item in domain_config.get("entities", [])
-        }
-        self.query_profiles = domain_config.get("query_profiles", {})
-        self.question_understanding = domain_config.get("question_understanding", {})
-        self.domain_inference = domain_config.get("domain_inference", {})
-        self.field_semantics_catalog = self._build_field_semantics_catalog(
-            domain_config.get("field_semantics", [])
-        )
-        extractors = domain_config.get("extractors", {})
-        self.time_extractors = extractors.get("time", [])
-        self.filter_extractors = extractors.get("filters", [])
-        self.dimension_extractors = extractors.get("dimensions", [])
-        self.version_extractors = extractors.get("version", [])
-        self.analysis_extractors = extractors.get("analysis", [])
-        self.sort_extractors = extractors.get("sort", [])
-        self.limit_extractors = extractors.get("limit", [])
         self.graph_nodes = set(domain_config.get("semantic_graph", {}).get("nodes", []))
         self.graph_edges = domain_config.get("semantic_graph", {}).get("edges", [])
         self.tables_metadata = self._load_tables_metadata()
+        if not self.graph_nodes:
+            self.graph_nodes = set(self.tables_metadata.keys())
+        if not self.graph_edges:
+            self.graph_edges = self._relationship_edges(self.tables_metadata)
         self.table_field_catalog = {
             table_name: self._extract_table_fields(payload)
             for table_name, payload in self.tables_metadata.items()
@@ -58,106 +44,19 @@ class SemanticRuntime:
             if isinstance(payload, dict)
         }
 
-    def invalid_patterns(self) -> set[str]:
-        return set(self.question_understanding.get("invalid_exact_patterns", []))
-
-    def follow_up_cues(self) -> list[str]:
-        return list(self.question_understanding.get("follow_up_cues", []))
-
-    def context_filter_groups(self) -> dict[str, list[str]]:
-        context_management = self.question_understanding.get("context_management", {})
-        return context_management.get("replace_filter_groups", {})
-
-    def clarification_message(self, key: str, default: str) -> str:
-        messages = self.question_understanding.get("clarification_questions", {})
-        return messages.get(key, default)
-
-
-    def metric_resolution_rules(self) -> list[dict]:
-        return list(self.question_understanding.get("metric_resolution_rules", []))
-
-    def metric_variant_rules(self) -> list[dict]:
-        return list(self.question_understanding.get("metric_variant_rules", []))
-
-    def resolve_metrics(
-        self,
-        question: str,
-        matched_metrics: list[str],
-        filters: list[FilterItem],
-    ) -> list[str]:
-        metrics = [
-            metric
-            for metric in self._unique_strings(matched_metrics)
-            if self.is_known_metric(metric)
-        ]
-
-        normalized_question = question.strip().lower()
-        for rule in self.metric_resolution_rules():
-            if not self._metric_resolution_rule_matches(normalized_question, filters, rule):
-                continue
-            for metric in rule.get("metrics", []):
-                if isinstance(metric, str) and self.is_known_metric(metric) and metric not in metrics:
-                    metrics.append(metric)
-        return self._apply_metric_variant_rules(metrics, filters)
-
-    def metric_column(self, metric_name: str) -> str:
-        metric = self.metric_catalog.get(metric_name, {})
-        return metric.get("semantic_column", metric_name)
-
-    def metric_aggregate_function(self, metric_name: str) -> str:
-        metric = self.metric_catalog.get(metric_name, {})
-        return str(metric.get("aggregate_function", "SUM")).upper()
-
-    def metric_act_type_scope(self, metric_name: str) -> str | None:
-        metric = self.metric_catalog.get(metric_name, {})
-        scope = str(metric.get("act_type_scope", "")).strip()
-        return scope or None
-
-    def is_known_metric(self, metric_name: str) -> bool:
-        return metric_name in self.metric_catalog
-
-    def is_known_domain(self, domain_name: str) -> bool:
-        return domain_name in self.query_profiles or domain_name == "unknown"
-
-    def domain_tables(self, domain_name: str) -> list[str]:
-        for item in self.domain_config.get("domains", []):
-            if item.get("name") == domain_name:
-                return list(item.get("tables", []))
-        return []
-
-    def resolve_tables_for_plan(self, domain_name: str, metrics: list[str]) -> list[str]:
-        profile = self.query_profile(domain_name)
-        selection = profile.get("table_selection", {})
-        prefer_metric_tables = bool(selection.get("prefer_metric_tables", True))
-        use_domain_tables_when_metric_tables_missing = bool(selection.get("use_domain_tables_when_metric_tables_missing", True))
-
-        if prefer_metric_tables and metrics:
-            ordered_tables: list[str] = []
-            for metric in metrics:
-                for table in self.metric_tables(metric):
-                    if table not in ordered_tables:
-                        ordered_tables.append(table)
-            if ordered_tables:
-                return ordered_tables
-
-        if use_domain_tables_when_metric_tables_missing:
-            return self.domain_tables(domain_name)
-        return []
-
     def default_limit(self, domain_name: str, default_value: int = 200) -> int:
-        profile = self.query_profile(domain_name)
-        return int(profile.get("default_limit", default_value))
+        _ = domain_name
+        return default_value
 
     def max_limit(self, domain_name: str, default_value: int = 200) -> int:
-        profile = self.query_profile(domain_name)
-        return int(profile.get("max_limit", default_value))
+        _ = domain_name
+        return default_value
 
     def clamp_limit(self, domain_name: str, limit: int | None, default_value: int = 200) -> int:
-        default_limit = self.default_limit(domain_name, default_value=default_value)
-        max_limit = self.max_limit(domain_name, default_value=default_limit)
+        _ = domain_name
         if limit is None or limit <= 0:
-            return default_limit
-        return min(limit, max_limit)
+            return default_value
+        return min(limit, default_value)
 
     def sanitize_query_plan(
         self,
@@ -165,134 +64,104 @@ class SemanticRuntime:
         default_limit: int = 200,
     ) -> QueryPlan:
         compiled = query_plan.model_copy(deep=True)
-        compiled.entities = [
-            entity
-            for entity in self._unique_strings(compiled.entities)
-            if entity in self.entity_catalog
+        compiled.tables = [
+            table
+            for table in self._unique_strings(compiled.tables)
+            if self.is_known_table(table)
         ]
-        compiled.metrics = [
-            metric
-            for metric in self._unique_strings(compiled.metrics)
-            if self.is_known_metric(metric)
-        ]
-        compiled.tables = self._sanitize_tables(
-            domain_name=compiled.subject_domain,
-            metrics=compiled.metrics,
-            candidate_tables=compiled.tables,
-        )
-        compiled.version_context = self._sanitize_version_context(
-            domain_name=compiled.subject_domain,
-            version_context=compiled.version_context,
-        )
+        allowed_fields = self.allowed_fields_for_plan(compiled)
+        compiled.dimensions = self._sanitize_dimensions(compiled.dimensions, allowed_fields)
+        compiled.filters = self._sanitize_filters(compiled.filters, allowed_fields)
+        compiled.sort = self._sanitize_sort(compiled.sort, allowed_fields)
         compiled.limit = self.clamp_limit(
             compiled.subject_domain,
             compiled.limit,
             default_value=default_limit,
         )
-        compiled = self.apply_domain_constraints(compiled)
-        allowed_fields = self.allowed_fields_for_plan(compiled)
-        compiled.dimensions = self._sanitize_dimensions(compiled.dimensions, allowed_fields)
-        compiled.filters = self._sanitize_filters(compiled.filters, allowed_fields)
-        compiled.sort = self._sanitize_sort(compiled.sort, allowed_fields)
         compiled.join_path = self.resolve_join_path(compiled.tables)
         return compiled
 
+    def query_profile(self, domain_name: str) -> dict:
+        _ = domain_name
+        return {}
+
+    def is_known_domain(self, domain_name: str) -> bool:
+        return domain_name == "unknown" or bool(domain_name)
+
+    def domain_tables(self, domain_name: str) -> list[str]:
+        _ = domain_name
+        return []
+
+    def table_domains(self, table_name: str) -> list[str]:
+        _ = table_name
+        return []
+
+    def metric_column(self, metric_name: str) -> str:
+        return metric_name
+
+    def metric_aggregate_function(self, metric_name: str) -> str:
+        _ = metric_name
+        return "SUM"
+
+    def metric_act_type_scope(self, metric_name: str) -> str | None:
+        _ = metric_name
+        return None
+
+    def is_known_metric(self, metric_name: str) -> bool:
+        _ = metric_name
+        return False
+
     def metric_tables(self, metric_name: str) -> list[str]:
-        metric = self.metric_catalog.get(metric_name)
-        if metric is None:
-            return []
-        return [item["table"] for item in metric.get("definitions", [])]
+        _ = metric_name
+        return []
+
+    def metric_expression_columns(self, metric_name: str, table_names: list[str] | None = None) -> set[str]:
+        _ = metric_name
+        _ = table_names
+        return set()
 
     def profile_allowed_fields(self, domain_name: str) -> list[str]:
-        profile = self.query_profile(domain_name)
-        return [str(item) for item in profile.get("allowed_fields", []) if item]
+        _ = domain_name
+        return []
 
     def profile_field_aliases(self, domain_name: str) -> dict[str, list[str]]:
-        aliases: dict[str, list[str]] = {}
-        raw_aliases = self.query_profile(domain_name).get("field_aliases", {})
-        if not isinstance(raw_aliases, dict):
-            return aliases
-        for field_name, targets in raw_aliases.items():
-            if not field_name:
-                continue
-            if isinstance(targets, list):
-                values = [str(item) for item in targets if item]
-            elif targets:
-                values = [str(targets)]
-            else:
-                values = []
-            aliases[str(field_name)] = values
-        return aliases
+        _ = domain_name
+        return {}
 
     def semantic_field_metadata(
         self,
         subject_domain: str | None = None,
         role: str | None = None,
     ) -> list[dict]:
-        normalized_domain = None if subject_domain in {None, "", "unknown"} else subject_domain
-        entries: list[dict] = []
-        for field_name, payload in self.field_semantics_catalog.items():
-            domains = set(payload.get("domains", []))
-            roles = set(payload.get("roles", []))
-            if normalized_domain and domains and normalized_domain not in domains:
-                continue
-            if role and roles and role not in roles:
-                continue
-            entries.append(
-                {
-                    "field": field_name,
-                    "aliases": list(payload.get("aliases", [])),
-                    "domains": sorted(domains),
-                    "roles": sorted(roles),
-                    "tables": list(payload.get("tables", [])),
-                    "description": payload.get("description"),
-                }
-            )
-        return sorted(entries, key=lambda item: item["field"])
+        _ = subject_domain
+        _ = role
+        return []
 
     def semantic_field_aliases(
         self,
         subject_domain: str | None = None,
         role: str | None = None,
     ) -> dict[str, list[str]]:
-        aliases: dict[str, list[str]] = {}
-        for item in self.semantic_field_metadata(subject_domain=subject_domain, role=role):
-            field_name = str(item.get("field", "")).strip()
-            if not field_name:
-                continue
-            field_aliases = [str(alias).strip() for alias in item.get("aliases", []) if alias]
-            aliases[field_name] = self._unique_strings(field_aliases)
-        return aliases
-
-    def field_domains(self, field_name: str) -> list[str]:
-        if not field_name:
-            return []
-        domains = set(self.field_semantics_catalog.get(field_name, {}).get("domains", []))
-        for domain_name in self.query_profiles.keys():
-            if field_name in self.profile_allowed_fields(domain_name):
-                domains.add(domain_name)
-        return sorted(domains)
+        _ = subject_domain
+        _ = role
+        return {}
 
     def normalize_field_name(self, field_name: str, subject_domain: str) -> str:
-        if not field_name:
-            return field_name
-        allowed_fields = set(self.profile_allowed_fields(subject_domain))
-        if field_name in allowed_fields:
-            return field_name
-
-        lowered = field_name.lower()
-        for logical_field, aliases in self.profile_field_aliases(subject_domain).items():
-            candidates = [logical_field, *aliases]
-            if any(candidate.lower() == lowered for candidate in candidates if candidate):
-                return logical_field
-
-        semantic_domain = None if subject_domain == "unknown" else subject_domain
-        for logical_field, aliases in self.semantic_field_aliases(semantic_domain).items():
-            candidates = [logical_field, *aliases]
-            if any(candidate.lower() == lowered for candidate in candidates if candidate):
-                return logical_field
-
+        _ = subject_domain
         return field_name
+
+    def resolve_tables_for_plan(self, domain_name: str, metrics: list[str]) -> list[str]:
+        _ = domain_name
+        _ = metrics
+        return []
+
+    def time_filter_fields(self, domain_name: str) -> list[str]:
+        _ = domain_name
+        return []
+
+    def warn_if_missing_time_filter(self, domain_name: str) -> bool:
+        _ = domain_name
+        return False
 
     def table_fields(self, table_name: str) -> list[str]:
         return list(self.table_field_catalog.get(table_name, []))
@@ -317,12 +186,12 @@ class SemanticRuntime:
         table_names: list[str],
         logical_field: str,
     ) -> list[dict]:
-        resolved_fields = self.resolve_field_candidates(domain_name, table_names, logical_field)
+        _ = domain_name
         candidates: list[dict] = []
         seen: set[tuple[str, str]] = set()
         for table_name in table_names:
             for field_name, metadata in self.table_time_field_catalog.get(table_name, {}).items():
-                if field_name not in resolved_fields:
+                if not self._time_field_matches_logical_field(field_name, metadata, logical_field):
                     continue
                 key = (table_name, field_name)
                 if key in seen:
@@ -377,11 +246,7 @@ class SemanticRuntime:
             if compact_day_match:
                 return value
             if iso_day_match:
-                return (
-                    f"{iso_day_match.group(1)}"
-                    f"{iso_day_match.group(2)}"
-                    f"{iso_day_match.group(3)}"
-                )
+                return f"{iso_day_match.group(1)}{iso_day_match.group(2)}{iso_day_match.group(3)}"
             return None
 
         if normalized_format == "YYYY-MM-DD":
@@ -422,21 +287,16 @@ class SemanticRuntime:
         table_names: list[str],
         logical_field: str,
     ) -> set[str]:
+        _ = domain_name
         candidates = {logical_field}
-        aliases = self.profile_field_aliases(domain_name).get(logical_field, [])
-        candidates.update(alias for alias in aliases if alias)
-
         lowered_field = logical_field.lower()
+        aliases = self._logical_field_aliases(logical_field)
+        candidates.update(aliases)
+        lowered_aliases = {item.lower() for item in aliases}
         for table_name in table_names:
             for column_name in self.table_fields(table_name):
-                if column_name.lower() == lowered_field:
+                if column_name.lower() == lowered_field or column_name.lower() in lowered_aliases:
                     candidates.add(column_name)
-
-        for metric_name, metric in self.metric_catalog.items():
-            if str(metric.get("semantic_column", "")) != logical_field:
-                continue
-            candidates.update(self.metric_expression_columns(metric_name, table_names=table_names))
-            break
         return {item for item in candidates if item}
 
     def is_dynamic_version_context(self, version_context: VersionContext | None) -> bool:
@@ -447,445 +307,15 @@ class SemanticRuntime:
         )
 
     def allowed_fields_for_plan(self, query_plan: QueryPlan) -> set[str]:
-        allowed_fields = set(self.profile_allowed_fields(query_plan.subject_domain))
+        allowed_fields: set[str] = set()
         for table_name in query_plan.tables:
             allowed_fields.update(self.table_fields(table_name))
-        for metric_name in query_plan.metrics:
-            allowed_fields.add(self.metric_column(metric_name))
-            allowed_fields.update(self.metric_expression_columns(metric_name, table_names=query_plan.tables))
-        profile_version_field = self.query_profile(query_plan.subject_domain).get("version_field")
+        allowed_fields.update(query_plan.dimensions)
+        allowed_fields.update(item.field for item in query_plan.filters)
+        allowed_fields.update(item.field for item in query_plan.sort)
         if query_plan.version_context and query_plan.version_context.field:
-            if not profile_version_field or query_plan.version_context.field == profile_version_field:
-                allowed_fields.add(query_plan.version_context.field)
-        return allowed_fields
-
-    def metric_expression_columns(self, metric_name: str, table_names: list[str] | None = None) -> set[str]:
-        metric = self.metric_catalog.get(metric_name, {})
-        allowed_tables = set(table_names or [])
-        columns: set[str] = set()
-        for definition in metric.get("definitions", []):
-            table_name = definition.get("table")
-            if allowed_tables and table_name not in allowed_tables:
-                continue
-            expression = str(definition.get("expression", ""))
-            for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expression):
-                upper_token = token.upper()
-                if upper_token in {"SUM", "COUNT", "DISTINCT", "AVG", "MIN", "MAX", "NORMALIZED_FROM_HORIZONTAL_MONTH_COLUMNS"}:
-                    continue
-                columns.add(token)
-        return columns
-
-    def query_profile(self, domain_name: str) -> dict:
-        return self.query_profiles.get(domain_name, {})
-
-    def time_filter_fields(self, domain_name: str) -> list[str]:
-        return list(self.query_profile(domain_name).get("time_filter_fields", []))
-
-    def warn_if_missing_time_filter(self, domain_name: str) -> bool:
-        return bool(self.query_profile(domain_name).get("warn_if_missing_time_filter", False))
-
-    def infer_domain(
-        self,
-        matched_metrics: list[str],
-        matched_entities: list[str],
-        requested_dimensions: list[str] | None = None,
-        filters: list[FilterItem] | None = None,
-        question: str | None = None,
-        session_state: SessionState | None = None,
-    ) -> str:
-        metric_to_domain = self.domain_inference.get("metric_to_domain", {})
-        domains = [metric_to_domain.get(metric) for metric in matched_metrics if metric_to_domain.get(metric)]
-        if domains:
-            return Counter(domains).most_common(1)[0][0]
-
-        filter_fields = {item.field for item in filters or []}
-        requested_dimension_fields = set(requested_dimensions or [])
-        entity_set = set(matched_entities)
-        hint_counter: Counter[str] = Counter()
-        for hint in self.domain_inference.get("hints", []):
-            domain = hint.get("domain")
-            if not domain:
-                continue
-            hint_entities = set(hint.get("entities", []))
-            hint_filter_fields = set(hint.get("filter_fields", []))
-            hint_keywords = [str(item).lower() for item in hint.get("keywords", []) if item]
-            keyword_match = bool(question and any(keyword in question for keyword in hint_keywords))
-            if (
-                hint_entities.intersection(entity_set)
-                or hint_filter_fields.intersection(filter_fields)
-                or keyword_match
-            ):
-                hint_counter[domain] += int(hint.get("weight", 1))
-
-        for field_name in requested_dimension_fields:
-            for domain_name in self.field_domains(field_name):
-                hint_counter[domain_name] += 1
-
-        if hint_counter:
-            return hint_counter.most_common(1)[0][0]
-
-        return "unknown"
-
-    def suggest_dimensions(
-        self,
-        subject_domain: str,
-        requested_dimensions: list[str],
-        matched_entities: list[str],
-        filter_fields: set[str],
-        time_grain: str,
-    ) -> list[str]:
-        profile = self.query_profiles.get(subject_domain, {})
-        preferences = profile.get("dimension_preferences", [])
-        dimensions = self._unique_strings(requested_dimensions)
-        explicit_non_time_dimensions = {
-            item for item in dimensions if item not in {"biz_date", "biz_month", "demand_month"}
-        }
-        explicit_time_dimensions = {
-            item for item in dimensions if item in {"biz_date", "biz_month", "demand_month"}
-        }
-        entities = set(matched_entities)
-
-        for rule in preferences:
-            required_entities = set(rule.get("entities", []))
-            excluded_filter_fields = set(rule.get("exclude_filter_fields", []))
-            rule_time_grain = rule.get("time_grain")
-            add_dimensions = [item for item in rule.get("add_dimensions", []) if item]
-            adds_time_dimension = bool(
-                add_dimensions and set(add_dimensions).issubset({"biz_date", "biz_month", "demand_month"})
-            )
-
-            if required_entities and not required_entities.issubset(entities):
-                continue
-            if rule_time_grain and rule_time_grain != time_grain:
-                continue
-            if adds_time_dimension and explicit_non_time_dimensions:
-                continue
-            if (
-                adds_time_dimension
-                and explicit_time_dimensions
-                and not set(add_dimensions).intersection(explicit_time_dimensions)
-            ):
-                continue
-            if excluded_filter_fields.intersection(filter_fields) and not set(add_dimensions).intersection(dimensions):
-                continue
-
-            for dimension in add_dimensions:
-                if dimension not in dimensions:
-                    dimensions.append(dimension)
-
-        return dimensions
-
-    def extract_dimensions(
-        self,
-        question: str,
-        subject_domain: str | None = None,
-    ) -> list[str]:
-        dimensions: list[str] = []
-        for rule in self.dimension_extractors:
-            dimension = self._extract_dimension(question, rule)
-            if dimension and dimension not in dimensions:
-                dimensions.append(dimension)
-        for dimension in self._extract_semantic_dimensions(question, subject_domain):
-            if dimension not in dimensions:
-                dimensions.append(dimension)
-        return dimensions
-
-    def extract_filters(self, question: str) -> list[FilterItem]:
-        filters: list[FilterItem] = []
-        for rule in self.filter_extractors:
-            extracted = self._extract_filter(question, rule)
-            if extracted is not None:
-                filters.append(extracted)
-        return self._deduplicate_filters(filters)
-
-    def extract_time_filters(self, question: str) -> list[FilterItem]:
-        filters: list[FilterItem] = []
-        for rule in self.time_extractors:
-            extracted = self._extract_time_rule(question, rule)
-            if extracted is not None and extracted["filter"] is not None:
-                filters.append(extracted["filter"])
-        return self._deduplicate_filters(filters)
-
-    def extract_time_context(self, question: str) -> TimeContext:
-        for rule in self.time_extractors:
-            extracted = self._extract_time_rule(question, rule)
-            if extracted is None or extracted["context"] is None:
-                continue
-            return extracted["context"]
-        return TimeContext(grain="unknown", range=TimeRange())
-
-    def extract_version_context(self, question: str) -> VersionContext | None:
-        for rule in self.version_extractors:
-            extracted = self._extract_regex_value(question, rule)
-            if extracted is None:
-                continue
-            return VersionContext(field=rule.get("field"), value=extracted)
-        return None
-
-    def extract_analysis_mode(self, question: str) -> str | None:
-        for rule in self.analysis_extractors:
-            source = self._prepare_text(question, rule)
-            flags = 0
-            if "ignorecase" in rule.get("flags", []):
-                flags |= re.IGNORECASE
-            if re.search(rule.get("pattern", ""), source, flags):
-                mode = rule.get("mode")
-                if isinstance(mode, str) and mode:
-                    return mode
-        return None
-
-    def extract_sort(self, question: str, matched_metrics: list[str] | None = None) -> list[SortItem]:
-        sort_items: list[SortItem] = []
-        for rule in self.sort_extractors:
-            extracted = self._extract_sort_rule(question, rule, matched_metrics or [])
-            if extracted is not None:
-                sort_items.append(extracted)
-        return self._sanitize_sort(sort_items, allowed_fields=set())
-
-    def extract_limit(self, question: str) -> int | None:
-        for rule in self.limit_extractors:
-            extracted = self._extract_limit_rule(question, rule)
-            if extracted is not None:
-                return extracted
-        return None
-
-    def apply_domain_constraints(self, query_plan: QueryPlan) -> QueryPlan:
-        profile = self.query_profiles.get(query_plan.subject_domain, {})
-        compiled = query_plan.model_copy(deep=True)
-
-        compiled = self._apply_explicit_source_table(compiled, profile)
-
-        compiled = self._inject_time_filters(compiled, profile)
-        compiled = self._inject_version_filter(compiled, profile)
-        compiled = self._inject_default_sort(compiled, profile)
-        compiled = self._augment_dimension_tables(compiled, profile)
-        compiled = self._apply_post_process_rules(compiled, profile)
-
-        drop_dimensions = set(profile.get("drop_dimensions", []))
-        if drop_dimensions:
-            compiled.dimensions = [
-                item for item in compiled.dimensions if item not in drop_dimensions
-            ]
-
-        drop_filters = set(profile.get("drop_filters", []))
-        if drop_filters:
-            compiled.filters = [
-                item for item in compiled.filters if item.field not in drop_filters
-            ]
-
-        entities = set(compiled.entities)
-        filter_fields = {item.field for item in compiled.filters}
-        for rule in profile.get("clarification_rules", []):
-            required_metrics = set(rule.get("metrics", []))
-            required_entities = set(rule.get("entities", []))
-            excluded_entities = set(rule.get("exclude_entities", []))
-            excluded_filter_fields = set(rule.get("exclude_filter_fields", []))
-            missing_version_context = bool(rule.get("missing_version_context", False))
-
-            if required_metrics and not required_metrics.intersection(compiled.metrics):
-                continue
-            if required_entities and not required_entities.issubset(entities):
-                continue
-            if excluded_entities.intersection(entities):
-                continue
-            if excluded_filter_fields.intersection(filter_fields):
-                continue
-            if missing_version_context and compiled.version_context is not None:
-                continue
-
-            compiled.need_clarification = True
-            compiled.question_type = rule.get("question_type", "clarification_needed")
-            compiled.reason_code = rule.get("reason_code")
-            compiled.reason = rule.get("reason")
-            compiled.clarification_question = rule.get("clarification_question")
-            break
-
-        return compiled
-
-    def _augment_dimension_tables(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
-        ordered_tables = list(compiled.tables)
-        for rule in self._support_table_rules(profile):
-            table_name = str(rule.get("table", "")).strip()
-            if not table_name or table_name in ordered_tables:
-                continue
-            if not self._support_table_rule_matches(compiled, rule):
-                continue
-            if table_name not in ordered_tables:
-                ordered_tables.append(table_name)
-        compiled.tables = ordered_tables
-        return compiled
-
-    def _apply_post_process_rules(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
-        for rule in self._post_process_rules(profile):
-            if not self._post_process_rule_matches(compiled, rule):
-                continue
-            clear_dimensions_if_subset = {
-                str(item)
-                for item in rule.get("clear_dimensions_if_subset", [])
-                if item
-            }
-            if clear_dimensions_if_subset and set(compiled.dimensions).issubset(clear_dimensions_if_subset):
-                compiled.dimensions = []
-            for item in rule.get("add_filters", []):
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    filter_item = FilterItem.model_validate(item)
-                except Exception:
-                    continue
-                if not self._has_equivalent_filter(compiled.filters, filter_item):
-                    compiled.filters.append(filter_item)
-            clear_sort_if_all_fields = {
-                str(item)
-                for item in rule.get("clear_sort_if_all_fields", [])
-                if item
-            }
-            if clear_sort_if_all_fields and compiled.sort and all(
-                item.field in clear_sort_if_all_fields
-                for item in compiled.sort
-            ):
-                compiled.sort = []
-        return compiled
-
-    def _has_equivalent_filter(self, filters: list[FilterItem], candidate: FilterItem) -> bool:
-        return any(
-            item.field == candidate.field
-            and item.op == candidate.op
-            and item.value == candidate.value
-            for item in filters
-        )
-
-    def _apply_explicit_source_table(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
-        explicit_source = next(
-            (
-                item.value
-                for item in compiled.filters
-                if item.field in {"source_table", "demand_source"}
-                and item.op == "="
-                and isinstance(item.value, str)
-                and self.is_known_table(item.value)
-            ),
-            None,
-        )
-        if not explicit_source:
-            return compiled
-
-        allowed_domain_tables = set(self.domain_tables(compiled.subject_domain))
-        if allowed_domain_tables and explicit_source not in allowed_domain_tables:
-            return compiled
-
-        exclusive_source_groups = [
-            {str(item) for item in group if item}
-            for group in profile.get("exclusive_source_groups", [])
-            if isinstance(group, list)
-        ]
-        competing_tables = next(
-            (group for group in exclusive_source_groups if explicit_source in group),
-            set(),
-        )
-        other_tables = [
-            table
-            for table in compiled.tables
-            if table != explicit_source and table not in competing_tables
-        ]
-        if not compiled.metrics:
-            other_tables = []
-        compiled.tables = [explicit_source, *other_tables]
-        return compiled
-
-    def _support_table_rules(self, profile: dict) -> list[dict]:
-        rules = profile.get("support_tables", [])
-        return rules if isinstance(rules, list) else []
-
-    def _support_table_rule_matches(self, query_plan: QueryPlan, rule: dict) -> bool:
-        if not isinstance(rule, dict):
-            return False
-        table_name = str(rule.get("table", "")).strip()
-        if not table_name or not self.is_known_table(table_name):
-            return False
-
-        matched = False
-        required_metrics = {
-            str(item)
-            for item in rule.get("when_metrics", [])
-            if item
-        }
-        if required_metrics and required_metrics.intersection(set(query_plan.metrics)):
-            matched = True
-
-        referenced_fields = set(query_plan.dimensions).union(item.field for item in query_plan.filters)
-        explicit_fields = {
-            str(item)
-            for item in rule.get("when_fields", [])
-            if item
-        }
-        if explicit_fields and explicit_fields.intersection(referenced_fields):
-            matched = True
-
-        if bool(rule.get("when_table_fields")):
-            table_fields = self._support_table_rule_field_candidates(table_name, rule)
-            if table_fields.intersection(referenced_fields):
-                matched = True
-
-        return matched
-
-    def _support_table_rule_field_candidates(self, table_name: str, rule: dict) -> set[str]:
-        excluded_fields = {
-            str(item)
-            for item in rule.get("exclude_table_fields", [])
-            if item
-        }
-        return {
-            field_name
-            for field_name in self.table_fields(table_name)
-            if field_name not in excluded_fields
-        }
-
-    def _post_process_rules(self, profile: dict) -> list[dict]:
-        rules = profile.get("post_process_rules", [])
-        return rules if isinstance(rules, list) else []
-
-    def _post_process_rule_matches(self, query_plan: QueryPlan, rule: dict) -> bool:
-        if not isinstance(rule, dict):
-            return False
-        has_trigger = False
-        metrics = set(query_plan.metrics)
-        filter_fields = {item.field for item in query_plan.filters}
-
-        required_metrics = {
-            str(item)
-            for item in rule.get("when_metrics", [])
-            if item
-        }
-        if required_metrics:
-            has_trigger = True
-            if not required_metrics.issubset(metrics):
-                return False
-
-        any_filter_fields = {
-            str(item)
-            for item in rule.get("when_any_filter_fields", [])
-            if item
-        }
-        if any_filter_fields:
-            has_trigger = True
-            if not any_filter_fields.intersection(filter_fields):
-                return False
-
-        all_filter_fields = {
-            str(item)
-            for item in rule.get("when_all_filter_fields", [])
-            if item
-        }
-        if all_filter_fields:
-            has_trigger = True
-            if not all_filter_fields.issubset(filter_fields):
-                return False
-
-        return has_trigger
+            allowed_fields.add(query_plan.version_context.field)
+        return {item for item in allowed_fields if item}
 
     def resolve_join_path(self, tables: list[str]) -> list[str]:
         if len(tables) < 2:
@@ -899,45 +329,6 @@ class SemanticRuntime:
 
     def is_known_table(self, table: str) -> bool:
         return table in self.graph_nodes
-
-    def _sanitize_tables(
-        self,
-        domain_name: str,
-        metrics: list[str],
-        candidate_tables: list[str],
-    ) -> list[str]:
-        allowed_domain_tables = set(self.domain_tables(domain_name))
-        filtered_tables = [
-            table
-            for table in self._unique_strings(candidate_tables)
-            if self.is_known_table(table)
-            and (not allowed_domain_tables or table in allowed_domain_tables)
-        ]
-        if filtered_tables:
-            return filtered_tables
-        derived_tables = self.resolve_tables_for_plan(domain_name, metrics)
-        return [
-            table
-            for table in self._unique_strings(derived_tables)
-            if self.is_known_table(table)
-            and (not allowed_domain_tables or table in allowed_domain_tables)
-        ]
-
-    def _sanitize_version_context(
-        self,
-        domain_name: str,
-        version_context: VersionContext | None,
-    ) -> VersionContext | None:
-        if version_context is None or not version_context.value:
-            return None
-        profile_version_field = self.query_profile(domain_name).get("version_field")
-        version_field = version_context.field or profile_version_field
-        if not version_field:
-            return None
-        allowed_fields = set(self.profile_allowed_fields(domain_name))
-        if profile_version_field and version_field != profile_version_field and version_field not in allowed_fields:
-            return None
-        return VersionContext(field=version_field, value=version_context.value)
 
     def _sanitize_dimensions(self, dimensions: list[str], allowed_fields: set[str]) -> list[str]:
         return [
@@ -999,457 +390,30 @@ class SemanticRuntime:
                 queue.append((neighbor, next_path))
         return []
 
-    def _extract_sort_rule(
+    def _time_field_matches_logical_field(
         self,
-        question: str,
-        rule: dict,
-        matched_metrics: list[str],
-    ) -> SortItem | None:
-        source = self._prepare_text(question, rule)
-        flags = 0
-        if "ignorecase" in rule.get("flags", []):
-            flags |= re.IGNORECASE
-        pattern = rule.get("pattern", "")
-        if not pattern or not re.search(pattern, source, flags):
-            return None
-
-        field = rule.get("field")
-        if field == "__matched_metric__":
-            for metric in matched_metrics:
-                resolved = self.metric_column(metric)
-                if resolved:
-                    field = resolved
-                    break
-        if not field:
-            return None
-
-        order = rule.get("order", "desc")
-        return SortItem(field=field, order=order)
-
-    def _extract_limit_rule(self, question: str, rule: dict) -> int | None:
-        source = self._prepare_text(question, rule)
-        flags = 0
-        if "ignorecase" in rule.get("flags", []):
-            flags |= re.IGNORECASE
-        match = re.search(rule.get("pattern", ""), source, flags)
-        if not match:
-            return None
-        if "value" in rule:
-            try:
-                return max(1, int(rule["value"]))
-            except (TypeError, ValueError):
-                return None
-        try:
-            value = int(match.group(1))
-        except (IndexError, TypeError, ValueError):
-            return None
-        return max(1, value)
-
-    def _metric_resolution_rule_matches(
-        self,
-        normalized_question: str,
-        filters: list[FilterItem],
-        rule: dict,
+        field_name: str,
+        metadata: dict,
+        logical_field: str,
     ) -> bool:
-        text_any = [str(item).lower() for item in rule.get("text_any", []) if item]
-        text_all = [str(item).lower() for item in rule.get("text_all", []) if item]
-        text_none = [str(item).lower() for item in rule.get("text_none", []) if item]
+        grain = str(metadata.get("grain") or "").lower()
+        lowered = field_name.lower()
+        if logical_field == "biz_date":
+            return grain == "day" or "date" in lowered
+        if logical_field == "biz_month":
+            return grain == "month" or "month" in lowered or grain == "day"
+        if logical_field == "demand_month":
+            return grain == "month" or lowered == "month" or "month" in lowered
+        return lowered == logical_field.lower()
 
-        if text_any and not any(token in normalized_question for token in text_any):
-            return False
-        if text_all and not all(token in normalized_question for token in text_all):
-            return False
-        if text_none and any(token in normalized_question for token in text_none):
-            return False
-        return self._filter_rule_matches(filters, rule)
-
-    def _filter_rule_matches(
-        self,
-        filters: list[FilterItem],
-        rule: dict,
-    ) -> bool:
-        required_filters = rule.get("required_filters", [])
-        for expected in required_filters:
-            if not isinstance(expected, dict):
-                return False
-            field = expected.get("field")
-            op = expected.get("op", "=")
-            value = expected.get("value")
-            if not any(
-                item.field == field and item.op == op and item.value == value
-                for item in filters
-            ):
-                return False
-        forbidden_filters = rule.get("forbidden_filters", [])
-        for forbidden in forbidden_filters:
-            if not isinstance(forbidden, dict):
-                return False
-            field = forbidden.get("field")
-            op = forbidden.get("op", "=")
-            value = forbidden.get("value")
-            if any(
-                item.field == field and item.op == op and item.value == value
-                for item in filters
-            ):
-                return False
-        return True
-
-    def _apply_metric_variant_rules(
-        self,
-        metrics: list[str],
-        filters: list[FilterItem],
-    ) -> list[str]:
-        resolved_metrics = list(metrics)
-        for rule in self.metric_variant_rules():
-            if not self._filter_rule_matches(filters, rule):
-                continue
-
-            replacements = rule.get("replace_metrics", {})
-            if not isinstance(replacements, dict) or not replacements:
-                continue
-
-            updated_metrics: list[str] = []
-            for metric_name in resolved_metrics:
-                replacement = replacements.get(metric_name, metric_name)
-                if not isinstance(replacement, str) or not self.is_known_metric(replacement):
-                    replacement = metric_name
-                if replacement not in updated_metrics:
-                    updated_metrics.append(replacement)
-            resolved_metrics = updated_metrics
-        return resolved_metrics
-
-    def _extract_filter(self, question: str, rule: dict) -> FilterItem | None:
-        rule_type = rule.get("type")
-        if rule_type == "regex":
-            value = self._extract_regex_value(question, rule)
-            if value is None:
-                return None
-            return FilterItem(field=rule["field"], op=rule.get("op", "="), value=value)
-
-        if rule_type == "keyword_enum":
-            source = self._prepare_text(question, rule)
-            for candidate in rule.get("candidates", []):
-                normalized_candidate = candidate.upper() if "uppercase" in rule.get("flags", []) else candidate
-                if self._contains_candidate(source, normalized_candidate):
-                    return FilterItem(
-                        field=rule["field"],
-                        op=rule.get("op", "="),
-                        value=candidate,
-                    )
-        return None
-
-    def _extract_dimension(self, question: str, rule: dict) -> str | None:
-        field = rule.get("field")
-        if not field:
-            return None
-
-        rule_type = rule.get("type", "regex")
-        if rule_type == "regex":
-            flags = 0
-            if "ignorecase" in rule.get("flags", []):
-                flags |= re.IGNORECASE
-            source = self._prepare_text(question, rule)
-            if re.search(rule.get("pattern", ""), source, flags):
-                return field
-
-        if rule_type == "keyword":
-            source = self._prepare_text(question, rule)
-            for candidate in rule.get("candidates", []):
-                normalized_candidate = candidate.upper() if "uppercase" in rule.get("flags", []) else candidate
-                if self._contains_candidate(source, normalized_candidate):
-                    return field
-
-        return None
-
-    def _extract_semantic_dimensions(
-        self,
-        question: str,
-        subject_domain: str | None,
-    ) -> list[str]:
-        alias_to_fields: dict[str, set[str]] = {}
-        for field_name, aliases in self.semantic_field_aliases(
-            subject_domain=subject_domain,
-            role="dimension",
-        ).items():
-            for alias in self._unique_strings([field_name, *aliases]):
-                if not alias:
-                    continue
-                alias_to_fields.setdefault(alias, set()).add(field_name)
-
-        dimensions: list[str] = []
-        for alias in sorted(alias_to_fields.keys(), key=len, reverse=True):
-            matched_fields = alias_to_fields[alias]
-            if len(matched_fields) != 1:
-                continue
-            if not self._question_mentions_dimension_alias(question, alias):
-                continue
-            field_name = next(iter(matched_fields))
-            if field_name not in dimensions:
-                dimensions.append(field_name)
-        return dimensions
-
-    def _question_mentions_dimension_alias(self, question: str, alias: str) -> bool:
-        escaped_alias = re.escape(alias)
-        patterns = [
-            rf"(?:按|按照|只看)\s*{escaped_alias}(?:维度)?(?:拆分|分组|查看|统计|看)?",
-            rf"(?:各|各个)\s*{escaped_alias}",
-            rf"{escaped_alias}(?:维度)?(?:拆分|分组|分布|统计|分别|明细)",
-        ]
-        return any(re.search(pattern, question, re.IGNORECASE) for pattern in patterns)
-
-    def _extract_regex_value(self, question: str, rule: dict) -> str | None:
-        flags = 0
-        if "ignorecase" in rule.get("flags", []):
-            flags |= re.IGNORECASE
-        source = self._prepare_text(question, rule)
-        match = re.search(rule.get("pattern", ""), source, flags)
-        if not match:
-            return None
-        if "value" in rule:
-            return str(rule["value"])
-        try:
-            value = match.group(1)
-        except IndexError:
-            return match.group(0)
-        value_template = rule.get("value_template")
-        if isinstance(value_template, str):
-            return value_template.replace("{match}", value)
-        return value
-
-    def _extract_time_rule(self, question: str, rule: dict) -> dict | None:
-        pattern = rule.get("pattern", "")
-        if not pattern:
-            return None
-
-        source = self._prepare_text(question, rule)
-        flags = 0
-        if "ignorecase" in rule.get("flags", []):
-            flags |= re.IGNORECASE
-        match = re.search(pattern, source, flags)
-        if not match:
-            return None
-
-        rule_type = rule.get("type")
-        field = rule.get("field")
-        if rule_type == "calendar_day":
-            year, month, day = match.groups()
-            value = f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-            return {
-                "filter": FilterItem(field=field, op="=", value=value) if field else None,
-                "context": TimeContext(grain="day", range=TimeRange(start=value, end=value)),
-            }
-
-        if rule_type == "iso_day":
-            value = match.group(1)
-            return {
-                "filter": FilterItem(field=field, op="=", value=value) if field else None,
-                "context": TimeContext(grain="day", range=TimeRange(start=value, end=value)),
-            }
-
-        if rule_type == "calendar_month":
-            year, month = match.groups()
-            month_end = calendar.monthrange(int(year), int(month))[1]
-            start = f"{int(year):04d}-{int(month):02d}-01"
-            end = f"{int(year):04d}-{int(month):02d}-{month_end:02d}"
-            return {
-                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
-                "context": TimeContext(grain="month", range=TimeRange(start=start, end=end)),
-            }
-
-        if rule_type == "calendar_year":
-            year = int(match.group(1))
-            start = f"{year:04d}-01-01"
-            end = f"{year:04d}-12-31"
-            return {
-                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
-                "context": TimeContext(grain="day", range=TimeRange(start=start, end=end)),
-            }
-
-        if rule_type == "short_calendar_year":
-            year = 2000 + int(match.group(1))
-            start = f"{year:04d}-01-01"
-            end = f"{year:04d}-12-31"
-            return {
-                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
-                "context": TimeContext(grain="day", range=TimeRange(start=start, end=end)),
-            }
-
-        if rule_type == "compact_month":
-            value = match.group(1)
-            return {
-                "filter": FilterItem(field=field, op="=", value=value) if field else None,
-                "context": TimeContext(grain="month", range=TimeRange(start=value, end=value)),
-            }
-
-        if rule_type == "relative_recent_months":
-            try:
-                month_count = max(1, int(match.group(1)))
-            except (IndexError, TypeError, ValueError):
-                return None
-            today = date.today()
-            current_month_index = today.year * 12 + (today.month - 1)
-            start_month_index = current_month_index - (month_count - 1)
-            start_year = start_month_index // 12
-            start_month = start_month_index % 12 + 1
-            start = f"{start_year:04d}-{start_month:02d}-01"
-            end_day = calendar.monthrange(today.year, today.month)[1]
-            end = f"{today.year:04d}-{today.month:02d}-{end_day:02d}"
-            return {
-                "filter": FilterItem(field=field, op="between", value=[start, end]) if field else None,
-                "context": TimeContext(grain="month", range=TimeRange(start=start, end=end)),
-            }
-
-        return None
-
-    def _prepare_text(self, question: str, rule: dict) -> str:
-        if "uppercase" in rule.get("flags", []):
-            return question.upper()
-        return question
-
-    def _contains_candidate(self, source: str, candidate: str) -> bool:
-        if re.fullmatch(r"[A-Z0-9_]+", candidate):
-            return re.search(rf"\b{re.escape(candidate)}\b", source) is not None
-        return candidate in source
-
-    def _deduplicate_filters(self, filters: list[FilterItem]) -> list[FilterItem]:
-        deduplicated: list[FilterItem] = []
-        seen: set[str] = set()
-        for item in filters:
-            key = f"{item.field}:{item.op}:{repr(item.value)}"
-            if key in seen:
-                continue
-            seen.add(key)
-            deduplicated.append(item)
-        return deduplicated
-
-    def _inject_version_filter(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
-        if compiled.version_context is None or not compiled.version_context.value:
-            return compiled
-
-        version_field = compiled.version_context.field or profile.get("version_field")
-        if not version_field:
-            return compiled
-        allowed_fields = set(profile.get("allowed_fields", []))
-        if profile.get("version_field") and version_field != profile.get("version_field") and version_field not in allowed_fields:
-            return compiled
-
-        existing = {
-            f"{item.field}:{item.op}:{repr(item.value)}"
-            for item in compiled.filters
-        }
-        version_value = compiled.version_context.value
-        if version_value.startswith("LATEST_N:"):
-            try:
-                latest_count = max(1, int(version_value.removeprefix("LATEST_N:")))
-            except ValueError:
-                return compiled
-            source_table = next(
-                (
-                    item.value
-                    for item in compiled.filters
-                    if item.field in {"source_table", "demand_source"}
-                    and item.op == "="
-                    and isinstance(item.value, str)
-                ),
-                None,
-            )
-            version_filter = FilterItem(
-                field=version_field,
-                op="latest_n",
-                value={"count": latest_count, "source_table": source_table},
-            )
-        else:
-            version_filter = FilterItem(field=version_field, op="=", value=version_value)
-        version_key = f"{version_filter.field}:{version_filter.op}:{repr(version_filter.value)}"
-        if version_key not in existing:
-            compiled.filters = [
-                item for item in compiled.filters if item.field != version_filter.field
-            ] + [version_filter]
-        return compiled
-
-    def _inject_time_filters(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
-        time_context = compiled.time_context
-        if time_context.grain == "unknown" or time_context.range is None:
-            return compiled
-
-        start = time_context.range.start
-        end = time_context.range.end
-        if not start and not end:
-            return compiled
-
-        time_fields = self.time_filter_fields(compiled.subject_domain)
-        if not time_fields:
-            return compiled
-
-        allowed_fields = set(profile.get("allowed_fields", []))
-        candidate_fields = [
-            field
-            for field in time_fields
-            if not allowed_fields or field in allowed_fields
-        ]
-        if not candidate_fields:
-            candidate_fields = time_fields
-
-        preferred_field = candidate_fields[0]
-        if time_context.grain == "month" and len(candidate_fields) > 1:
-            month_field = next((field for field in candidate_fields if "month" in field.lower()), None)
-            if month_field:
-                preferred_field = month_field
-        elif time_context.grain == "day":
-            day_field = next((field for field in candidate_fields if "date" in field.lower()), None)
-            if day_field:
-                preferred_field = day_field
-
-        time_filter = self._build_time_filter(preferred_field, start=start, end=end)
-        if time_filter is None:
-            return compiled
-
-        existing = {
-            f"{item.field}:{item.op}:{repr(item.value)}"
-            for item in compiled.filters
-        }
-        time_key = f"{time_filter.field}:{time_filter.op}:{repr(time_filter.value)}"
-        if time_key in existing:
-            compiled.filters = [
-                item for item in compiled.filters if item.field not in set(candidate_fields) or item.field == time_filter.field
-            ]
-            return compiled
-
-        compiled.filters = [
-            item for item in compiled.filters if item.field not in set(candidate_fields)
-        ] + [time_filter]
-        return compiled
-
-    def _build_time_filter(
-        self,
-        field: str,
-        start: str | None,
-        end: str | None,
-    ) -> FilterItem | None:
-        if not field:
-            return None
-        if field == "demand_month":
-            compact_start = self._compact_month_value(start)
-            compact_end = self._compact_month_value(end)
-            if compact_start and compact_end:
-                if compact_start == compact_end:
-                    return FilterItem(field=field, op="=", value=compact_start)
-                return FilterItem(field=field, op="between", value=[compact_start, compact_end])
-            if compact_start:
-                return FilterItem(field=field, op=">=", value=compact_start)
-            if compact_end:
-                return FilterItem(field=field, op="<=", value=compact_end)
-        if start and end:
-            if start == end:
-                return FilterItem(field=field, op="=", value=start)
-            return FilterItem(field=field, op="between", value=[start, end])
-        if start:
-            return FilterItem(field=field, op=">=", value=start)
-        if end:
-            return FilterItem(field=field, op="<=", value=end)
-        return None
+    def _logical_field_aliases(self, logical_field: str) -> set[str]:
+        if logical_field == "biz_date":
+            return {"work_date", "report_date", "PLAN_date", "SALE_date"}
+        if logical_field == "biz_month":
+            return {"work_date", "report_date", "PLAN_date", "plan_month", "MONTH", "SALE_date"}
+        if logical_field == "demand_month":
+            return {"MONTH"}
+        return set()
 
     def _compact_month_value(self, value: str | None) -> str | None:
         if not value:
@@ -1461,67 +425,8 @@ class SemanticRuntime:
             return f"{match.group(1)}{match.group(2)}"
         return None
 
-    def _inject_default_sort(self, query_plan: QueryPlan, profile: dict) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
-        if compiled.sort:
-            return compiled
-        if compiled.dimensions:
-            return compiled
-        if compiled.analysis_mode in {"compare", "distribution"} and not compiled.dimensions:
-            return compiled
-        default_sort = profile.get("default_sort", [])
-        if not default_sort:
-            return compiled
-        compiled.sort = [SortItem(**item) for item in default_sort if isinstance(item, dict)]
-        return compiled
-
     def _load_tables_metadata(self) -> dict:
         return self.metadata_registry.tables_metadata
-
-    def _build_field_semantics_catalog(self, raw_items: list[dict] | None) -> dict[str, dict]:
-        catalog: dict[str, dict] = {}
-        for item in raw_items or []:
-            if not isinstance(item, dict):
-                continue
-            field_name = str(item.get("field", "")).strip()
-            if not field_name:
-                continue
-            aliases = self._unique_strings(
-                [
-                    str(alias).strip()
-                    for alias in item.get("aliases", [])
-                    if isinstance(alias, str) and alias.strip()
-                ]
-            )
-            domains = self._unique_strings(
-                [
-                    str(domain).strip()
-                    for domain in item.get("domains", [])
-                    if isinstance(domain, str) and domain.strip()
-                ]
-            )
-            roles = self._unique_strings(
-                [
-                    str(role).strip()
-                    for role in item.get("roles", [])
-                    if isinstance(role, str) and role.strip()
-                ]
-            )
-            tables = self._unique_strings(
-                [
-                    str(table_name).strip()
-                    for table_name in item.get("tables", [])
-                    if isinstance(table_name, str) and table_name.strip()
-                ]
-            )
-            catalog[field_name] = {
-                "aliases": aliases,
-                "domains": domains,
-                "roles": roles,
-                "tables": tables,
-                "description": str(item.get("description", "")).strip() or None,
-            }
-        return catalog
 
     def _extract_table_fields(self, payload: dict) -> list[str]:
         fields: list[str] = []
@@ -1561,6 +466,36 @@ class SemanticRuntime:
                     "format": None,
                 }
         return normalized
+
+    def _relationship_edges(self, tables_metadata: dict) -> list[dict[str, str]]:
+        edges: list[dict[str, str]] = []
+        table_names = set(tables_metadata.keys())
+        for source_table, payload in tables_metadata.items():
+            if not isinstance(payload, dict):
+                continue
+            relationships = payload.get("relationships", {})
+            if not isinstance(relationships, dict):
+                continue
+            for source_field, raw_targets in relationships.items():
+                for target in str(raw_targets or "").split(","):
+                    target = target.strip()
+                    if not target or "." not in target:
+                        continue
+                    target_table, target_field = target.split(".", 1)
+                    if target_table not in table_names:
+                        continue
+                    edges.append(
+                        {
+                            "from": source_table,
+                            "to": target_table,
+                            "on": f"{source_table}.{source_field} = {target_table}.{target_field}",
+                            "source": source_table,
+                            "target": target_table,
+                            "source_field": str(source_field),
+                            "target_field": target_field,
+                        }
+                    )
+        return edges
 
     def _unique_strings(self, items: list[str]) -> list[str]:
         result: list[str] = []

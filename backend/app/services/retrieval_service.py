@@ -38,6 +38,7 @@ class RetrievalService:
         self.vector_corpus_store_service = vector_corpus_store_service
         self.vector_top_k = vector_top_k
         self.async_vector_index = async_vector_index
+        self.table_domains: dict[str, list[str]] = {}
         if self.vector_retriever.provider != "disabled" and not self.vector_retriever.enabled:
             raise RuntimeError("vector retrieval is enabled but vector embedding client is not configured")
         self.prewarm_vector_index_on_reload = prewarm_vector_index
@@ -45,6 +46,7 @@ class RetrievalService:
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
         self.join_patterns = self._load_join_patterns()
+        self.table_domains = self._build_table_domains()
         self.corpus_documents: list[dict] = []
         self.document_frequency: Counter[str] = Counter()
         self.average_doc_length = 1.0
@@ -86,8 +88,8 @@ class RetrievalService:
         hits = self._rerank_hits(hits)
         top_hits = hits[:5]
         return RetrievalContext(
-            domains=[],
-            metrics=[],
+            domains=self._domains_from_hits(top_hits),
+            metrics=self._metrics_from_hits(top_hits),
             retrieval_terms=retrieval_terms,
             retrieval_channels=self._retrieval_channels(),
             hits=top_hits,
@@ -101,6 +103,7 @@ class RetrievalService:
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()
         self.join_patterns = self._load_join_patterns()
+        self.table_domains = self._build_table_domains()
         should_prewarm = self.prewarm_vector_index_on_reload if prewarm_vectors is None else prewarm_vectors
         self._refresh_indexes(prewarm_vectors=False)
         if should_prewarm:
@@ -277,6 +280,7 @@ class RetrievalService:
                         "coverage_tags": example.coverage_tags,
                         "question_type": example.question_type,
                         "subject_domain": example.subject_domain,
+                        "domains": [example.subject_domain] if example.subject_domain != "unknown" else [],
                         "tables": example.tables,
                         "metrics": example.metrics,
                         "entities": example.entities,
@@ -397,6 +401,7 @@ class RetrievalService:
                     metadata={
                         "kind": "table_metadata",
                         "table": table_name,
+                        "domains": self._domains_for_tables([table_name]),
                         "main_key": payload.get("MAIN_KEY"),
                         "time_fields": time_fields,
                         "date_col": payload.get("date_col"),
@@ -609,6 +614,96 @@ class RetrievalService:
         if self.vector_retriever.enabled:
             channels.append("vector")
         return channels
+
+    def _build_table_domains(self) -> dict[str, list[str]]:
+        table_domains: dict[str, list[str]] = {}
+        for example in self.examples:
+            self._add_table_domains(
+                table_domains,
+                tables=example.tables,
+                domains=[example.subject_domain],
+            )
+        for entry in self.business_knowledge:
+            if not isinstance(entry, dict):
+                continue
+            self._add_table_domains(
+                table_domains,
+                tables=[str(item) for item in entry.get("tables", []) if item],
+                domains=[str(item) for item in entry.get("domains", []) if item],
+            )
+        for pattern in self.join_patterns:
+            if not isinstance(pattern, dict):
+                continue
+            self._add_table_domains(
+                table_domains,
+                tables=[str(item) for item in pattern.get("tables", []) if item],
+                domains=[str(item) for item in pattern.get("domains", []) if item],
+            )
+        return table_domains
+
+    def _add_table_domains(
+        self,
+        table_domains: dict[str, list[str]],
+        *,
+        tables: list[str],
+        domains: list[str],
+    ) -> None:
+        normalized_domains = [
+            domain_name
+            for domain_name in domains
+            if isinstance(domain_name, str) and domain_name.strip() and domain_name != "unknown"
+        ]
+        for table_name in tables:
+            if not isinstance(table_name, str) or not table_name.strip():
+                continue
+            if table_name not in self.tables_metadata:
+                continue
+            for domain_name in normalized_domains:
+                table_domains.setdefault(table_name, [])
+                if domain_name not in table_domains[table_name]:
+                    table_domains[table_name].append(domain_name)
+
+    def _domains_for_tables(self, tables: list[str]) -> list[str]:
+        domains: list[str] = []
+        for table_name in tables:
+            for domain_name in self.table_domains.get(table_name, []):
+                if domain_name not in domains:
+                    domains.append(domain_name)
+        return domains
+
+    def _domains_from_hits(self, hits: list[RetrievalHit]) -> list[str]:
+        domains: list[str] = []
+        for hit in hits:
+            metadata_domains = hit.metadata.get("domains", [])
+            if isinstance(metadata_domains, list):
+                for domain_name in metadata_domains:
+                    if isinstance(domain_name, str) and domain_name and domain_name != "unknown" and domain_name not in domains:
+                        domains.append(domain_name)
+            subject_domain = hit.metadata.get("subject_domain")
+            if isinstance(subject_domain, str) and subject_domain and subject_domain != "unknown" and subject_domain not in domains:
+                domains.append(subject_domain)
+            tables = hit.metadata.get("tables", [])
+            if isinstance(tables, list):
+                for domain_name in self._domains_for_tables([table for table in tables if isinstance(table, str)]):
+                    if domain_name not in domains:
+                        domains.append(domain_name)
+            table_name = hit.metadata.get("table")
+            if isinstance(table_name, str):
+                for domain_name in self._domains_for_tables([table_name]):
+                    if domain_name not in domains:
+                        domains.append(domain_name)
+        return domains
+
+    def _metrics_from_hits(self, hits: list[RetrievalHit]) -> list[str]:
+        metrics: list[str] = []
+        for hit in hits:
+            metadata_metrics = hit.metadata.get("metrics", [])
+            if not isinstance(metadata_metrics, list):
+                continue
+            for metric in metadata_metrics:
+                if isinstance(metric, str) and metric and metric not in metrics:
+                    metrics.append(metric)
+        return metrics
 
     def _unique(self, items: list[str]) -> list[str]:
         result: list[str] = []

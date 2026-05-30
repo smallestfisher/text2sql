@@ -285,6 +285,12 @@ class ConversationOrchestrator:
             )
 
             stage_started_at = time.perf_counter()
+            classification, query_plan, question_context = self._apply_retrieval_domain_to_plan_shell(
+                classification=classification,
+                query_plan=query_plan,
+                question_context=question_context,
+                retrieval=retrieval,
+            )
             query_plan = self._apply_retrieval_tables_to_plan_shell(query_plan, retrieval)
             self._log_timing(trace.trace_id, "plan_shell_tables", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="plan shell table selection")
@@ -738,7 +744,8 @@ class ConversationOrchestrator:
             next_session_state = self.session_state_service.build_next_state(
                 query_plan=query_plan,
                 previous_state=session_state,
-                question=effective_question,
+                question=request.question,
+                effective_question=effective_question,
                 sql=sql,
             )
             self._log_timing(trace.trace_id, "next_session_state", stage_started_at)
@@ -1144,6 +1151,73 @@ class ConversationOrchestrator:
         if tables == query_plan.tables:
             return query_plan
         return query_plan.model_copy(deep=True, update={"tables": tables[:8]})
+
+    def _apply_retrieval_domain_to_plan_shell(self, *, classification, query_plan, question_context, retrieval):
+        resolved_domain = self._first_known_domain(
+            query_plan.subject_domain,
+            classification.subject_domain,
+            getattr(question_context, "subject_domain", None) if question_context is not None else None,
+        )
+        if resolved_domain is None and retrieval is not None:
+            resolved_domain = self._single_retrieval_domain(retrieval)
+        if resolved_domain is None:
+            return classification, query_plan, question_context
+
+        logger.info(
+            "domain resolved subject_domain=%s retrieval_domains=%s",
+            resolved_domain,
+            retrieval.domains if retrieval is not None else [],
+        )
+        if classification.subject_domain == "unknown":
+            classification = classification.model_copy(update={"subject_domain": resolved_domain})
+        if query_plan.subject_domain == "unknown":
+            query_plan = query_plan.model_copy(update={
+                "subject_domain": resolved_domain,
+                "limit": self.query_planner.semantic_runtime.default_limit(resolved_domain),
+            })
+        if question_context is not None and getattr(question_context, "subject_domain", "unknown") == "unknown":
+            question_context = question_context.model_copy(update={"subject_domain": resolved_domain})
+        return classification, query_plan, question_context
+
+    def _first_known_domain(self, *values: str | None) -> str | None:
+        for value in values:
+            normalized = (value or "").strip()
+            if normalized and normalized != "unknown":
+                return normalized
+        return None
+
+    def _single_retrieval_domain(self, retrieval) -> str | None:
+        domains = [domain for domain in retrieval.domains if domain and domain != "unknown"]
+        unique_domains = []
+        for domain in domains:
+            if domain not in unique_domains:
+                unique_domains.append(domain)
+        resolved_domain = self._single_primary_domain(unique_domains)
+        if resolved_domain is not None:
+            return resolved_domain
+
+        table_domains = []
+        for hit in retrieval.hits:
+            table_names = []
+            metadata_tables = hit.metadata.get("tables", [])
+            if isinstance(metadata_tables, list):
+                table_names.extend(table for table in metadata_tables if isinstance(table, str))
+            metadata_table = hit.metadata.get("table")
+            if isinstance(metadata_table, str):
+                table_names.append(metadata_table)
+            for table_name in table_names:
+                for domain in self.query_planner.semantic_runtime.table_domains(table_name):
+                    if domain != "unknown" and domain not in table_domains:
+                        table_domains.append(domain)
+        return self._single_primary_domain(table_domains)
+
+    def _single_primary_domain(self, domains: list[str]) -> str | None:
+        if len(domains) == 1:
+            return domains[0]
+        primary_domains = [domain for domain in domains if domain != "dimension"]
+        if len(primary_domains) == 1:
+            return primary_domains[0]
+        return None
 
     def _terminal_skip_reason(self, classification, query_plan) -> str | None:
         if classification.question_type == "invalid":

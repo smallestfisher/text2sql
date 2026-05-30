@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 import unittest
 
-from backend.app.models.query_plan import FilterItem, QueryPlan, SortItem
+from backend.app.models.query_plan import FilterItem, QueryPlan
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.session_state import PendingClarification, SessionState
 from backend.app.services.domain_config_loader import DomainConfigLoader
@@ -197,40 +197,42 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(health["metrics"]["repair"]["requests"], 1)
         self.assertEqual(health["metrics"]["repair"]["provider_calls"], 3)
 
-    def test_inventory_explicit_source_group_is_profile_driven(self) -> None:
+    def test_schema_boundary_does_not_apply_inventory_source_rules(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="inventory",
-            metrics=["inventory_qty"],
             tables=["daily_inventory", "oms_inventory"],
             filters=[FilterItem(field="source_table", op="=", value="oms_inventory")],
         )
 
         sanitized = self.semantic_runtime.sanitize_query_plan(query_plan)
 
-        self.assertEqual(sanitized.tables[0], "oms_inventory")
-        self.assertNotIn("daily_inventory", sanitized.tables[1:])
+        self.assertEqual(sanitized.tables, ["daily_inventory", "oms_inventory"])
+        self.assertEqual(sanitized.filters, [FilterItem(field="source_table", op="=", value="oms_inventory")])
 
-    def test_demand_support_table_and_post_process_rules_are_profile_driven(self) -> None:
+    def test_schema_boundary_does_not_apply_demand_post_process_rules(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="demand",
-            metrics=["product_count"],
             tables=["p_demand"],
             dimensions=["biz_month"],
             filters=[
                 FilterItem(field="source_table", op="=", value="p_demand"),
                 FilterItem(field="demand_month", op="=", value="202604"),
             ],
-            sort=[SortItem(field="biz_month", order="desc")],
         )
 
         sanitized = self.semantic_runtime.sanitize_query_plan(query_plan)
 
         self.assertEqual(sanitized.tables, ["p_demand"])
-        self.assertEqual(sanitized.dimensions, [])
-        self.assertEqual(sanitized.sort, [])
-        self.assertEqual(sanitized.filters, [])
+        self.assertEqual(sanitized.dimensions, ["biz_month"])
+        self.assertEqual(
+            sanitized.filters,
+            [
+                FilterItem(field="source_table", op="=", value="p_demand"),
+                FilterItem(field="demand_month", op="=", value="202604"),
+            ],
+        )
 
     def test_plan_actual_support_table_rule_appends_product_attributes(self) -> None:
         query_plan = QueryPlan(

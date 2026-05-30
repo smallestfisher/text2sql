@@ -541,7 +541,6 @@ FETCH FIRST 200 ROWS ONLY
                     "tables_metadata": Path("semantic/tables.json"),
                     "business_knowledge": Path("semantic/business_knowledge.json"),
                     "join_patterns": Path("semantic/join_patterns.json"),
-                    "domain_config": Path("semantic/domain_config.json"),
                     "query_plan_schema": Path("schemas/query_plan.schema.json"),
                     "session_state_schema": Path("schemas/session_state.schema.json"),
                 }

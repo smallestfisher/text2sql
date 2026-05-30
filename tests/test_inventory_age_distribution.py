@@ -69,7 +69,7 @@ class InventoryAgeDistributionTests(unittest.TestCase):
 
         self.assertIn("inventory_oms_latest_ttl_age_distribution_001", examples)
 
-    def test_distribution_query_plan_does_not_inject_default_sort(self) -> None:
+    def test_schema_boundary_does_not_inject_default_sort(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="inventory",

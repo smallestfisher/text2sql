@@ -666,6 +666,11 @@ function App() {
   const inspectorTrace = activeTraceArtifact?.trace || latestTrace;
   const inspectorSqlAudit = activeTraceArtifact?.sql_audit || latestSqlAudit;
   const inspectorQueryLogs = mergeQueryLogs(activeTraceArtifact?.query_log || null, latestQueryLogs);
+  const workspaceDomain = resolveDisplayDomain({
+    response: inspectorResponse,
+    sessionState,
+    queryLog: activeTraceArtifact?.query_log || latestQueryLogs[0] || null,
+  });
 
   const contextChips = buildContextChips(sessionState);
   const isAdmin = (currentUser?.roles || []).includes("admin");
@@ -768,8 +773,9 @@ function App() {
               <div className="session-list">
                 {sessions.length ? (
                   sessions.map((session) => {
+                    const displayDomain = resolveDisplayDomain({ sessionState: session.last_state });
                     const tags = [
-                      session.last_state?.subject_domain,
+                      displayDomain,
                       session.status === "archived" ? "archived" : null,
                     ].filter(Boolean);
                     return (
@@ -890,7 +896,7 @@ function App() {
                       {workspaceError
                         ? workspaceError
                         : selectedSession
-                          ? `${sessionState?.topic || sessionState?.subject_domain || "上下文未建立"} · 更新于 ${formatDate(selectedSession.updated_at)}`
+                          ? `${workspaceDomain || "上下文未建立"} · 更新于 ${formatDate(selectedSession.updated_at)}`
                           : "支持自然语言问数、上下文追问、SQL 审阅和 Trace 排查"}
                     </div>
                   </div>
@@ -898,7 +904,7 @@ function App() {
                   <div className="toolbar-stats workspace-toolbar-stats">
                     <span className="toolbar-stat">
                       当前域
-                      <strong>{sessionState?.subject_domain || "unknown"}</strong>
+                      <strong>{workspaceDomain || "等待上下文"}</strong>
                     </span>
                     <span className="toolbar-stat">
                       会话数
@@ -1027,7 +1033,7 @@ function App() {
                   <div>
                     <div className="panel-title">会话详情</div>
                     <div className="panel-subtitle">
-                      {inspectorResponse?.query_plan.subject_domain || sessionState?.subject_domain || "等待上下文"}
+                      {workspaceDomain || "等待上下文"}
                     </div>
                   </div>
 
@@ -1641,7 +1647,7 @@ function ConversationResultCard(props: {
   const answer = response?.answer;
   const execution = response?.execution;
   const queryLog = props.artifact.query_log;
-  const domain = response?.query_plan.subject_domain || queryLog?.subject_domain || "unknown";
+  const domain = resolveDisplayDomain({ response, queryLog });
   const status = execution?.status || answer?.status || queryLog?.answer_status || "unknown";
   const rowCount = execution?.row_count ?? props.artifact.sql_audit?.row_count ?? queryLog?.row_count ?? 0;
   const showRowCount = Boolean(execution) || !isTerminalNonSqlStatus(answer?.status || queryLog?.answer_status);
@@ -1657,7 +1663,7 @@ function ConversationResultCard(props: {
     <div className={`message-result-card${props.isActive ? " is-active" : ""}`}>
       <div className="message-result-head">
         <div className="message-result-summary">
-          <strong>{domain}</strong>
+          <strong>{domain || "等待上下文"}</strong>
           <span>{describeResponseStatus(status)}</span>
           <span>{showRowCount ? `结果 ${rowCount} 行` : "未进入 SQL"}</span>
         </div>
@@ -2040,6 +2046,60 @@ function describePlanShell(queryPlan: QueryPlan) {
   const tables = queryPlan.tables.length ? `${queryPlan.tables.length} 表` : "等待检索选表";
   const limit = queryPlan.limit ? `limit ${queryPlan.limit}` : "无行数限制";
   return `${tables} · ${limit}`;
+}
+
+function resolveDisplayDomain(input: {
+  response?: ChatResponse | null;
+  sessionState?: SessionState | null;
+  queryLog?: RuntimeQueryLogRecord | null;
+}) {
+  return firstKnownDomain([
+    input.response?.query_plan?.subject_domain,
+    input.response?.classification?.subject_domain,
+    input.response?.question_context?.subject_domain,
+    ...(input.response?.retrieval?.domains || []),
+    input.sessionState?.subject_domain,
+    input.sessionState?.topic,
+    input.queryLog?.subject_domain,
+    inferDomainFromTables(input.response?.query_plan?.tables || input.sessionState?.tables || []),
+  ]);
+}
+
+function firstKnownDomain(values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalized = (value || "").trim();
+    if (normalized && normalized !== "unknown") {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function inferDomainFromTables(tables: string[]) {
+  const domains = new Set<string>();
+  for (const table of tables) {
+    const normalized = table.trim();
+    if (["daily_inventory", "oms_inventory"].includes(normalized)) {
+      domains.add("inventory");
+    }
+    if (["v_demand", "p_demand"].includes(normalized)) {
+      domains.add("demand");
+    }
+    if (["daily_PLAN", "monthly_plan_approved", "weekly_rolling_plan", "production_actuals"].includes(normalized)) {
+      domains.add("plan_actual");
+    }
+    if (normalized === "sales_financial_perf") {
+      domains.add("sales_financial");
+    }
+    if (["product_attributes", "product_mapping"].includes(normalized)) {
+      domains.add("dimension");
+    }
+  }
+  if (domains.size === 1) {
+    return Array.from(domains)[0];
+  }
+  const primaryDomains = Array.from(domains).filter((domain) => domain !== "dimension");
+  return primaryDomains.length === 1 ? primaryDomains[0] : "";
 }
 
 function getStringArrayValue(value: unknown) {

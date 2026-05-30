@@ -86,13 +86,17 @@ class PromptBuilder:
                 "constraints": [
                     "只做问题上下文整理，不生成 SQL。",
                     "如果当前问题是追问，effective_question 必须改写成不依赖上下文也能理解的完整自然语言问题。",
-                    "首问只要本身是一个完整的自然语言业务查询句，就必须返回 decision=answerable、context_relation=new，并把原问题作为 effective_question；不要在 question_context 阶段追问字段、表、SQL 实现、可选维度、额外时间范围或业务口径细节。",
-                    "完整业务查询句的判断只看用户是否表达了要查什么；即使后续 SQL 生成可能还需要选择字段、表、指标公式或默认口径，也应先进入下一步，不能在本阶段 clarification_needed。",
+                    "首问只要本身是一个完整的自然语言业务查询句，就必须返回 decision=answerable、context_relation=new，并把原问题作为 effective_question；不要在 question_context 阶段追问字段、表、SQL 实现、可选维度、可选过滤条件、额外时间范围或业务口径细节。",
+                    "当 context_relation=new 时，effective_question 必须忠实保留当前用户原话的查询对象、指标、时间、版本、数量和条件；不得用历史上下文替换、覆盖或改写当前问题的明确信息。",
+                    "完整业务查询句的判断只看用户是否表达了要查什么；即使后续 SQL 生成可能还需要选择字段、表、指标公式、默认口径或是否追加过滤条件，也应先进入下一步，不能在本阶段 clarification_needed。",
+                    "如果用户是在纠正或澄清自己上一句话，并且纠正后的句子已经能独立表达查询目标，也必须返回 answerable；不要继续追问可选条件。",
+                    "如果用户问“哪一个”“最多的是谁”“Top/排名”等，返回对象就是查询输出，不要把这个输出对象误当成必须由用户补充的过滤条件。",
                     "只有用户这句话缺少核心意图、是无法解析的省略追问且上下文也无法补全，或明显不是业务查询时，才返回 clarification_needed 或 invalid。",
                     "如果 context_hints.pending_clarification 存在，当前用户问题应优先视为对上一轮澄清问题的回答；必须结合 pending_clarification、conversation_summary 和用户回答生成完整 effective_question。",
                     "当用户对 pending_clarification 给出确认、否认或补充信息时，不要把“是的”“不是”“对”等确认词当成独立业务问题。",
                     "只能继承 conversation_summary 和 recent_turns 中明确出现的信息；不确定指代时返回 clarification_needed。",
                     "如果用户表达替换、删除或新增条件，必须在 effective_question 中自然语言表达出来。",
+                    "短追问优先基于最近一轮用户问题补全；除非用户明确要求回到更早主题，不要跳回更早轮次的查询意图。",
                     "不要因为“分布”“情况”“统计”就自行补充用户没有明确提出的维度。",
                     "如果用户提到“最新”但没有给出具体时间，应在 semantic_brief 中保留最新口径，不要编造具体日期。",
                     "只判断用户这句话和可用会话上下文是否足以形成完整自然语言问题；不要判断业务知识、字段、表、计算方法或 SQL 是否足够。",
@@ -1152,13 +1156,16 @@ class PromptBuilder:
         return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS]
 
     def _supported_domains(self) -> list[str]:
-        if self.semantic_runtime is None:
-            return []
-        return sorted(
-            domain_name
-            for domain_name in self.semantic_runtime.query_profiles.keys()
-            if domain_name != "unknown"
-        )
+        domains: set[str] = set()
+        for entry in self._business_knowledge:
+            for domain_name in entry.get("domains", []) if isinstance(entry, dict) else []:
+                if isinstance(domain_name, str) and domain_name and domain_name != "unknown":
+                    domains.add(domain_name)
+        for example in self._load_examples().values():
+            domain_name = str(example.get("subject_domain") or "")
+            if domain_name and domain_name != "unknown":
+                domains.add(domain_name)
+        return sorted(domains)
 
     def _semantic_fields(self, subject_domain: str) -> list[dict]:
         if self.semantic_runtime is None or subject_domain == "unknown":
@@ -1247,10 +1254,7 @@ class PromptBuilder:
         return compacted
 
     def _prompt_assets(self) -> dict:
-        if self.semantic_runtime is None:
-            return {}
-        payload = self.semantic_runtime.domain_config.get("prompt_assets", {})
-        return payload if isinstance(payload, dict) else {}
+        return {}
 
     def _prompt_asset_strings(self, section: str, key: str) -> list[str]:
         values = self._prompt_asset_value(section, key)

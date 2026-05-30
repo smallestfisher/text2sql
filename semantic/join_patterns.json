@@ -32,6 +32,23 @@
       ]
     },
     {
+      "id": "demand_v_to_p_glass_conversion_join",
+      "domains": ["demand"],
+      "tables": ["v_demand", "p_demand", "product_attributes"],
+      "keywords": ["V到P", "V转P", "转换率", "转化率", "GLASS", "CUT_NUM", "第一版", "最后一版"],
+      "join_path": [
+        "v_demand.FGCODE = product_attributes.product_ID",
+        "p_demand.FGCODE = product_attributes.product_ID",
+        "v_glass and p_glass should be aggregated separately before calculating p_glass_qty / v_glass_qty"
+      ],
+      "notes": [
+        "V/P GLASS 转换率需要分别计算 V 侧和 P 侧 GLASS 总量；不要把 v_demand 与 p_demand 明细互 join 后直接 SUM。",
+        "V 侧和 P 侧都通过 FGCODE 关联 product_attributes.product_ID，并使用 CUT_NUM 将需求量换算成 GLASS。",
+        "版本选择应解析 PM_VERSION 的显示版本格式，例如 202605W3V2 或 202605W3P2，其中 W 后数字是周，P/V 后数字是该周第几版。",
+        "最终可以用两个聚合 CTE 做 CROSS JOIN 输出目标月份、V版本、P版本、V侧GLASS、P侧GLASS和转换率。"
+      ]
+    },
+    {
       "id": "inventory_product_attributes_join",
       "domains": ["inventory"],
       "tables": ["oms_inventory", "daily_inventory", "product_attributes"],
