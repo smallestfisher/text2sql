@@ -1,6 +1,6 @@
-# Frontend
+# 前端
 
-独立的 `Vite + React + TypeScript` 工作台，默认通过 `Vite` 代理转发到后端 API。
+前端是独立的 `Vite + React + TypeScript` 工作台，默认通过 Vite 代理转发到后端 API。
 
 ## 当前界面结构
 
@@ -10,8 +10,8 @@
 - 中间：消息流、欢迎态快捷问题卡片、输入框
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
 - 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、角色、反馈和 replay
-- 管理员可以直接在用户管理区域授予或移除 `chitchat` 角色；该角色只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会实际生效
-- 管理员通过 runtime trace 物化 example 后，新样例当前可立即参与后端 retrieval / SQL prompt；受影响向量会增量重建并持久化，通常不需要重启服务
+- 管理员可以在用户管理区域授予或移除 `chitchat` 角色；该角色只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会实际生效
+- 管理员通过 runtime trace 物化 example 后，新样例会参与后端 retrieval 和 SQL prompt；受影响向量会重建并持久化，通常不需要重启服务
 
 ## 当前交互规则
 
@@ -42,13 +42,13 @@
 ### 详情面板与下载
 
 - 普通登录用户也可以打开详情面板
-- `SQL` 面板始终展示本轮生成 SQL 和 Query Plan
+- `SQL` 面板展示本轮生成 SQL 和 QueryPlan 载体
 - 结果下载只受会话/Trace 归属校验控制，不再做额外权限裁剪
 
 ### 移动端
 
 - 移动端通过顶部工具栏控制左侧会话栏和右侧详情栏
-- 当前代码已经处理了移动端遮罩层和侧栏打开/关闭状态，不再依赖旧的弹窗式详情实现
+- 移动端使用遮罩层和侧栏打开/关闭状态承载会话栏与详情栏
 
 ## 数据加载方式
 
@@ -75,7 +75,7 @@
 
 保留的 `history / state / query-logs / trace` 接口主要用于调试和后台管理，不再是主工作台首选加载路径。
 
-## Run
+## 运行
 
 安装依赖：
 

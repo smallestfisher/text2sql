@@ -1,81 +1,55 @@
 # Text2SQL
 
-LLM-first Text2SQL 工程：用户用自然语言提问，系统基于真实表结构、语义配置、业务知识和检索上下文生成 Oracle SQL，再经过校验、执行、审计和工作台展示。
+Text2SQL 是一个面向中文业务问题的 Oracle 查询工作台。用户用自然语言提问，后端基于真实表结构、业务知识、样例、join pattern 和检索上下文生成 Oracle SQL，经过校验、执行、审计后返回结果，并把运行证据保存到 MySQL runtime 库。
 
-## 当前事实
+## 当前边界
 
-- 业务数据库固定为 Oracle，连接串来自 `BUSINESS_DATABASE_URL`。
-- runtime 数据库固定为 MySQL，连接串来自 `RUNTIME_DATABASE_URL`。
-- 本地 `docker-compose.yml` 提供完整 Docker 编排：前端、后端、Oracle 业务库和 MySQL runtime 库。
-- Oracle SQL 生成、repair、`sqlglot` 解析和 validator 都固定使用 Oracle 规则。
-- MySQL runtime 保存用户、会话、trace、query log、SQL audit、feedback、eval 和 retrieval corpus。
-- LLM、`sqlglot`、业务库、runtime 库、metadata 文件都是启动时 fail-fast 依赖。
-- 准确率问题优先修样例、业务知识、表结构说明、retrieval、prompt 和 validator，不回退到本地 SQL 模板分支。
+- 业务库固定为 Oracle，连接串来自 `BUSINESS_DATABASE_URL`。
+- runtime 库固定为 MySQL，连接串来自 `RUNTIME_DATABASE_URL`。
+- 业务 SQL 生成、repair、AST 解析和校验都按 Oracle 规则运行。
+- `semantic/`、`examples/`、`eval/` 是语义资产、检索语料、管理台编辑和评测的共同来源。
+- 后端启动时会检查数据库、runtime schema、metadata、`sqlglot`、LLM 和向量检索配置；关键依赖失败会阻断启动。
+- 准确率修复优先沉淀到表结构说明、业务知识、样例、join pattern、retrieval、prompt 和 validator。
 
-## 快速启动
+## Docker 启动
 
-### Docker 整栈启动
-
-1. 准备环境文件，至少填入 `OPENAI_API_KEY` 和 `AUTH_TOKEN_SECRET`。
+准备环境文件，至少填写 `OPENAI_API_KEY` 和 `AUTH_TOKEN_SECRET`。
 
 ```bash
 cp env.example .env
-```
-
-2. 构建并启动完整服务。
-
-```bash
 docker compose up -d --build
 ```
 
 启动后访问：
 
-- Frontend: `http://127.0.0.1:5173`
-- Backend: `http://127.0.0.1:8000`
+- 前端：`http://127.0.0.1:5173`
+- 后端：`http://127.0.0.1:8000`
 
 `docker-compose.yml` 会启动：
 
-- `text2sql-frontend`：Nginx 托管前端静态文件，并反代 `/api`、`/health` 到后端。
+- `text2sql-frontend`：Nginx 托管前端静态文件，并反代 `/api`、`/health`。
 - `text2sql-backend`：FastAPI 后端。
 - `text2sql-oracle`：业务库，默认用户 `admin/admin123`，服务名 `FREEPDB1`。
 - `text2sql-mysql`：runtime 库，默认库 `manager`，用户 `admin/admin123`。
 
-后端容器内默认连接串使用 Docker 服务名：
+容器内默认连接串使用 Docker 服务名：
 
 ```env
 BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@oracle:1521/?service_name=FREEPDB1"
 RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@mysql:3306/manager"
 ```
 
-如果要覆盖容器内数据库地址，使用 `DOCKER_BUSINESS_DATABASE_URL` 和 `DOCKER_RUNTIME_DATABASE_URL`。这样不会影响本机开发时使用的 `BUSINESS_DATABASE_URL` / `RUNTIME_DATABASE_URL`。
-
-`semantic/`、`examples/`、`eval/` 会挂载到后端容器中，所以管理台修改 metadata、example 或 eval case 后会落回工作区文件。
-
-源码或构建配置变更后，按影响范围重建应用镜像：
+如果只改应用代码，按影响范围重建镜像：
 
 ```bash
 docker compose up -d --build backend frontend
 ```
 
-如果只改后端代码，可以只重建后端：
+不要把 `docker compose down -v` 当作常规重启命令；它会删除 Oracle 和 MySQL 数据卷。
 
-```bash
-docker compose build backend
-docker compose up -d backend
-```
+## 本机开发
 
-如果只改前端代码，可以只重建前端：
-
-```bash
-docker compose build frontend
-docker compose up -d frontend
-```
-
-不要用 `docker compose down -v` 作为常规重启命令；它会删除 Oracle / MySQL 数据卷。
-
-### 本机开发启动
-
-1. 准备环境文件和依赖。
+安装依赖：
 
 ```bash
 cp env.example .env
@@ -83,63 +57,58 @@ pip install -r backend/requirements.txt
 cd frontend && npm install && cd ..
 ```
 
-2. 启动本地数据库。如果只想启动数据库而不启动应用，可以执行：
+只启动数据库：
 
 ```bash
 docker compose up -d oracle mysql
 ```
 
-新 volume 首次启动时会自动初始化：
-
-- Oracle 执行 [sql/oracle_business_init.sh](sql/oracle_business_init.sh)，创建业务表。
-- MySQL 执行 [sql/mysql_runtime_init.sql](sql/mysql_runtime_init.sql)，创建 runtime 库、用户和表。
-
-如果已经有旧 volume，Docker 初始化脚本不会重复执行；需要手动补表时执行：
-
-```bash
-docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_business_schema.sql
-docker exec -i text2sql-mysql mysql -uadmin -padmin123 manager < sql/runtime_store.sql
-```
-
-3. 启动应用。
+启动应用：
 
 ```bash
 scripts/devctl.sh start
 scripts/devctl.sh status
 ```
 
-脚本默认启动：
-
-- Backend: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5173`
-
-也可以单独启动服务：
+也可以只操作某个服务：
 
 ```bash
 scripts/devctl.sh restart backend
 scripts/devctl.sh logs frontend
 ```
 
-## 核心配置
+新数据卷首次启动时会自动初始化：
 
-`.env` 至少需要确认这些值：
+- Oracle 执行 [sql/oracle_business_init.sh](sql/oracle_business_init.sh)，创建业务表。
+- MySQL 执行 [sql/mysql_runtime_init.sql](sql/mysql_runtime_init.sql)，创建 runtime 库和表。
+
+已有数据卷不会重复执行 Docker 初始化脚本。需要手动补表时执行：
+
+```bash
+docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_business_schema.sql
+docker exec -i text2sql-mysql mysql -uadmin -padmin123 manager < sql/runtime_store.sql
+```
+
+## 关键配置
+
+`.env` 至少确认这些值：
 
 ```env
 BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@127.0.0.1:1521/?service_name=FREEPDB1"
 RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@127.0.0.1:3306/manager"
 OPENAI_API_KEY="your_llm_api_key"
 OPENAI_API_BASE="https://api.siliconflow.cn/v1"
+AUTH_TOKEN_SECRET="change-me"
 ```
 
 常用开关：
 
-- `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索，默认开启。
-- `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时同步预热向量索引。
-- `ENABLE_CHITCHAT_MODE=false`：默认关闭闲聊回复。
-- `LLM_MAX_RETRIES`：semantic bundle 和 SQL 首轮生成重试次数。
-- `SQL_REPAIR_MAX_RETRIES`：SQL repair fallback 独立重试次数。
-
-完整后端配置见 [backend/README.md](backend/README.md)。
+- `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索。
+- `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时预热向量索引。
+- `ENABLE_CHITCHAT_MODE=false`：控制闲聊能力。
+- `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
+- `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
+- `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。
 
 ## 业务数据
 
@@ -150,17 +119,10 @@ python3 scripts/import_test_data_to_oracle.py
 docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPDB1 @/dev/stdin < sql/oracle_test_data.sql
 ```
 
-## 文档地图
+## 文档
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：端到端架构、核心对象、查询链路、retrieval、SQL 治理、runtime 落库。
-- [docs/DEBUG_PLAYBOOK.md](docs/DEBUG_PLAYBOOK.md)：单题排查、trace/replay/materialize/eval 的使用路径。
-- [docs/CONTENT_GUIDELINES.md](docs/CONTENT_GUIDELINES.md)：样例和业务知识库内容的编写规范。
-- [backend/README.md](backend/README.md)：后端运行、配置、API 分组、runtime 存储。
-- [frontend/README.md](frontend/README.md)：前端工作台、数据加载方式、主要 API 依赖。
-
-## 维护原则
-
-- 事实型说明只放在当前文档；阶段性计划过期后直接删除。
-- 根 README 只保留启动、配置和导航，不承载架构细节。
-- API 和后端运行细节放 `backend/README.md`。
-- 准确率问题优先修 `examples/`、`semantic/business_knowledge.json`、`semantic/tables.json`、retrieval、prompt 和 validator。
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：当前架构、主链路、核心对象、SQL 治理和 runtime 落库。
+- [docs/DEBUG_PLAYBOOK.md](docs/DEBUG_PLAYBOOK.md)：真实问题答错时的分层排查路径。
+- [docs/CONTENT_GUIDELINES.md](docs/CONTENT_GUIDELINES.md)：样例和业务知识库编写规范。
+- [backend/README.md](backend/README.md)：后端运行、配置、API 和目录结构。
+- [frontend/README.md](frontend/README.md)：前端工作台结构和数据入口。

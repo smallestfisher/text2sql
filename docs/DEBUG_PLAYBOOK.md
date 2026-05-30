@@ -1,109 +1,46 @@
-# 调试与联调手册
+# 调试手册
 
-这份文档只回答一个问题：
+这份手册只回答一个问题：一条真实业务问题答错时，应该先看哪里、怎么定位、怎么把修复沉淀成长期资产。
 
-**当一条真实业务问题答错时，应该先看哪里、怎么分层定位、怎么把修复沉淀成长期资产。**
+## 基本原则
 
-它描述的是当前代码已经实现的调试路径，不记录历史迁移过程。
+- 先复现，再看 `trace_id`，不要凭感觉改 prompt 或规则。
+- 先判断错在哪一层：QuestionContext、Retrieval、SQL Prompt、SQL Validator、Execution、Workspace。
+- 准确率修复优先沉淀到 `semantic/tables.json`、`semantic/business_knowledge.json`、`examples/nl2sql_examples.template.json`、`semantic/join_patterns.json`、retrieval、prompt 或 validator。
+- `QueryPlan` 是响应和审计载体，不是新的业务规则引擎。
+- 修完后 replay 原 trace；高价值问题再物化成 eval case 或 example。
 
----
+## 5 分钟排查
 
-## 1. 先记住三条原则
+1. 在工作台或 `POST /api/chat/query/stream` 复现问题。
+2. 记录 `session_id` 和 `trace_id`。
+3. 打开 `GET /api/chat/sessions/{session_id}/workspace`。
+4. 先看 `question_context.decision`、`question_context.effective_question`、`retrieval.hit_count_by_source`、`sql_validation.valid`、`execution.status`、`answer.status`。
+5. 再看 `GET /api/chat/traces/{trace_id}`、`GET /api/chat/traces/{trace_id}/retrieval`、`GET /api/chat/traces/{trace_id}/sql-audit`。
+6. 修复后执行 `POST /api/admin/runtime/query-logs/{trace_id}/replay`。
 
-### 1.1 不要先改规则
+最短分流：
 
-遇到准确率问题，优先修这些地方：
+- 没理解用户问题或追问：看 QuestionContext。
+- 关键表、知识或样例没进上下文：看 Retrieval。
+- SQL 结构、字段、时间、口径错：看 SQL Prompt 和语义资产。
+- SQL 被拦或没拦住：看 SQL Validator。
+- SQL 对但结果错：看 Oracle 数据、时间、版本、过滤条件。
+- 后端结果对但界面错：看 Workspace 和 response restore。
 
-1. `semantic/tables.json`
-   - 先看 `time_fields.grain/format` 是否准确，很多时间筛选、月份映射、最新值判断都直接依赖这里
-2. `semantic/business_knowledge.json`
-3. `examples/nl2sql_examples.template.json`
-4. `semantic/join_patterns.json`
-5. RetrievalService / PromptBuilder
-6. validator / SQL safety boundary
+## 常用入口
 
-不要一上来就加本地 SQL 模板或单题规则分支。
-
-### 1.2 Trace 不是整段对话
-
-当前系统里：
-
-- `session`：整段会话容器
-- `message`：单条消息
-- `trace`：单次查询轮次的完整执行记录
-- `query_log`：按 `trace_id` 落库的结构化摘要
-- `workspace`：前端恢复会话的聚合视图
-
-所以一段会话里通常会有多个 `trace`。
-
-### 1.3 工作台主入口不是拆分接口
-
-真实工作台默认走：
+用户侧：
 
 - `POST /api/chat/query/stream`
-- `GET /api/chat/sessions/{session_id}/workspace`
-
-`/api/query/*` 这一组接口主要用于单步调试，不是前端真实主链路。
-
----
-
-### 1.4 LLM Cache
-
-`LLMClient` 默认启用进程内 prompt cache，配置项是：
-
-- `LLM_CACHE_TTL_SECONDS`，默认 `300`
-- `LLM_CACHE_MAX_ENTRIES`，默认 `256`
-
-如果排查时怀疑缓存影响复现，可以临时把 `LLM_CACHE_TTL_SECONDS=0` 关掉，或重启服务清空内存缓存。JSON 类 LLM 响应如果来自缓存，会带 `cache_hit=true`。
-
-排查性能时看 admin health 中的 `llm.metrics`：`requests` 是业务请求进入该 LLM 阶段的次数，`provider_calls` 是真实请求模型的次数，`cache_hits` 是缓存命中次数，`prompt_chars` / `response_chars` 可用于确认 prompt 精简是否生效。
-
-## 2. 5 分钟排查清单
-
-拿到一个真实问题，先按这个顺序走：
-
-1. 在工作台或 `POST /api/chat/query/stream` 复现
-2. 记下 `session_id` 和 `trace_id`
-3. 打开 `GET /api/chat/sessions/{session_id}/workspace`
-4. 先看 6 个字段：
-   - `classification.question_type`
-   - `classification.subject_domain`
-   - `plan_validation.valid`
-   - `sql_validation.valid`
-   - `execution.status`
-   - `answer.status`
-5. 再看：
-   - `GET /api/chat/traces/{trace_id}`
-   - `GET /api/chat/traces/{trace_id}/retrieval`
-   - `GET /api/chat/traces/{trace_id}/sql-audit`
-6. 修完后 replay 原 `trace_id`
-
-最短分流判断：
-
-- 没听懂问题：先查 semantic bundle / contract compile / field semantics
-- Query Plan 错：先查 planner / compiler / semantic config
-- SQL 错：先查 retrieval / prompt / validator
-- SQL 对但结果错：先查真实数据、时间、版本、口径
-- 左侧消息对、右侧详情不对：先查 `workspace` 恢复链路
-
----
-
-## 3. 推荐入口
-
-### 3.1 用户侧入口
-
-最常用的是：
-
-- `POST /api/chat/query/stream`
+- `POST /api/chat/query`
 - `GET /api/chat/sessions/{session_id}/workspace`
 - `GET /api/chat/traces/{trace_id}`
 - `GET /api/chat/traces/{trace_id}/retrieval`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/export`
 
-### 3.2 管理台入口
-
-管理员常用的是：
+管理员侧：
 
 - `GET /api/admin/runtime/status`
 - `GET /api/admin/runtime/query-logs`
@@ -116,23 +53,16 @@
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/run`
 
-### 3.3 拆分调试入口
-
-需要单步断层定位时再用：
+单步调试：
 
 - `POST /api/query/classify`
 - `POST /api/query/plan`
-- `POST /api/query/plan/validate`
 - `POST /api/query/sql`
 - `POST /api/query/execute`
 
----
+## Workspace
 
-## 4. 先看 workspace
-
-`workspace` 是当前前端恢复会话的主入口，所以很多问题先看它最省时间。
-
-`GET /api/chat/sessions/{session_id}/workspace` 当前会带回：
+`GET /api/chat/sessions/{session_id}/workspace` 是前端恢复会话的主入口，返回：
 
 - `messages`
 - `state`
@@ -142,87 +72,41 @@
 - `latest_query_logs`
 - `trace_artifacts`
 
-先看它的原因很简单：
+判断方式：
 
-- 左边消息流来自这里
-- 右侧详情面板也依赖这里
-- 历史恢复错位时，通常在这里就能看出来
+- `messages` 正确但 `latest_response` 错：查 response restore 和 workspace 聚合。
+- 详情面板 trace 与消息上的 `trace_id` 不一致：查 query log、trace artifact 关联。
+- 某轮结果缺 SQL audit 或 retrieval：查该轮 runtime 落库是否失败。
+- 后端 trace 正确但前端显示错：优先查 workspace 响应和前端 `activeTraceId`。
 
-常见判断：
+## 分层排查
 
-- `messages` 对，但 `latest_response` 不对：优先查 response restore / workspace 聚合
-- `latest_trace` 和消息上挂的 `trace_id` 对不上：优先查 query log / trace artifact 拼接
-- `trace_artifacts` 缺某一轮：优先查该轮 `trace / query_log / sql_audit` 是否有缺口
+### QuestionContext
 
-当前 `workspace` 不再做 partial fallback。  
-如果缺少 `query_log`、`trace`、`sql_audit`，或者 response restore 失败，请直接修 runtime 工件，而不是期待工作台先拼一个残缺结果。
+先看：
 
----
+- `question_context.context_relation`
+- `question_context.decision`
+- `question_context.effective_question`
+- `question_context.semantic_brief`
+- `question_context.subject_domain`
+- `question_context.clarification_question`
 
-## 5. 一条查询的真实分层
+典型问题：
 
-当前主链路可以按下面几层排查：
-
-1. semantic bundle / contract compile
-2. retrieval
-3. query plan
-4. sql generation
-5. sql validation / repair
-6. execution
-7. answer build
-8. workspace / response restore
-
-下面按层说明。
-
----
-
-## 6. 各层怎么查
-
-### 6.1 Semantic Bundle / Contract Compile
-
-先看 planning 阶段输出：
-
-- `semantic_bundle.context_decision`
-- `semantic_bundle.effective_question`
-- `semantic_bundle.decision`
-- `semantic_bundle.subject_domain`
-- `semantic_bundle.semantic_brief`
-- `semantic_bundle.knowledge_brief`
-- `semantic_bundle.contract_hint`
-- `contract_compilation.status`
-- `contract_compilation.warnings`
-- `query_intent.matched_metrics`
-- `query_intent.filters`
-- `query_intent.time_context`
-- `query_intent.version_context`
-
-当前追问补全、上下文替换和业务理解优先由 semantic bundle LLM 决策。排查时重点看：
-
-- `conversation_brief` 是否包含最近几轮必要上下文
-- `latest_query_contract` 是否足够精简且可复用
-- `knowledge_context.business_knowledge` 是否有相关业务知识
-- `knowledge_context.table_fields` 是否包含相关物理字段
-- `parser_observations` 是否只是辅助，而不是唯一依据
-
-如果“XPS呢”这类追问没有替换上一轮 Oxide，优先看 semantic bundle 的 `effective_question` 和 `contract_hint.filters`。`filters` 必须是 `{field, op, value}` 对象数组；不要通过本地规则把字符串过滤条件猜成字段。
-
-典型症状：
-
-- `effective_question` 没有补全上下文
-- `semantic_brief` 仍描述上一轮对象
-- `contract_hint.filters` 输出了字符串或漏了关键字段
-- `contract_compilation.warnings` 提示字段被丢弃
-- 信息足够却一直 `clarification_needed`
+- 追问没有补全成完整问题。
+- `semantic_brief` 描述了上一轮对象。
+- 信息足够却返回 `clarification_needed`。
+- 非业务问题没有被识别为 `invalid` 或 `chat`。
 
 优先修：
 
 - `semantic/business_knowledge.json`
 - `semantic/tables.json`
-- `PromptBuilder.build_semantic_bundle_prompt` 的上下文选择
-- `SemanticBundleService` 的输出校验
-- contract 边界收口是否过度丢弃模型已经理解出的字段
+- `PromptBuilder.build_question_context_prompt`
+- `QuestionContextService` 输出兜底和字段校验
 
-### 6.2 Retrieval
+### Retrieval
 
 先看：
 
@@ -230,22 +114,16 @@
 - `retrieval_channels`
 - `hit_count_by_source`
 - `hit_count_by_channel`
-- top hits 的 `source_type / source_id / score / matched_features`
+- top hits 的 `source_type`、`source_id`、`score`、`matched_features`
 
-当前 retrieval 来源包括：
+检索来源包括 `example`、`knowledge`、`table_schema`、`join_pattern` 和 `vector`。
 
-- `example`
-- `metric`
-- `knowledge`
-- `join_pattern`
-- `vector`
+典型问题：
 
-典型症状：
-
-- 域大致对了，但关键 example 没进 prompt
-- 业务知识明明存在，但没命中
-- join pattern 存在，却没进 top hits
-- 同题多次执行，上下文抖动大
+- 关键表结构没命中。
+- 业务知识存在但没进入 prompt。
+- 样例或 join pattern 没进 top hits。
+- 向量索引未预热或同步失败。
 
 优先修：
 
@@ -256,95 +134,38 @@
 - `RetrievalService`
 - `PromptBuilder`
 
-如果怀疑是向量通道问题，再看：
+向量状态看 `GET /api/admin/runtime/status` 里的 `vector_retrieval` 和 `retrieval_corpus`。如果启用了向量检索但索引未就绪，请执行 `POST /api/admin/runtime/vector/prewarm`。
 
-- `GET /api/admin/runtime/status`
-  - `vector_retrieval`
-  - `retrieval_corpus`
-- `POST /api/admin/runtime/vector/prewarm`
+### SQL Prompt
 
-重点看：
+先看 trace 中 `build_sql_prompt` 的 `context_summary`：
 
-- `vector_enabled`
-- `vector_ready`
-- `vector_sync.error`
-- `persisted_document_count`
-- `rebuilt_document_count`
+- `selected_sources`
+- `table_schemas_count`
+- `business_knowledge_entry_ids`
+- `retrieved_example_ids`
+- `join_pattern_ids`
+- `time_resolution_count`
 
-如果 `vector_enabled=true` 但这里不健康，当前版本不再悄悄退回“无向量命中”模式；相关请求或 reload 会直接失败。
+再看生成的 `sql`。
 
-### 6.3 Query Plan
+典型问题：
 
-先看：
-
-- `query_plan.subject_domain`
-- `query_plan.tables`
-- `query_plan.metrics`
-- `query_plan.dimensions`
-- `query_plan.filters`
-- `query_plan.time_context`
-- `query_plan.version_context`
-- `query_plan.need_clarification`
-
-当前 plan 相关服务有三层：
-
-- `QueryPlanner`
-- `QueryPlanCompiler`
-- `QueryPlanValidator`
-
-典型症状：
-
-- 表选错
-- 没表
-- support table 没补进来
-- domain 是 `unknown`
-- clarification 条件触发得不对
+- SQL 使用不存在的表或字段。
+- 逻辑字段名直接进入 SQL。
+- 时间字段格式不匹配真实存储。
+- 对比类问题没有先聚合再 join。
+- 关键业务公式或默认口径没有进入 prompt。
 
 优先修：
 
-- `semantic/business_knowledge.json`
-- `examples/nl2sql_examples.template.json`
-- `semantic/tables.json`
-- `QueryPlanner`
-- `QueryPlanCompiler`
-- `QueryPlanValidator`
+- 表字段说明和 `time_fields.format`。
+- 业务知识中的公式、默认口径和禁忌。
+- 高质量 few-shot 样例。
+- join pattern。
+- `PromptBuilder` 的上下文选择和压缩。
 
-当前要特别注意：
-
-- 如果 plan 必须依赖某个业务规则才选对表，优先把规则写成知识库或样例，让 retrieval 和 SQL prompt 直接携带该依据。
-- `QueryPlan` 是兼容对象，不应继续扩展成新的业务规则引擎。
-
-### 6.4 SQL 生成
-
-先看：
-
-- `sql`
-- trace 里 `sql_generation`
-- `build_sql_prompt` 的上下文摘要
-
-典型症状：
-
-- SQL 用了不存在的表或字段
-- 逻辑字段名直接进了 SQL
-- 维度和过滤条件没正确落进去
-- 没把命中的 example / business note / join pattern 用起来
-
-优先修：
-
-- `PromptBuilder`
-- `semantic/tables.json`
-- `semantic/business_knowledge.json`
-- `examples`
-- `join_patterns`
-
-额外检查：
-
-- `semantic/tables.json` 里目标表的 `time_fields.format` 是否正确
-- SQL prompt 里的 `query_contract` 是否还保留 tables、metrics、dimensions、filters、sort、limit 等硬约束
-- SQL prompt 里的 `table_schemas` 是否还包含生成 SQL 必需的真实列
-- SQL prompt 里的 `time_resolution` 是否给出了正确的投影/过滤示例
-
-### 6.5 SQL 校验 / Repair
+### SQL Validator / Repair
 
 先看：
 
@@ -353,26 +174,23 @@
 - `sql_validation.warnings`
 - `sql_validation.risk_flags`
 
-典型症状：
+典型问题：
 
-- 生成 SQL 基本对，但被 validator 拦下
-- 该拦没拦
-- repair 后结构变坏
+- 合理 SQL 被误拦。
+- 不安全 SQL 没被拦。
+- repair 后 SQL 变差。
+- validator 的表字段认知和 metadata 不一致。
 
 优先修：
 
 - `SqlValidator`
 - `SqlAstValidator`
-- Query Plan shape contract
-- `semantic/tables.json` 里的 `time_fields.format`
+- `semantic/tables.json`
+- SQL 生成约束
 
-补充说明：
+Repair 是通用纠错，不负责弥补业务知识缺失。业务理解错时应修语义资产、检索或 prompt。
 
-- 当前 repair 是通用 fallback，不是业务特化补丁
-- repair 重试次数由 `SQL_REPAIR_MAX_RETRIES` 控制
-- 如果问题本质是业务理解错、example 没命中、知识资产不够，不要指望 repair 兜底
-
-### 6.6 Execution
+### Execution
 
 先看：
 
@@ -383,164 +201,74 @@
 - `elapsed_ms`
 - `errors`
 
-典型症状：
+典型问题：
 
-- `db_error`
-- `not_configured`
-- `empty_result`
-- 结果能出但业务口径不对
+- `db_error`：检查 Oracle 语法、字段、权限和连接。
+- `timeout`：检查过滤条件、join 粒度和结果限制。
+- `empty_result`：检查时间、版本、枚举值、真实数据是否为空。
+- 结果能出但业务不对：对照真实表数据和业务口径。
 
-优先排查：
+### Answer / Workspace
 
-- 数据库连接和权限
-- 真实表/字段是否和 `semantic/tables.json` 一致
-- 时间/版本/过滤条件是否带偏
-- 真实数据本身是否为空
+如果 SQL 和执行结果都对，但用户看到的状态或详情不对，看：
 
-### 6.7 Workspace / Response Restore
-
-如果 SQL 和执行都对，但工作台显示不对，优先看：
-
+- `answer.status`
+- `answer.summary`
 - `workspace.latest_response`
+- `workspace.latest_trace`
 - `workspace.trace_artifacts`
-- `trace`
-- `query_log`
 - `sql_audit`
 
-这层问题通常不是 SQL 问题，而是恢复链路问题。
+这类问题通常是响应构造、消息保存或工作台恢复问题，不是 SQL 生成问题。
 
----
+## LLM Cache
 
-## 7. 管理台最短排查路径
+`LLMClient` 默认启用进程内 prompt cache：
 
-如果你是管理员，建议固定按这个顺序：
+- `LLM_CACHE_TTL_SECONDS`，默认 `300`
+- `LLM_CACHE_MAX_ENTRIES`，默认 `256`
 
-1. 在工作台复现，拿到 `session_id`、`trace_id`
-2. 先看工作台右侧结果卡和详情
-3. 打开 `GET /api/admin/runtime/status`
-   - 确认 business DB、runtime DB、LLM、vector channel、sql AST validator 都健康
-4. 打开 `GET /api/admin/runtime/query-logs?limit=...`
-5. 看：
-   - `GET /api/admin/runtime/query-logs/{trace_id}`
-   - `GET /api/admin/runtime/query-logs/{trace_id}/retrieval`
-   - `GET /api/admin/runtime/query-logs/{trace_id}/sql-audit`
-6. 如果怀疑 prompt 抖动、上下文漂移或修复效果不稳，执行：
-   - `POST /api/admin/runtime/query-logs/{trace_id}/replay`
-7. 如果这是高价值真实问题，再决定是否沉淀：
-   - `materialize-case`
-   - `materialize-example`
+排查复现抖动时，可以临时把 `LLM_CACHE_TTL_SECONDS=0` 或重启服务。Admin runtime status 的 `llm.metrics` 可查看 `requests`、`provider_calls`、`cache_hits`、`prompt_chars` 和 `response_chars`。
 
----
+## Replay / Materialize / Eval
 
-## 8. 什么时候用 replay、materialize、eval
-
-### 8.1 Replay
-
-适用：
-
-- 想确认修复是否真的生效
-- 想排除“这次线上状态和上次不一样”的偶然因素
-- 想验证 session/context 对结果的影响
-
-优先入口：
+Replay 用于验证修复是否生效：
 
 - `POST /api/admin/runtime/query-logs/{trace_id}/replay`
 
-### 8.2 Materialize Case
-
-适用：
-
-- 这是一条值得长期回归的真实失败样本
-- 你希望后面能批量 eval 回归
-
-入口：
+Materialize case 用于沉淀回归样本：
 
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
 
-### 8.3 Materialize Example
-
-适用：
-
-- 这是一条高频、标准、对 SQL 生成有直接参考价值的真实问法
-
-入口：
+Materialize example 用于沉淀可进入 prompt 的 few-shot：
 
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
 
-当前行为要点：
-
-- 写入 example 后会触发 retrieval corpus reload
-- 如果启用了向量检索，reload 会同步重建向量索引
-- 如果重建失败，当前操作直接报错，不再静默降级成空向量通道
-- 通常不需要重启服务
-
-### 8.4 Eval
-
-适用：
-
-- 你已经有一批真实 case，想批量看有没有回归
-
-入口：
+Eval 用于批量验收：
 
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/run`
 - `GET /api/admin/eval/runs`
 - `GET /api/admin/eval/summary`
 
----
+样例必须是真实问题或真实 trace，SQL 和业务结果都经过人工确认。
 
-## 9. demand 横表专项
+## Demand 横表专项
 
-`p_demand / v_demand` 仍然是最容易出错的一类。
+`p_demand` / `v_demand` 这类横表问题重点检查：
 
-排这类问题时，先确认：
+- `MONTH` 是起始月份，不是所有需求列的实际月份。
+- `REQUIREMENT_QTY`、`NEXT_REQUIREMENT`、`LAST_REQUIREMENT`、`MONTH4~7` 是偏移列。
+- “最新 N 版”要先确定版本集合。
+- “需求最多的 fgcode”要先按 `FGCODE` 聚合再排序。
+- 时间过滤必须和字段真实格式一致。
 
-- 目标需求月份不是简单的 `MONTH = xxxx`
-- `MONTH` 是起始月份，不是每个需求列的唯一月份
-- `REQUIREMENT_QTY / NEXT_REQUIREMENT / LAST_REQUIREMENT / MONTH4~7` 是偏移列
-- “最新 N 版”要先确定版本集合
-- “需求最多的 fgcode”要先按 `FGCODE` 聚合再排序
+优先通过业务知识、样例、表字段说明、prompt 和 validator 修复。
 
-这类问题优先通过下面几层修：
+## 提交前检查
 
-- `semantic/business_knowledge.json`
-- demand 相关 example
-- PromptBuilder 的上下文构造
-- validator 的结构约束
-
-不要把它写回本地固定 SQL 模板。
-
----
-
-## 10. 样本沉淀原则
-
-### 10.1 Example 只收真实样本
-
-当前 example 应满足：
-
-- 来源是真实问题或真实 trace
-- SQL 和业务结果都人工确认过
-- 能复用到一类问题，而不是单题补丁
-
-### 10.2 先修语义还是先补 example
-
-最简单判断：
-
-- 如果系统没听懂“这句话在说哪个字段/指标/版本/时间”，先补知识库、样例或表字段说明
-- 如果系统已经听懂，但 SQL 结构总是生成错，优先补 example / prompt / validator
-
-### 10.3 不要长期保留误导性样本
-
-即使样本来源真实，如果它会系统性误导同域其他问题，也不应该继续保留。
-
----
-
-## 11. 最后一条原则
-
-面对真实问题时：
-
-- 先定位错在哪一层
-- 再把修复沉淀到对的地方
-- 修复后 replay 原 trace
-
-不要把系统重新拉回“大量本地规则 + 本地 SQL 模板”的旧路径。
+- 复现问题有 `trace_id`。
+- 已定位到具体层，而不是泛泛修改 prompt。
+- JSON 资产通过语义配置检查：`python3 backend/domain_config_lint.py`。
+- 修复后 replay 原 trace。
+- 高价值真实问题已补 eval case。

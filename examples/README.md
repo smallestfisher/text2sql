@@ -1,4 +1,4 @@
-# NL2SQL examples
+# NL2SQL 样例
 
 完整维护规范见 [../docs/CONTENT_GUIDELINES.md](../docs/CONTENT_GUIDELINES.md)。这里保留样例文件的字段速查。
 
@@ -30,4 +30,4 @@
 }
 ```
 
-后端会在加载时自动派生 `question_type`、`tables`、`filters`、`join_path` 等运行字段。样例 SQL 进入 prompt 前会做安全检查；非 Oracle 方言或非单条 SELECT/WITH 查询不会作为 few-shot SQL 暴露给模型。
+后端会在加载时自动派生 `question_type`、`tables`、`filters`、`join_path` 等运行字段。样例 SQL 进入 prompt 前会做安全检查；非 Oracle 方言或非单条 `SELECT` / `WITH ... SELECT` 查询不会作为 few-shot SQL 暴露给模型。
