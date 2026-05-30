@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from backend.app.models.intent import StructuredIntent
 from backend.app.models.query_plan import FilterItem, QueryPlan
 from backend.app.services.domain_config_loader import DomainConfigLoader
-from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.semantic_runtime import SemanticRuntime
 
@@ -19,27 +17,10 @@ class InventoryAgeDistributionTests(unittest.TestCase):
         domain_config = DomainConfigLoader().load()
         cls.semantic_runtime = SemanticRuntime(domain_config)
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
-        cls.intent_normalizer = IntentNormalizer(cls.semantic_runtime)
 
-    def test_intent_normalizer_preserves_distribution_mode(self) -> None:
-        intent = StructuredIntent(
-            source="llm",
-            normalized_question=QUESTION.lower(),
-            subject_domain="inventory",
-            metrics=["inventory_qty"],
-            dimensions=["common_categories"],
-            filters=[FilterItem(field="source_table", op="=", value="oms_inventory")],
-            analysis_mode="distribution",
-        )
-
-        normalized = self.intent_normalizer.normalize(intent, question=QUESTION)
-
-        self.assertEqual(normalized["intent"].analysis_mode, "distribution")
-
-    def test_semantic_bundle_prompt_contains_generic_dimension_and_latest_guidance(self) -> None:
-        prompt = self.prompt_builder.build_semantic_bundle_prompt(
-            original_question=QUESTION,
-            effective_question=QUESTION,
+    def test_question_context_prompt_contains_generic_dimension_and_latest_guidance(self) -> None:
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question=QUESTION,
             session_state=None,
             parser_signals={
                 "subject_domain": "inventory",
@@ -50,7 +31,7 @@ class InventoryAgeDistributionTests(unittest.TestCase):
             },
         )
         constraints = "\n".join(prompt["instructions"]["constraints"])
-        business_knowledge = prompt["knowledge_context"]["business_knowledge"]
+        business_knowledge = prompt["context_hints"]["business_knowledge_excerpt"]
 
         self.assertIn("不要因为“分布”“情况”“统计”就自行补", constraints)
         self.assertIn("不要自行追加 common_categories", business_knowledge)
@@ -76,12 +57,12 @@ class InventoryAgeDistributionTests(unittest.TestCase):
 
         prompt = self.prompt_builder.build_sql_prompt(query_plan, question=QUESTION)
         preferences = "\n".join(prompt["instructions"]["sql_preferences"])
-        business_notes = prompt["business_notes"]
+        business_knowledge = prompt["retrieval_context"]["business_knowledge"]
 
         self.assertIn("latest_n", preferences)
         self.assertIn("MAX(真实排序字段)", preferences)
-        self.assertIn("不要自行追加 common_categories", business_notes)
-        self.assertIn(">12M = SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty", business_notes)
+        self.assertIn("不要自行追加 common_categories", business_knowledge)
+        self.assertIn(">12M = SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty", business_knowledge)
 
     def test_example_library_contains_real_oms_age_distribution_case(self) -> None:
         examples = self.prompt_builder._load_examples()

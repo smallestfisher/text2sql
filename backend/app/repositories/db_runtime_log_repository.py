@@ -42,6 +42,8 @@ class DbRuntimeLogRepository:
         rows = self.database_connector.fetch_all(
             f"""
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+                   effective_question, context_relation, question_decision,
+                   conversation_summary, semantic_brief, question_context_json,
                    answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
                    sql_valid, sql_risk_level, sql_risk_flags_json,
                    executed, row_count, warnings_json, trace_json, created_at
@@ -65,6 +67,8 @@ class DbRuntimeLogRepository:
         row = self.database_connector.fetch_one(
             """
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+                   effective_question, context_relation, question_decision,
+                   conversation_summary, semantic_brief, question_context_json,
                    answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
                    sql_valid, sql_risk_level, sql_risk_flags_json,
                    executed, row_count, warnings_json, trace_json, created_at
@@ -121,6 +125,7 @@ class DbRuntimeLogRepository:
         rows = self.database_connector.fetch_all(
             """
             SELECT retrieval_log_id, trace_id, rank_position, source_type, source_id,
+                   summary, retrieval_channel, source_score,
                    score, matched_features_json, metadata_json, created_at
             FROM retrieval_logs
             WHERE trace_id = :trace_id
@@ -137,6 +142,13 @@ class DbRuntimeLogRepository:
                     rank_position=int(row["rank_position"]),
                     source_type=row["source_type"],
                     source_id=row["source_id"],
+                    summary=row.get("summary"),
+                    retrieval_channel=row.get("retrieval_channel"),
+                    source_score=(
+                        float(row["source_score"])
+                        if row.get("source_score") is not None
+                        else None
+                    ),
                     score=float(row["score"]),
                     matched_features=json_loads(row.get("matched_features_json"), []),
                     metadata=json_loads(row.get("metadata_json"), {}),
@@ -250,9 +262,11 @@ class DbRuntimeLogRepository:
                 """
                 INSERT INTO retrieval_logs (
                     retrieval_log_id, trace_id, rank_position, source_type, source_id,
+                    summary, retrieval_channel, source_score,
                     score, matched_features_json, metadata_json, created_at
                 ) VALUES (
                     :retrieval_log_id, :trace_id, :rank_position, :source_type, :source_id,
+                    :summary, :retrieval_channel, :source_score,
                     :score, :matched_features_json, :metadata_json, :created_at
                 )
                 """,
@@ -262,6 +276,9 @@ class DbRuntimeLogRepository:
                     "rank_position": index,
                     "source_type": hit.source_type,
                     "source_id": hit.source_id,
+                    "summary": hit.summary,
+                    "retrieval_channel": hit.retrieval_channel,
+                    "source_score": hit.source_score,
                     "score": hit.score,
                     "matched_features_json": json.dumps(hit.matched_features, ensure_ascii=False),
                     "metadata_json": json.dumps(hit.metadata, ensure_ascii=False),
@@ -315,11 +332,25 @@ class DbRuntimeLogRepository:
 
     def _hydrate_query_log(self, row: dict) -> RuntimeQueryLogRecord:
         trace_payload = json_loads(row.get("trace_json"), {})
+        question_context = json_loads(row.get("question_context_json"), {})
+        if not question_context:
+            question_context = self._extract_question_context(trace_payload)
         return RuntimeQueryLogRecord(
             trace_id=row["trace_id"],
             session_id=row.get("session_id"),
             user_id=row.get("user_id"),
             question=row.get("question"),
+            effective_question=row.get("effective_question")
+            or question_context.get("effective_question"),
+            context_relation=row.get("context_relation")
+            or question_context.get("context_relation"),
+            question_decision=row.get("question_decision")
+            or question_context.get("decision"),
+            conversation_summary=row.get("conversation_summary")
+            or question_context.get("conversation_summary"),
+            semantic_brief=row.get("semantic_brief")
+            or question_context.get("semantic_brief"),
+            question_context=question_context,
             question_type=row.get("question_type"),
             subject_domain=row.get("subject_domain"),
             answer_status=row.get("answer_status"),
@@ -344,4 +375,14 @@ class DbRuntimeLogRepository:
             summary = metadata.get("context_summary")
             if isinstance(summary, dict):
                 return summary
+        return {}
+
+    def _extract_question_context(self, trace_payload: dict) -> dict:
+        for step in trace_payload.get("steps", []):
+            if step.get("name") != "question_context":
+                continue
+            metadata = step.get("metadata") or {}
+            question_context = metadata.get("question_context")
+            if isinstance(question_context, dict):
+                return question_context
         return {}

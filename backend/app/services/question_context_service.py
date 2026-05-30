@@ -76,30 +76,30 @@ class QuestionContextService:
         if decision not in {"answerable", "clarification_needed", "invalid"}:
             decision = "answerable"
 
-        context_relation = str(payload.get("context_relation") or payload.get("context_decision") or "new").strip()
-        if context_relation == "clarification_needed":
-            context_relation = "ambiguous"
+        context_relation = str(payload.get("context_relation") or "new").strip()
         if context_relation not in {"new", "follow_up", "ambiguous"}:
             context_relation = "new"
 
         effective_question = str(
             payload.get("effective_question")
-            or payload.get("rewritten_question")
             or ("" if decision == "clarification_needed" else question)
         ).strip()
-        semantic_brief = str(payload.get("semantic_brief") or payload.get("user_intent") or "").strip()
+        semantic_brief = str(payload.get("semantic_brief") or "").strip()
         if not semantic_brief and effective_question:
             semantic_brief = effective_question
+
+        clarification_question = self._optional_string(payload.get("clarification_question"))
+        reason = self._optional_string(payload.get("reason"))
 
         return QuestionContext(
             original_question=question,
             effective_question=effective_question,
             context_relation=context_relation,  # type: ignore[arg-type]
             decision=decision,  # type: ignore[arg-type]
-            conversation_summary=self.prompt_builder.conversation_brief(session_state) if session_state is not None else "",
+            conversation_summary=self.prompt_builder.conversation_summary(session_state) if session_state is not None else "",
             semantic_brief=semantic_brief,
-            clarification_question=self._optional_string(payload.get("clarification_question")),
-            reason=self._optional_string(payload.get("reason")),
+            clarification_question=clarification_question,
+            reason=reason,
             source="llm",
             raw_payload=payload,
             subject_domain=str(payload.get("subject_domain") or parser_signals.get("subject_domain") or "unknown"),
@@ -113,7 +113,7 @@ class QuestionContextService:
         parser_signals: dict[str, Any],
         reason: str,
     ) -> QuestionContext:
-        conversation_summary = self.prompt_builder.conversation_brief(session_state) if session_state is not None else ""
+        conversation_summary = self.prompt_builder.conversation_summary(session_state) if session_state is not None else ""
         return QuestionContext(
             original_question=question,
             effective_question=question,

@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from backend.app.models.classification import QueryIntent
 from backend.app.models.example_library import ExampleRecord
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
@@ -16,8 +15,8 @@ from backend.app.services.sql_dialect import SqlDialect
 
 
 class PromptBuilder:
-    BUSINESS_NOTES_MAX_CHARS = 1600
-    BUSINESS_NOTE_MAX_ITEMS_PER_ENTRY = 3
+    BUSINESS_KNOWLEDGE_MAX_CHARS = 1600
+    BUSINESS_KNOWLEDGE_MAX_ITEMS_PER_ENTRY = 3
 
     def __init__(
         self,
@@ -34,21 +33,6 @@ class PromptBuilder:
             else None
         )
 
-    def build_semantic_bundle_prompt(
-        self,
-        *,
-        original_question: str,
-        effective_question: str,
-        session_state: SessionState | None,
-        parser_signals: dict[str, Any],
-    ) -> dict:
-        _ = original_question
-        return self.build_question_context_prompt(
-            question=effective_question,
-            session_state=session_state,
-            parser_signals=parser_signals,
-        )
-
     def build_question_context_prompt(
         self,
         *,
@@ -58,21 +42,32 @@ class PromptBuilder:
     ) -> dict:
         parser_signals = parser_signals or {}
         subject_domain = str(parser_signals.get("subject_domain") or (session_state.subject_domain if session_state else "unknown"))
-        focus_tables = self._semantic_bundle_focus_tables(subject_domain, parser_signals, session_state)
+        focus_tables = self._question_context_focus_tables(subject_domain, parser_signals, session_state)
+        conversation_summary = self._prior_conversation_summary(session_state) if session_state is not None else ""
+        recent_turns = [
+            self._turn_text(item)
+            for item in (session_state.recent_turns[-4:] if session_state is not None else [])
+        ]
+        business_knowledge_excerpt = self._question_context_business_knowledge(
+            subject_domain=subject_domain,
+            question=question,
+            conversation_summary=conversation_summary,
+            recent_turns=recent_turns,
+        )[:1200]
+        table_fields = self._context_table_fields(focus_tables)
         return {
             "task": "question_context_generation",
             "question": question,
-            "conversation_summary": self._conversation_brief(session_state) if session_state is not None else "",
-            "recent_turns": [
-                self._turn_text(item)
-                for item in (session_state.recent_turns[-4:] if session_state is not None else [])
-            ],
+            "conversation_summary": conversation_summary,
+            "last_turn": self._last_turn_payload(session_state),
+            "recent_turns": recent_turns,
             "context_hints": self._compact_mapping(
                 {
                     "parser_observations": self._compact_mapping(parser_signals),
-                    "business_knowledge_excerpt": self._business_notes(subject_domain)[:1200],
+                    "pending_clarification": self._pending_clarification_payload(session_state),
+                    "business_knowledge_excerpt": business_knowledge_excerpt,
                     "focus_tables": focus_tables,
-                    "table_fields": self._context_table_fields(focus_tables),
+                    "table_fields": table_fields,
                 }
             ),
             "instructions": {
@@ -80,6 +75,7 @@ class PromptBuilder:
                 "fields": [
                     "decision",
                     "context_relation",
+                    "subject_domain",
                     "effective_question",
                     "semantic_brief",
                     "clarification_question",
@@ -90,19 +86,44 @@ class PromptBuilder:
                 "constraints": [
                     "只做问题上下文整理，不生成 SQL。",
                     "如果当前问题是追问，effective_question 必须改写成不依赖上下文也能理解的完整自然语言问题。",
+                    "首问只要本身是一个完整的自然语言业务查询句，就必须返回 decision=answerable、context_relation=new，并把原问题作为 effective_question；不要在 question_context 阶段追问字段、表、SQL 实现、可选维度、额外时间范围或业务口径细节。",
+                    "完整业务查询句的判断只看用户是否表达了要查什么；即使后续 SQL 生成可能还需要选择字段、表、指标公式或默认口径，也应先进入下一步，不能在本阶段 clarification_needed。",
+                    "只有用户这句话缺少核心意图、是无法解析的省略追问且上下文也无法补全，或明显不是业务查询时，才返回 clarification_needed 或 invalid。",
+                    "如果 context_hints.pending_clarification 存在，当前用户问题应优先视为对上一轮澄清问题的回答；必须结合 pending_clarification、conversation_summary 和用户回答生成完整 effective_question。",
+                    "当用户对 pending_clarification 给出确认、否认或补充信息时，不要把“是的”“不是”“对”等确认词当成独立业务问题。",
                     "只能继承 conversation_summary 和 recent_turns 中明确出现的信息；不确定指代时返回 clarification_needed。",
                     "如果用户表达替换、删除或新增条件，必须在 effective_question 中自然语言表达出来。",
+                    "不要因为“分布”“情况”“统计”就自行补充用户没有明确提出的维度。",
+                    "如果用户提到“最新”但没有给出具体时间，应在 semantic_brief 中保留最新口径，不要编造具体日期。",
+                    "只判断用户这句话和可用会话上下文是否足以形成完整自然语言问题；不要判断业务知识、字段、表、计算方法或 SQL 是否足够。",
                     "semantic_brief 用自然语言说明用户真正要查什么，供后续检索和 SQL 生成使用。",
-                    "不要输出 metrics、dimensions、filters、contract_hint、calculation_contract 或任何结构化业务合同。",
+                    "只输出指定 JSON 字段，不要输出结构化业务规划字段。",
                     "不要输出 markdown。",
                 ],
             },
         }
 
-    def conversation_brief(self, session_state: SessionState | None) -> str:
+    def conversation_summary(self, session_state: SessionState | None) -> str:
         if session_state is None:
             return ""
-        return self._conversation_brief(session_state)
+        return self._conversation_summary(session_state)
+
+    def _pending_clarification_payload(self, session_state: SessionState | None) -> dict | None:
+        if session_state is None or session_state.pending_clarification is None:
+            return None
+        return session_state.pending_clarification.model_dump(mode="json", exclude_none=True)
+
+    def _last_turn_payload(self, session_state: SessionState | None) -> dict | None:
+        if session_state is None:
+            return None
+        latest = session_state.recent_turns[-1] if session_state.recent_turns else None
+        return self._compact_mapping(
+            {
+                "question": getattr(latest, "question", None) if latest is not None else None,
+                "effective_question": getattr(latest, "effective_question", None) if latest is not None else session_state.last_effective_question,
+                "semantic_brief": getattr(latest, "semantic_brief", None) if latest is not None else session_state.last_semantic_brief,
+            }
+        ) or None
 
     def build_sql_prompt(
         self,
@@ -113,7 +134,7 @@ class PromptBuilder:
         selected_sources = self._selected_sources_for_sql(query_plan, retrieval)
         time_resolution = self._time_resolution(query_plan)
         field_resolution = self._field_resolution(query_plan, time_resolution=time_resolution)
-        shape_contract = self._shape_contract(query_plan, time_resolution=time_resolution)
+        output_shape = self._output_shape(query_plan, time_resolution=time_resolution)
         source_schemas = {
             table_name: self._compact_table_schema(
                 table_name,
@@ -127,14 +148,14 @@ class PromptBuilder:
         }
         retrieved_examples = self._select_retrieved_examples(query_plan, retrieval)
         sql_preferences = self._prompt_asset_strings("sql_generation", "base_preferences")
-        if shape_contract["required_projection"]:
+        if output_shape["required_projection"]:
             sql_preferences = [
                 "如果用户问题或 semantic_brief 明确要求按某些维度拆分，最终 SELECT 和 GROUP BY 应自然体现这些维度。",
                 *sql_preferences,
             ]
-        if shape_contract["dimension_hints"]:
+        if output_shape["dimension_hints"]:
             sql_preferences = [
-                *shape_contract["dimension_hints"],
+                *output_shape["dimension_hints"],
                 *sql_preferences,
             ]
         if query_plan.analysis_mode == "detail":
@@ -147,18 +168,18 @@ class PromptBuilder:
                 *self._latest_n_preferences(),
                 *sql_preferences,
             ]
-        business_notes = self._business_notes_for_plan(query_plan, selected_sources, retrieval)
-        business_notes_source = self._business_notes_source_for_plan(query_plan, selected_sources, retrieval)
+        business_knowledge = self._business_knowledge_for_plan(query_plan, selected_sources, retrieval)
+        business_knowledge_source = self._business_knowledge_source_for_plan(query_plan, selected_sources, retrieval)
         context_budget = {
-            "business_notes_max_chars": self.BUSINESS_NOTES_MAX_CHARS,
-            "business_notes_mode": "ranked_relevant_chunks",
+            "business_knowledge_max_chars": self.BUSINESS_KNOWLEDGE_MAX_CHARS,
+            "business_knowledge_mode": "ranked_relevant_chunks",
             "table_schemas_mode": "retrieval_selected_tables_relevant_columns",
         }
         context_summary = {
             "selected_sources": selected_sources,
             "table_schemas_count": len(source_schemas),
-            "business_notes_chars": len(business_notes),
-            "business_notes_source": business_notes_source,
+            "business_knowledge_chars": len(business_knowledge),
+            "business_knowledge_source": business_knowledge_source,
             "time_resolution_count": len(time_resolution),
             "few_shot_used": bool(retrieved_examples),
             "retrieved_example_count": len(retrieved_examples),
@@ -172,7 +193,7 @@ class PromptBuilder:
             "question": question,
             "semantic_brief": query_plan.semantic_brief,
             "retrieval_context": {
-                "business_knowledge": business_notes,
+                "business_knowledge": business_knowledge,
                 "examples": retrieved_examples,
                 "join_patterns": self._selected_join_patterns(retrieval),
             },
@@ -189,10 +210,10 @@ class PromptBuilder:
                 "constraints": self._sql_generation_constraints(),
                 "sql_preferences": sql_preferences,
             },
-            "legacy_debug": {
+            "planning_context": {
                 "field_resolution": field_resolution,
                 "time_resolution": time_resolution,
-                "shape_contract": shape_contract,
+                "output_shape": output_shape,
                 "allowed_sources": selected_sources,
             },
         }
@@ -250,15 +271,15 @@ class PromptBuilder:
     def _business_knowledge(self) -> list[dict]:
         return self._load_business_knowledge()
 
-    def _business_notes_for_plan(
+    def _business_knowledge_for_plan(
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> str:
-        return self._structured_business_notes_for_plan(query_plan, selected_sources, retrieval)
+        return self._structured_business_knowledge_for_plan(query_plan, selected_sources, retrieval)
 
-    def _business_notes_source_for_plan(
+    def _business_knowledge_source_for_plan(
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
@@ -270,28 +291,6 @@ class PromptBuilder:
         if self._retrieved_knowledge_hit_scores(retrieval):
             return "structured_knowledge+retrieval"
         return "structured_knowledge"
-
-    def _sql_query_contract(self, query_plan: QueryPlan) -> dict:
-        payload = {
-            "semantic_brief": query_plan.semantic_brief,
-            "subject_domain": query_plan.subject_domain,
-            "tables": query_plan.tables,
-            "metrics": query_plan.metrics,
-            "entities": query_plan.entities,
-            "dimensions": query_plan.dimensions,
-            "filters": [item.model_dump(mode="json") for item in query_plan.filters],
-            "sort": [item.model_dump(mode="json") for item in query_plan.sort],
-            "limit": query_plan.limit,
-        }
-        if query_plan.calculation_contract:
-            payload["calculation_contract"] = query_plan.calculation_contract
-        if query_plan.time_context and query_plan.time_context.grain != "unknown":
-            payload["time_context"] = query_plan.time_context.model_dump(mode="json")
-        if query_plan.version_context is not None:
-            payload["version_context"] = query_plan.version_context.model_dump(mode="json")
-        if query_plan.analysis_mode:
-            payload["analysis_mode"] = query_plan.analysis_mode
-        return payload
 
     def _compact_table_schema(
         self,
@@ -372,41 +371,6 @@ class PromptBuilder:
                     columns.add(source_field)
         return columns
 
-    def _calculation_contract_columns(self, calculation_contract: dict[str, Any]) -> set[str]:
-        if not isinstance(calculation_contract, dict) or not calculation_contract:
-            return set()
-        columns: set[str] = set()
-        for key in ("join_keys", "dimensions", "group_by"):
-            value = calculation_contract.get(key)
-            if isinstance(value, list):
-                columns.update(str(item) for item in value if item)
-        horizontal = calculation_contract.get("horizontal_month_mapping")
-        if isinstance(horizontal, dict):
-            for key in ("base_month_field", "target_month_field"):
-                value = horizontal.get(key)
-                if isinstance(value, str) and value:
-                    columns.add(value)
-            offset_columns = horizontal.get("offset_columns")
-            if isinstance(offset_columns, dict):
-                columns.update(str(item) for item in offset_columns.values() if item)
-        for source in calculation_contract.get("sources", []):
-            if not isinstance(source, dict):
-                continue
-            for key in ("version_field", "month_field", "base_month_field", "date_field", "value_field"):
-                value = source.get(key)
-                if isinstance(value, str) and value:
-                    columns.add(value)
-            for key in ("filters", "join_keys"):
-                value = source.get(key)
-                if not isinstance(value, list):
-                    continue
-                for item in value:
-                    if isinstance(item, dict) and isinstance(item.get("field"), str):
-                        columns.add(item["field"])
-                    elif isinstance(item, str):
-                        columns.add(item)
-        return columns
-
     def _column_name_from_field(self, field: Any) -> str:
         value = str(field or "").strip()
         if not value:
@@ -426,7 +390,7 @@ class PromptBuilder:
             return flattened
         return [value]
 
-    def _structured_business_notes_for_plan(
+    def _structured_business_knowledge_for_plan(
         self,
         query_plan: QueryPlan,
         selected_sources: list[str] | None,
@@ -438,10 +402,10 @@ class PromptBuilder:
         sections: list[str] = []
         total_chars = 0
         for entry in selected_entries:
-            notes = self._ranked_business_note_items(entry, query_plan, selected_sources)
+            notes = self._ranked_business_knowledge_items(entry, query_plan, selected_sources)
             if not notes:
                 continue
-            title = str(entry.get("id", "business_note"))
+            title = str(entry.get("id", "business_knowledge"))
             tables = ", ".join(entry.get("tables", [])) if isinstance(entry.get("tables"), list) else ""
             lines = [f"[{title}]"]
             if tables:
@@ -451,15 +415,15 @@ class PromptBuilder:
             block = "\n".join(lines)
             separator_chars = 2 if sections else 0
             projected = total_chars + separator_chars + len(block)
-            if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
+            if projected > self.BUSINESS_KNOWLEDGE_MAX_CHARS and sections:
                 continue
             sections.append(block)
             total_chars = projected
-            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+            if total_chars >= self.BUSINESS_KNOWLEDGE_MAX_CHARS:
                 break
-        return "\n\n".join(sections)[: self.BUSINESS_NOTES_MAX_CHARS]
+        return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS]
 
-    def _ranked_business_note_items(
+    def _ranked_business_knowledge_items(
         self,
         entry: dict,
         query_plan: QueryPlan,
@@ -472,17 +436,17 @@ class PromptBuilder:
         ]
         if not notes:
             return []
-        terms = self._business_note_terms(query_plan, selected_sources)
+        terms = self._business_knowledge_terms(query_plan, selected_sources)
         scored = []
         for index, note in enumerate(notes):
             lower_note = note.lower()
             score = sum(1 for term in terms if term and term in lower_note)
-            score += self._critical_business_note_score(note)
+            score += self._critical_business_knowledge_score(note)
             scored.append((score, -index, note))
         scored.sort(reverse=True)
-        return [note for _score, _negative_index, note in scored[: self.BUSINESS_NOTE_MAX_ITEMS_PER_ENTRY]]
+        return [note for _score, _negative_index, note in scored[: self.BUSINESS_KNOWLEDGE_MAX_ITEMS_PER_ENTRY]]
 
-    def _critical_business_note_score(self, note: str) -> int:
+    def _critical_business_knowledge_score(self, note: str) -> int:
         critical_terms = (
             "latest_n",
             "最新",
@@ -503,7 +467,7 @@ class PromptBuilder:
         return sum(2 for term in critical_terms if term in lower_note)
 
 
-    def _business_note_terms(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> set[str]:
+    def _business_knowledge_terms(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> set[str]:
         terms = {
             query_plan.subject_domain,
             *(selected_sources or []),
@@ -524,7 +488,7 @@ class PromptBuilder:
     ) -> list[dict]:
         if not self._business_knowledge:
             return []
-        terms = self._business_note_terms(query_plan, selected_sources)
+        terms = self._business_knowledge_terms(query_plan, selected_sources)
         knowledge_hit_scores = self._retrieved_knowledge_hit_scores(retrieval)
         selected: list[tuple[float, int, dict]] = []
         for index, entry in enumerate(self._business_knowledge):
@@ -866,7 +830,7 @@ class PromptBuilder:
         qualified = self._qualify_columns(query_plan, metric_columns)
         return qualified or metric_columns
 
-    def _shape_contract(self, query_plan: QueryPlan, time_resolution: dict | None = None) -> dict:
+    def _output_shape(self, query_plan: QueryPlan, time_resolution: dict | None = None) -> dict:
         required_projection = list(query_plan.dimensions)
         aggregate_metrics = list(query_plan.metrics)
         dimension_hints: list[str] = []
@@ -1112,7 +1076,7 @@ class PromptBuilder:
             return None
         return self.semantic_runtime.domain_tables(subject_domain)
 
-    def _business_notes(self, subject_domain: str) -> str:
+    def _domain_business_knowledge(self, subject_domain: str) -> str:
         if not self._business_knowledge or subject_domain == "unknown":
             return ""
         sections: list[str] = []
@@ -1129,13 +1093,63 @@ class PromptBuilder:
                 continue
             separator_chars = 2 if sections else 0
             projected = total_chars + separator_chars + len(block)
-            if projected > self.BUSINESS_NOTES_MAX_CHARS and sections:
+            if projected > self.BUSINESS_KNOWLEDGE_MAX_CHARS and sections:
                 continue
             sections.append(block)
             total_chars = projected
-            if total_chars >= self.BUSINESS_NOTES_MAX_CHARS:
+            if total_chars >= self.BUSINESS_KNOWLEDGE_MAX_CHARS:
                 break
-        return "\n\n".join(sections)[: self.BUSINESS_NOTES_MAX_CHARS]
+        return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS]
+
+    def _question_context_business_knowledge(
+        self,
+        *,
+        subject_domain: str,
+        question: str,
+        conversation_summary: str,
+        recent_turns: list[str],
+    ) -> str:
+        if not self._business_knowledge:
+            return ""
+        query_text = "\n".join([question, conversation_summary, *recent_turns]).lower()
+        selected: list[tuple[int, int, dict]] = []
+        for index, entry in enumerate(self._business_knowledge):
+            score = 0
+            domains = {str(item).lower() for item in entry.get("domains", []) if item}
+            if subject_domain != "unknown" and subject_domain.lower() in domains:
+                score += 3
+            for keyword in entry.get("keywords", []) if isinstance(entry.get("keywords"), list) else []:
+                keyword_text = str(keyword).strip().lower()
+                if keyword_text and keyword_text in query_text:
+                    score += 2
+            for table in entry.get("tables", []) if isinstance(entry.get("tables"), list) else []:
+                table_text = str(table).strip().lower()
+                if table_text and table_text in query_text:
+                    score += 1
+            if score > 0:
+                selected.append((score, -index, entry))
+        selected.sort(reverse=True)
+        sections: list[str] = []
+        total_chars = 0
+        for _score, _negative_index, entry in selected:
+            notes = entry.get("notes", [])
+            if not isinstance(notes, list):
+                continue
+            block = "\n".join(
+                f"- {note}"
+                for note in notes[: self.BUSINESS_KNOWLEDGE_MAX_ITEMS_PER_ENTRY]
+                if isinstance(note, str) and note.strip()
+            )
+            if not block:
+                continue
+            projected = total_chars + (2 if sections else 0) + len(block)
+            if projected > self.BUSINESS_KNOWLEDGE_MAX_CHARS and sections:
+                continue
+            sections.append(block)
+            total_chars = projected
+            if total_chars >= self.BUSINESS_KNOWLEDGE_MAX_CHARS:
+                break
+        return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS]
 
     def _supported_domains(self) -> list[str]:
         if self.semantic_runtime is None:
@@ -1151,28 +1165,7 @@ class PromptBuilder:
             return []
         return self.semantic_runtime.semantic_field_metadata(subject_domain=subject_domain)[:20]
 
-    def _session_query_contract(self, session_state: SessionState) -> dict:
-        if session_state.recent_turns:
-            latest_contract = session_state.recent_turns[-1].query_contract
-            if latest_contract:
-                return latest_contract
-        payload = {
-            "subject_domain": session_state.subject_domain,
-            "tables": session_state.tables,
-            "metrics": session_state.metrics,
-            "entities": session_state.entities,
-            "dimensions": session_state.dimensions,
-            "filters": [item.model_dump(mode="json") for item in session_state.filters],
-            "time_context": session_state.time_context.model_dump(mode="json") if session_state.time_context else None,
-            "version_context": session_state.version_context.model_dump(mode="json") if session_state.version_context else None,
-            "analysis_mode": session_state.analysis_mode,
-            "sort": [item.model_dump(mode="json") for item in session_state.sort],
-            "limit": session_state.limit,
-            "semantic_brief": session_state.last_semantic_brief,
-        }
-        return self._compact_mapping(payload)
-
-    def _conversation_brief(self, session_state: SessionState) -> str:
+    def _conversation_summary(self, session_state: SessionState) -> str:
         if session_state.conversation_summary:
             return session_state.conversation_summary
         turns = []
@@ -1188,7 +1181,34 @@ class PromptBuilder:
             return session_state.last_semantic_brief
         return ""
 
-    def _semantic_bundle_focus_tables(
+    def _prior_conversation_summary(self, session_state: SessionState) -> str:
+        turns = session_state.recent_turns[:-1]
+        summaries: list[str] = []
+        for turn in turns[-3:]:
+            if turn.semantic_brief:
+                prefix = f"问题：{turn.question}。" if turn.question else ""
+                summaries.append(prefix + turn.semantic_brief)
+            elif turn.summary:
+                summaries.append(turn.summary)
+        return "\n".join(f"- {item}" for item in summaries)
+
+    def _turn_text(self, turn) -> str:
+        parts: list[str] = []
+        question = getattr(turn, "question", None)
+        effective_question = getattr(turn, "effective_question", None)
+        semantic_brief = getattr(turn, "semantic_brief", None)
+        summary = getattr(turn, "summary", None)
+        if question:
+            parts.append(f"用户：{question}")
+        if effective_question and effective_question != question:
+            parts.append(f"改写后：{effective_question}")
+        if semantic_brief:
+            parts.append(f"摘要：{semantic_brief}")
+        elif summary:
+            parts.append(f"摘要：{summary}")
+        return "；".join(parts)
+
+    def _question_context_focus_tables(
         self,
         subject_domain: str,
         parser_signals: dict[str, Any],
@@ -1244,8 +1264,18 @@ class PromptBuilder:
 
     def _sql_generation_constraints(self) -> list[str]:
         constraints = []
-        for item in self._prompt_asset_strings("sql_generation", "base_constraints"):
-            if "MySQL" in item:
+        configured_constraints = self._prompt_asset_strings("sql_generation", "base_constraints")
+        if not configured_constraints:
+            configured_constraints = [
+                "只生成一条只读 SELECT 或 WITH ... SELECT 语句。",
+                "只能使用 available_tables 中提供的真实表和字段。",
+                "必须使用 Oracle 语法，并包含 FETCH FIRST n ROWS ONLY 结果限制。",
+                "不要使用 SELECT *。",
+                "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
+                "只返回 SQL，不要返回 markdown、注释或解释。",
+            ]
+        for item in configured_constraints:
+            if "MySQL" in item and "基于真实物理表" in item:
                 constraints.append(f"优先基于真实物理表生成 {self.sql_dialect.label} 只读查询。")
                 continue
             if "必须包含 LIMIT" in item:
@@ -1262,7 +1292,13 @@ class PromptBuilder:
 
     def _latest_n_preferences(self) -> list[str]:
         preferences = []
-        for item in self._prompt_asset_strings("sql_generation", "latest_n_preferences"):
+        configured_preferences = self._prompt_asset_strings("sql_generation", "latest_n_preferences")
+        if not configured_preferences:
+            configured_preferences = [
+                "如果语义或过滤条件包含 latest_n，必须先定位真实排序字段，再限制到最新 N 个值。",
+                "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。",
+            ]
+        for item in configured_preferences:
             if "ORDER BY 真实排序字段 DESC LIMIT N" in item:
                 preferences.append(
                     "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。"

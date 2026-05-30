@@ -15,9 +15,8 @@ from backend.app.api.routes.chat import chat_query_stream
 from backend.app.core.exceptions import ClientCancelledError
 from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecord
 from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
-from backend.app.models.classification import QueryIntent, QuestionClassification
+from backend.app.models.classification import QuestionClassification
 from backend.app.models.conversation import ChatMessage, ChatSession
-from backend.app.models.intent import StructuredIntent
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.session_state import SessionState
 from backend.app.models.trace import TraceRecord
@@ -69,8 +68,25 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
 
         self.assertIn("example", source_types)
         self.assertIn("knowledge", source_types)
+        self.assertIn("table_schema", source_types)
         self.assertIn("join_pattern", source_types)
         self.assertNotIn("metric", source_types)
+        self.assertFalse(
+            any(
+                document["source_type"] == "knowledge"
+                and document["source_id"].startswith("table:")
+                for document in service.corpus_documents
+            )
+        )
+        table_schema_documents = [
+            document
+            for document in service.corpus_documents
+            if document["source_type"] == "table_schema"
+        ]
+        self.assertTrue(table_schema_documents)
+        self.assertTrue(
+            all(document["metadata"].get("table") for document in table_schema_documents)
+        )
 
     def test_retrieval_service_raises_when_vector_client_is_missing(self) -> None:
         domain_config = DomainConfigLoader().load()
@@ -397,7 +413,6 @@ class SessionWorkspaceFailFastTests(unittest.TestCase):
                 self.captured_session_state = session_state
                 return ChatResponse(
                     classification=QuestionClassification(question_type="new", subject_domain="unknown"),
-                    query_intent=QueryIntent(normalized_question="查询库存"),
                     query_plan=QueryPlan(question_type="new", subject_domain="unknown"),
                     sql=None,
                     plan_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
@@ -426,47 +441,6 @@ class SessionWorkspaceFailFastTests(unittest.TestCase):
 
         self.assertIs(restore_service.captured_session_state, state)
         self.assertIs(workspace.latest_response.next_session_state, state)
-
-
-class StructuredIntentFailFastTests(unittest.TestCase):
-    def test_invalid_metrics_shape_raises(self) -> None:
-        with self.assertRaisesRegex(ValueError, "metrics must be a JSON array"):
-            StructuredIntent.from_llm_payload(
-                normalized_question="查询库存",
-                payload={"metrics": "inventory_qty"},
-            )
-
-    def test_invalid_filter_entry_raises(self) -> None:
-        with self.assertRaisesRegex(ValueError, r"filters\[0\] is invalid"):
-            StructuredIntent.from_llm_payload(
-                normalized_question="查询库存",
-                payload={
-                    "filters": [
-                        {"field": "factory_code", "op": "bad_operator", "value": "TJ"},
-                    ]
-                },
-            )
-
-    def test_confidence_accepts_numeric_string(self) -> None:
-        intent = StructuredIntent.from_llm_payload(
-            normalized_question="查询库存",
-            payload={"confidence": "0.82"},
-        )
-        self.assertEqual(intent.confidence, 0.82)
-
-    def test_confidence_accepts_percentage_string(self) -> None:
-        intent = StructuredIntent.from_llm_payload(
-            normalized_question="查询库存",
-            payload={"confidence": "82%"},
-        )
-        self.assertEqual(intent.confidence, 0.82)
-
-    def test_confidence_invalid_string_becomes_none(self) -> None:
-        intent = StructuredIntent.from_llm_payload(
-            normalized_question="查询库存",
-            payload={"confidence": "high"},
-        )
-        self.assertIsNone(intent.confidence)
 
 
 if __name__ == "__main__":

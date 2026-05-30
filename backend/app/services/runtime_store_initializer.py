@@ -31,6 +31,42 @@ class RuntimeStoreInitializer:
         migration_errors: list[str] = []
         self._ensure_column(
             "query_logs",
+            "effective_question",
+            self._text_column_definition(),
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
+            "context_relation",
+            "VARCHAR(32) NULL",
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
+            "question_decision",
+            "VARCHAR(32) NULL",
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
+            "conversation_summary",
+            self._text_column_definition(),
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
+            "semantic_brief",
+            self._text_column_definition(),
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
+            "question_context_json",
+            self._text_column_definition(),
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
             "plan_risk_level",
             "VARCHAR(16) NULL",
             migration_errors,
@@ -75,6 +111,24 @@ class RuntimeStoreInitializer:
             "sql_audit_logs",
             "sql_risk_flags_json",
             self._text_column_definition(),
+            migration_errors,
+        )
+        self._ensure_column(
+            "retrieval_logs",
+            "summary",
+            "TEXT NULL",
+            migration_errors,
+        )
+        self._ensure_column(
+            "retrieval_logs",
+            "retrieval_channel",
+            "VARCHAR(32) NULL",
+            migration_errors,
+        )
+        self._ensure_column(
+            "retrieval_logs",
+            "source_score",
+            "DOUBLE NULL",
             migration_errors,
         )
 
@@ -87,8 +141,10 @@ class RuntimeStoreInitializer:
         self._ensure_index("query_logs", "idx_query_logs_session_created", "session_id, created_at", migration_errors)
         self._ensure_index("query_logs", "idx_query_logs_user_created", "user_id, created_at", migration_errors)
         self._ensure_index("query_logs", "idx_query_logs_domain_created", "subject_domain, created_at", migration_errors)
+        self._ensure_index("query_logs", "idx_query_logs_decision_created", "question_decision, created_at", migration_errors)
         self._ensure_index("query_logs", "idx_query_logs_sql_risk_created", "sql_risk_level, created_at", migration_errors)
         self._ensure_index("retrieval_logs", "idx_retrieval_logs_trace_rank", "trace_id, rank_position", migration_errors)
+        self._ensure_index("retrieval_logs", "idx_retrieval_logs_channel_created", "retrieval_channel, created_at", migration_errors)
         self._ensure_index("sql_audit_logs", "idx_sql_audit_logs_trace_created", "trace_id, created_at", migration_errors)
         self._ensure_index("feedback_logs", "idx_feedback_logs_session_created", "session_id, created_at", migration_errors)
         self._ensure_index("feedback_logs", "idx_feedback_logs_trace_created", "trace_id, created_at", migration_errors)

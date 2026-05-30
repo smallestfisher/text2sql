@@ -5,10 +5,11 @@
       "id": "demand_fgcode_mapping",
       "domains": ["demand", "sales_financial"],
       "tables": ["p_demand", "v_demand", "product_mapping", "sales_financial_perf"],
-      "keywords": ["FGCODE", "product_mapping", "Cell", "Array", "CF", "customer"],
+      "keywords": ["FGCODE", "product_mapping", "Cell No", "Array No", "CF No", "customer"],
       "notes": [
         "p_demand 和 v_demand 的核心业务实体是 FGCODE。",
-        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell、Array、CF 分别对应不同阶段编码。",
+        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell No、Array No、CF No 分别对应不同阶段编码列。",
+        "只有在 product_mapping、FGCODE、需求到销售/财务映射这类语境中，Cell No、Array No、CF No 才表示阶段产品编码；不要把它们和生产计划/实际语境中的 Cell工厂、Array工厂、CF工厂混用。",
         "当需求问题需要和销售或财务业绩对比时，通常通过 FGCODE 与 sales_financial_perf 关联。"
       ]
     },
@@ -90,6 +91,18 @@
       "notes": [
         "monthly_plan_approved 常用于已审批计划口径查询，不应直接替代 production_actuals 的实际投入/产出/报废事实口径。",
         "如果要对比计划与实际，可以把 monthly_plan_approved 作为计划侧来源，把 production_actuals 作为实际侧来源。"
+      ]
+    },
+    {
+      "id": "plan_actual_factory_names",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["Array工厂", "Cell工厂", "CF工厂", "MDL工厂", "ARRAY", "CELL", "CF", "MDL", "factory", "factory_code", "FACTORY"],
+      "notes": [
+        "在计划、实际、审批版生产语境中，Array工厂、Cell工厂、CF工厂、MDL工厂是明确的工厂名称。",
+        "这些工厂名称通常映射到逻辑字段 factory；monthly_plan_approved 中对应 factory_code，production_actuals 中对应 FACTORY。",
+        "Array工厂通常规范化为 ARRAY，Cell工厂通常规范化为 CELL，CF工厂通常规范化为 CF，MDL工厂通常规范化为 MDL。",
+        "当自然语言明确写成“Cell工厂”“Array工厂”“CF工厂”“MDL工厂”时，应优先理解为生产工厂过滤条件，而不是 product_mapping 中的阶段料号列。"
       ]
     },
     {

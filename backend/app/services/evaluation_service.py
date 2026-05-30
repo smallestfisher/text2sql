@@ -484,14 +484,13 @@ class EvaluationService:
 
         from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
         from backend.app.models.answer import AnswerPayload
-        from backend.app.models.classification import QuestionClassification, QueryIntent
+        from backend.app.models.classification import QuestionClassification
         from backend.app.models.query_plan import QueryPlan
         from backend.app.models.answer import normalize_answer_status
         from backend.app.models.retrieval import RetrievalContext
         from backend.app.models.session_state import SessionState
 
         classification_payload = classification_metadata.get("classification") or {}
-        query_intent_payload = classification_metadata.get("query_intent") or classification_metadata.get("semantic_parse") or {}
         compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
 
         classification = QuestionClassification(**{
@@ -504,18 +503,6 @@ class EvaluationService:
             "clarification_question": classification_payload.get("clarification_question"),
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
-        })
-        query_intent = QueryIntent(**{
-            "normalized_question": query_intent_payload.get("normalized_question", query_log.question or ""),
-            "matched_metrics": query_intent_payload.get("matched_metrics", []),
-            "matched_entities": query_intent_payload.get("matched_entities", []),
-            "requested_dimensions": query_intent_payload.get("requested_dimensions", []),
-            "filters": query_intent_payload.get("filters", []),
-            "time_context": query_intent_payload.get("time_context", {}),
-            "version_context": query_intent_payload.get("version_context"),
-            "subject_domain": query_intent_payload.get("subject_domain", query_log.subject_domain or "unknown"),
-            "has_follow_up_cue": query_intent_payload.get("has_follow_up_cue", False),
-            "has_explicit_slots": query_intent_payload.get("has_explicit_slots", False),
         })
         query_plan = QueryPlan(**{
             "question_type": compiled_plan_payload.get("question_type", classification.question_type),
@@ -556,7 +543,6 @@ class EvaluationService:
         answer = AnswerPayload(status=answer_status, summary=query_log.answer_status or answer_status)
         return ChatResponse(
             classification=classification,
-            query_intent=query_intent,
             retrieval=RetrievalContext(hits=[]),
             trace=trace,
             answer=answer,

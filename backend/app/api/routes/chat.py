@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -70,14 +71,24 @@ async def chat_query_stream(
     cancellation_token = CancellationToken()
 
     async def event_stream():
-        future = asyncio.create_task(
-            asyncio.to_thread(
-                container.orchestrator.chat,
-                request,
-                trace_id,
-                cancellation_token,
-            )
-        )
+        background_done = threading.Event()
+        background_error: list[Exception] = []
+
+        def run_chat() -> None:
+            try:
+                container.orchestrator.chat(
+                    request,
+                    trace_id,
+                    cancellation_token,
+                )
+            except Exception as exc:
+                background_error.append(exc)
+            finally:
+                background_done.set()
+                container.progress_service.complete(trace_id)
+
+        background_thread = threading.Thread(target=run_chat, daemon=True)
+        background_thread.start()
         disconnect_task = asyncio.create_task(
             _watch_client_disconnect(
                 http_request=http_request,
@@ -91,18 +102,23 @@ async def chat_query_stream(
             while True:
                 item = await subscription.get()
                 if item is None:
+                    if not background_done.is_set():
+                        continue
                     break
                 if item.type == "failed":
                     emitted_failed_event = True
                 payload = item.model_dump(mode="json")
                 yield f"event: {item.type}\n".encode("utf-8")
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
-            try:
-                await future
-            except ClientCancelledError:
+            exc = background_error[0] if background_error else None
+            if isinstance(exc, ClientCancelledError):
                 pass
-            except Exception as exc:
-                logger.exception("stream chat failed trace_id=%s", trace_id)
+            elif exc is not None:
+                logger.error(
+                    "stream chat failed trace_id=%s",
+                    trace_id,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
                 if not emitted_failed_event:
                     failure_event = ProgressEvent(
                         trace_id=trace_id,

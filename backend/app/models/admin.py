@@ -55,6 +55,12 @@ class RuntimeQueryLogRecord(BaseModel):
     session_id: str | None = None
     user_id: str | None = None
     question: str | None = None
+    effective_question: str | None = None
+    context_relation: str | None = None
+    question_decision: str | None = None
+    conversation_summary: str | None = None
+    semantic_brief: str | None = None
+    question_context: dict = Field(default_factory=dict)
     question_type: str | None = None
     subject_domain: str | None = None
     answer_status: str | None = None
@@ -94,6 +100,9 @@ class RuntimeRetrievalLogRecord(BaseModel):
     rank_position: int
     source_type: str
     source_id: str
+    summary: str | None = None
+    retrieval_channel: str | None = None
+    source_score: float | None = None
     score: float
     matched_features: list[str] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)

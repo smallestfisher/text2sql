@@ -54,6 +54,7 @@ class ConversationPersistenceService:
         answer_status: str,
         classification=None,
         retrieval=None,
+        question_context=None,
         plan_validation: ValidationResponse | None = None,
         sql_validation: ValidationResponse | None = None,
         execution=None,
@@ -70,6 +71,7 @@ class ConversationPersistenceService:
                 warnings=warnings,
                 answer_status=answer_status,
                 classification=classification,
+                question_context=question_context,
                 plan_validation=plan_validation,
                 sql_validation=sql_validation,
                 execution=execution,
@@ -207,11 +209,13 @@ class ConversationPersistenceService:
         response: ChatResponse | None,
         answer_status: str | None = None,
         classification=None,
+        question_context=None,
         plan_validation: ValidationResponse | None = None,
         sql_validation: ValidationResponse | None = None,
         execution=None,
     ) -> None:
         final_classification = response.classification if response is not None else classification
+        final_question_context = response.question_context if response is not None else question_context
         final_plan_validation = response.plan_validation if response is not None else plan_validation
         final_sql_validation = response.sql_validation if response is not None else sql_validation
         final_execution = response.execution if response is not None else execution
@@ -230,6 +234,36 @@ class ConversationPersistenceService:
             "session_id": request.session_id,
             "user_id": request.user_context.user_id if request.user_context else None,
             "question": request.question,
+            "effective_question": (
+                final_question_context.effective_question
+                if final_question_context is not None
+                else request.question
+            ),
+            "context_relation": (
+                final_question_context.context_relation
+                if final_question_context is not None
+                else None
+            ),
+            "question_decision": (
+                final_question_context.decision
+                if final_question_context is not None
+                else None
+            ),
+            "conversation_summary": (
+                final_question_context.conversation_summary
+                if final_question_context is not None
+                else None
+            ),
+            "semantic_brief": (
+                final_question_context.semantic_brief
+                if final_question_context is not None
+                else None
+            ),
+            "question_context_json": (
+                json_dumps(final_question_context.model_dump(mode="json"))
+                if final_question_context is not None
+                else None
+            ),
             "question_type": final_classification.question_type if final_classification is not None else None,
             "subject_domain": final_classification.subject_domain if final_classification is not None else None,
             "answer_status": final_answer_status,
@@ -252,6 +286,12 @@ class ConversationPersistenceService:
                 SET session_id = :session_id,
                     user_id = :user_id,
                     question = :question,
+                    effective_question = :effective_question,
+                    context_relation = :context_relation,
+                    question_decision = :question_decision,
+                    conversation_summary = :conversation_summary,
+                    semantic_brief = :semantic_brief,
+                    question_context_json = :question_context_json,
                     question_type = :question_type,
                     subject_domain = :subject_domain,
                     answer_status = :answer_status,
@@ -276,12 +316,16 @@ class ConversationPersistenceService:
             text(
                 """
                 INSERT INTO query_logs (
-                    trace_id, session_id, user_id, question, question_type, subject_domain,
+                    trace_id, session_id, user_id, question, effective_question,
+                    context_relation, question_decision, conversation_summary, semantic_brief,
+                    question_context_json, question_type, subject_domain,
                     answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
                     sql_valid, sql_risk_level, sql_risk_flags_json,
                     executed, row_count, warnings_json, trace_json, created_at
                 ) VALUES (
-                    :trace_id, :session_id, :user_id, :question, :question_type, :subject_domain,
+                    :trace_id, :session_id, :user_id, :question, :effective_question,
+                    :context_relation, :question_decision, :conversation_summary, :semantic_brief,
+                    :question_context_json, :question_type, :subject_domain,
                     :answer_status, :plan_valid, :plan_risk_level, :plan_risk_flags_json,
                     :sql_valid, :sql_risk_level, :sql_risk_flags_json,
                     :executed, :row_count, :warnings_json, :trace_json, :created_at
@@ -305,9 +349,11 @@ class ConversationPersistenceService:
                     """
                     INSERT INTO retrieval_logs (
                         retrieval_log_id, trace_id, rank_position, source_type, source_id,
+                        summary, retrieval_channel, source_score,
                         score, matched_features_json, metadata_json, created_at
                     ) VALUES (
                         :retrieval_log_id, :trace_id, :rank_position, :source_type, :source_id,
+                        :summary, :retrieval_channel, :source_score,
                         :score, :matched_features_json, :metadata_json, :created_at
                     )
                     """
@@ -318,6 +364,9 @@ class ConversationPersistenceService:
                     "rank_position": index,
                     "source_type": hit.source_type,
                     "source_id": hit.source_id,
+                    "summary": hit.summary,
+                    "retrieval_channel": hit.retrieval_channel,
+                    "source_score": hit.source_score,
                     "score": hit.score,
                     "matched_features_json": json_dumps(hit.matched_features),
                     "metadata_json": json_dumps(hit.metadata),

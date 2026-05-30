@@ -6,7 +6,6 @@ import calendar
 import re
 from datetime import date
 
-from backend.app.models.classification import QueryIntent
 from backend.app.models.query_plan import FilterItem
 from backend.app.models.query_plan import QueryPlan
 from backend.app.models.query_plan import SortItem
@@ -677,8 +676,6 @@ class SemanticRuntime:
         entities = set(compiled.entities)
         filter_fields = {item.field for item in compiled.filters}
         for rule in profile.get("clarification_rules", []):
-            if compiled.calculation_contract:
-                continue
             required_metrics = set(rule.get("metrics", []))
             required_entities = set(rule.get("entities", []))
             excluded_entities = set(rule.get("exclude_entities", []))

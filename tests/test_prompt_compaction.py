@@ -6,12 +6,11 @@ from pathlib import Path
 
 from backend.app.models.query_plan import FilterItem, QueryPlan, TimeContext, TimeRange, VersionContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
-from backend.app.models.session_state import QueryTurnRecord, SessionState
+from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
 from backend.app.models.api import ExecutionResponse
 from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.metadata_service import MetadataService
-from backend.app.services.intent_normalizer import IntentNormalizer
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.example_factory import ExampleFactory
@@ -47,47 +46,28 @@ class CountingLLMClient:
         self.enabled = True
 
 
-class SemanticBundleDetailLLMClient:
+class QuestionContextDetailLLMClient:
     def __init__(self) -> None:
         self.enabled = True
 
-    def generate_semantic_bundle(self, prompt_payload, cancellation_token=None):
-        latest_contract = prompt_payload.get("latest_query_contract", {})
+    def generate_question_context(self, prompt_payload, cancellation_token=None):
         return {
             "decision": "answerable",
+            "context_relation": "follow_up" if prompt_payload.get("recent_turns") else "new",
             "subject_domain": "demand",
-            "user_intent": "给出上一轮这些产品的具体型号。",
+            "effective_question": prompt_payload.get("question", ""),
             "semantic_brief": "查询上一轮需求产品集合的具体型号列表，沿用上一轮来源、产品属性、月份和需求量过滤条件。",
-            "knowledge_brief": "具体型号使用FGCODE维度，明细查询不保留产品数量聚合指标。",
-            "contract_hint": {
-                "metrics": [],
-                "entities": ["stage_product"],
-                "dimensions": ["FGCODE"],
-                "filters": latest_contract.get("filters", []),
-                "analysis_mode": "detail",
-            },
         }
 
 
-class ContextEchoDetailLLMClient(SemanticBundleDetailLLMClient):
-    def generate_semantic_bundle(self, prompt_payload, cancellation_token=None):
-        latest_contract = prompt_payload.get("latest_query_contract", {})
-        filters = latest_contract.get("filters", [])
+class ContextEchoDetailLLMClient(QuestionContextDetailLLMClient):
+    def generate_question_context(self, prompt_payload, cancellation_token=None):
         return {
             "decision": "answerable",
+            "context_relation": "follow_up",
             "subject_domain": "demand",
-            "user_intent": "给出上一轮结果对应的具体型号。",
+            "effective_question": prompt_payload.get("question", ""),
             "semantic_brief": "查询上一轮需求产品集合对应的具体型号，沿用月份、版本、产品属性和需求量过滤条件。",
-            "knowledge_brief": "具体型号使用FGCODE维度，按明细去重展示。",
-            "contract_hint": {
-                "metrics": [],
-                "entities": ["stage_product"],
-                "dimensions": ["FGCODE"],
-                "filters": filters,
-                "time_context": latest_contract.get("time_context"),
-                "version_context": latest_contract.get("version_context"),
-                "analysis_mode": "detail",
-            },
         }
 
 
@@ -99,7 +79,7 @@ class PromptCompactionTests(unittest.TestCase):
         cls.semantic_runtime = SemanticRuntime(domain_config)
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
 
-    def test_semantic_bundle_prompt_uses_conversation_brief_and_table_metadata(self) -> None:
+    def test_question_context_prompt_uses_conversation_summary_and_table_metadata(self) -> None:
         session_state = SessionState(
             session_id="sess_rewrite_brief",
             subject_domain="plan_actual",
@@ -111,28 +91,65 @@ class PromptCompactionTests(unittest.TestCase):
                 QueryTurnRecord(
                     question="2026年Array工厂Oxide类产品，每个月分别投入多少物量",
                     semantic_brief="查询actual_input_qty；业务域是计划实际；按biz_month展示；条件为factory=ARRAY、IS_OXIDE=Y。",
-                    query_contract={
-                        "subject_domain": "plan_actual",
-                        "tables": ["production_actuals", "product_attributes"],
-                        "metrics": ["actual_input_qty"],
-                    },
                 )
             ],
         )
 
-        prompt = self.prompt_builder.build_semantic_bundle_prompt(
-            original_question="XPS呢",
-            effective_question="XPS呢",
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question="XPS呢",
             session_state=session_state,
             parser_signals={"subject_domain": "plan_actual"},
         )
 
-        self.assertIn("conversation_brief", prompt)
-        self.assertIn("Oxide", prompt["conversation_brief"])
-        self.assertIn("product_attributes", prompt["knowledge_context"]["table_fields"])
-        table_fields = "\n".join(prompt["knowledge_context"]["table_fields"]["product_attributes"])
+        self.assertIn("conversation_summary", prompt)
+        self.assertIn("Oxide", prompt["conversation_summary"])
+        self.assertIn("product_attributes", prompt["context_hints"]["table_fields"])
+        table_fields = "\n".join(prompt["context_hints"]["table_fields"]["product_attributes"])
         self.assertIn("IS_XPS", table_fields)
         self.assertIn("IS_OXIDE", table_fields)
+
+    def test_question_context_prompt_only_checks_natural_language_completeness(self) -> None:
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+            session_state=None,
+            parser_signals={},
+        )
+
+        constraints = "\n".join(prompt["instructions"]["constraints"])
+
+        self.assertIn("只做问题上下文整理，不生成 SQL", constraints)
+        self.assertIn("只判断用户这句话和可用会话上下文是否足以形成完整自然语言问题", constraints)
+        self.assertIn("不要判断业务知识、字段、表、计算方法或 SQL 是否足够", constraints)
+        self.assertIn("“3月呢”表示把上一轮月份替换为3月", constraints)
+        self.assertIn("不要先询问用户是否确认该替换", constraints)
+        self.assertNotIn("matched_examples", prompt["context_hints"])
+        self.assertNotIn("matched_join_patterns", prompt["context_hints"])
+
+    def test_question_context_prompt_includes_pending_clarification(self) -> None:
+        session_state = SessionState(
+            session_id="sess_pending_clarification",
+            pending_clarification=PendingClarification(
+                original_question="3月呢",
+                effective_question="2026年3月Array工厂审批版投入物量与实际物量Gap和达成率",
+                semantic_brief="查询2026年3月Array工厂审批版投入物量与实际物量的Gap和达成率。",
+                clarification_question="你是指2026年3月吗？",
+                reason="confirm_month_replacement",
+            ),
+        )
+
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question="是的",
+            session_state=session_state,
+            parser_signals={},
+        )
+
+        pending = prompt["context_hints"]["pending_clarification"]
+        constraints = "\n".join(prompt["instructions"]["constraints"])
+
+        self.assertEqual(pending["original_question"], "3月呢")
+        self.assertEqual(pending["clarification_question"], "你是指2026年3月吗？")
+        self.assertIn("当前用户问题应优先视为对上一轮澄清问题的回答", constraints)
+        self.assertIn("不要把“是的”“不是”“对”等确认词当成独立业务问题", constraints)
 
     def test_sql_prompt_includes_semantic_brief(self) -> None:
         query_plan = QueryPlan(
@@ -148,12 +165,11 @@ class PromptCompactionTests(unittest.TestCase):
         prompt = self.prompt_builder.build_sql_prompt(query_plan, question="2026年Array工厂XPS类产品，每个月分别投入多少物量")
 
         self.assertEqual(prompt["semantic_brief"], query_plan.semantic_brief)
-        self.assertEqual(prompt["query_contract"]["semantic_brief"], query_plan.semantic_brief)
 
     def test_prompt_assets_keep_only_sql_generation_assets(self) -> None:
         assets = self.prompt_builder._prompt_assets()
 
-        self.assertEqual(sorted(assets.keys()), ["sql_generation"])
+        self.assertEqual(sorted(assets.keys()), [])
 
     def test_orchestrator_validation_repair_gate_only_allows_repairable_errors(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
@@ -244,7 +260,7 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertEqual(reason, "repairable_execution_error")
 
 
-    def test_sql_prompt_uses_compact_query_contract_and_relevant_table_schemas(self) -> None:
+    def test_sql_prompt_uses_available_tables_and_planning_context(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="inventory",
@@ -258,22 +274,19 @@ class PromptCompactionTests(unittest.TestCase):
 
         prompt = self.prompt_builder.build_sql_prompt(query_plan, question="最新 OMS 库存")
 
-        self.assertIn("query_contract", prompt)
-        self.assertIn("table_schemas", prompt)
+        self.assertIn("available_tables", prompt)
+        self.assertIn("planning_context", prompt)
+        self.assertIn("retrieval_context", prompt)
         self.assertNotIn("query_plan", prompt)
         self.assertNotIn("tables_metadata", prompt)
         self.assertNotIn("allowed_fields", prompt)
-        self.assertNotIn("context_delta", prompt["query_contract"])
-        self.assertNotIn("reason", prompt["query_contract"])
-        self.assertEqual(prompt["query_contract"]["tables"], ["oms_inventory"])
-        self.assertEqual(prompt["query_contract"]["limit"], 50)
 
-        schema = prompt["table_schemas"]["oms_inventory"]
+        schema = prompt["available_tables"]["oms_inventory"]
         schema_text = "\n".join(schema["columns"])
-        self.assertIn("report_month", schema_text)
-        self.assertIn("panel_qty", schema_text)
-        self.assertIn("glass_qty", schema_text)
         self.assertIn("product_ID", schema_text)
+        self.assertNotIn("report_month", schema_text)
+        self.assertNotIn("panel_qty", schema_text)
+        self.assertNotIn("glass_qty", schema_text)
         self.assertNotIn("LGORT_DL", schema_text)
         self.assertIn("time_fields", schema)
         self.assertIn("relationships", schema)
@@ -315,156 +328,43 @@ class PromptCompactionTests(unittest.TestCase):
             question="最新P版，2026年5月Oxide产品数量是多少",
         )
 
-        demand_schema_text = "\n".join(prompt["table_schemas"]["p_demand"]["columns"])
-        attributes_schema_text = "\n".join(prompt["table_schemas"]["product_attributes"]["columns"])
+        demand_schema_text = "\n".join(prompt["available_tables"]["p_demand"]["columns"])
+        attributes_schema_text = "\n".join(prompt["available_tables"]["product_attributes"]["columns"])
 
-        self.assertIn("REQUIREMENT_QTY", demand_schema_text)
-        self.assertIn("NEXT_REQUIREMENT", demand_schema_text)
-        self.assertIn("MONTH7", demand_schema_text)
-        self.assertIn("demand_qty", prompt["query_contract"]["metrics"])
+        self.assertIn("PM_VERSION", demand_schema_text)
+        self.assertIn("FGCODE", demand_schema_text)
         self.assertIn("IS_OXIDE", attributes_schema_text)
         self.assertIn("Y=是，N=否", attributes_schema_text)
-        self.assertIn("IS_xxx 字段使用 Y/N 标记", prompt["business_notes"])
-        self.assertIn("目标需求月份仍然必须基于横表展开后的 demand_month 过滤", prompt["business_notes"])
-        self.assertIn("目标需求月份不能简单理解成 base MONTH 本身", prompt["business_notes"])
-        filter_resolution = prompt["field_resolution"]["filters"]["biz_month"]
-        self.assertIn("p_demand.MONTH", filter_resolution)
-        self.assertNotIn("先在 CTE 中把 p_demand/v_demand 横表展开为 demand_month", str(filter_resolution))
-        self.assertNotIn("p_demand.MONTH = '202605'", str(filter_resolution))
-        demand_qty_resolution = prompt["field_resolution"]["filters"]["demand_qty"]
-        self.assertNotIn("NVL(demand_qty, 0) > 0", str(demand_qty_resolution))
-        examples = prompt["instructions"]["few_shot"]["retrieved_examples"]
+        business_knowledge = prompt["retrieval_context"]["business_knowledge"]
+        self.assertIn("IS_xxx 字段使用 Y/N 标记", business_knowledge)
+        self.assertIn("目标需求月份仍然必须基于横表展开后的 demand_month 过滤", business_knowledge)
+        self.assertIn("目标需求月份不能简单理解成 base MONTH 本身", business_knowledge)
+        filter_resolution = prompt["planning_context"]["field_resolution"]["filters"]
+        self.assertIn("p_demand.PM_VERSION", filter_resolution["PM_VERSION"])
+        self.assertIn("product_attributes.IS_OXIDE", filter_resolution["IS_OXIDE"])
+        self.assertNotIn("biz_month", filter_resolution)
+        self.assertNotIn("demand_qty", filter_resolution)
+        examples = prompt["retrieval_context"]["examples"]
         self.assertEqual(examples[0]["id"], "demand_latest_p_202605_oxide_product_count_001")
         self.assertIn("demand_unpivot", examples[0]["sql"])
         self.assertIn("NVL(demand_unpivot.demand_qty, 0) > 0", examples[0]["sql"])
 
     def test_demand_product_count_question_also_requests_total_demand(self) -> None:
-        llm_client = SemanticBundleDetailLLMClient()
+        llm_client = QuestionContextDetailLLMClient()
         planner = QueryPlanner(
             self.domain_config,
             llm_client,
             self.prompt_builder,
-            IntentNormalizer(self.semantic_runtime),
             semantic_runtime=self.semantic_runtime,
         )
 
-        query_intent, classification, query_plan, _warnings = planner.create_plan(
+        classification, query_plan, _warnings = planner.create_plan(
             "最新P版，2026年5月Oxide产品数量是多少"
         )
 
         self.assertEqual(classification.question_type, "new")
-        self.assertIn("product_count", query_intent.matched_metrics)
-        self.assertIn("demand_qty", query_intent.matched_metrics)
-        self.assertIn("product_count", query_plan.metrics)
-        self.assertIn("demand_qty", query_plan.metrics)
-        self.assertIn(FilterItem(field="demand_qty", op=">", value=0), query_plan.filters)
-
-    def test_detail_follow_up_replaces_product_count_with_product_model_list(self) -> None:
-        llm_client = SemanticBundleDetailLLMClient()
-        planner = QueryPlanner(
-            self.domain_config,
-            llm_client,
-            self.prompt_builder,
-            IntentNormalizer(self.semantic_runtime),
-            semantic_runtime=self.semantic_runtime,
-        )
-        session_state = SessionState(
-            session_id="sess_detail",
-            subject_domain="demand",
-            tables=["p_demand", "product_attributes"],
-            metrics=["product_count"],
-            filters=[
-                FilterItem(field="source_table", op="=", value="p_demand"),
-                FilterItem(field="IS_OXIDE", op="=", value="Y"),
-                FilterItem(field="biz_month", op="=", value="202605"),
-                FilterItem(field="demand_qty", op=">", value=0),
-            ],
-        )
-
-        trace = planner.build_planning_trace(
-            question="给出这些产品的具体型号啊",
-            session_state=session_state,
-        )
-        query_plan = planner.build_plan_from_intent(
-            query_intent=trace["query_intent"],
-            classification=trace["classification"],
-            session_state=session_state,
-            semantic_bundle=trace["semantic_bundle"],
-        )
-
-        self.assertEqual(trace["classification"].question_type, "new")
-        self.assertEqual(trace["semantic_bundle"].decision, "answerable")
-        self.assertEqual(trace["contract_compilation"]["source"], "semantic_bundle_contract_hint")
-        self.assertEqual(query_plan.analysis_mode, "detail")
         self.assertEqual(query_plan.metrics, [])
-        self.assertIn("FGCODE", query_plan.dimensions)
-        self.assertIn(FilterItem(field="IS_OXIDE", op="=", value="Y"), query_plan.filters)
-        self.assertIn(FilterItem(field="biz_month", op="=", value="202605"), query_plan.filters)
-        self.assertIn(FilterItem(field="demand_qty", op=">", value=0), query_plan.filters)
-        self.assertIn("p_demand", query_plan.tables)
-        self.assertIn("product_attributes", query_plan.tables)
-        self.assertNotIn("sales_financial_perf", query_plan.tables)
-
-        prompt = self.prompt_builder.build_sql_prompt(
-            query_plan,
-            question="给出这些产品的具体型号啊",
-        )
-        self.assertEqual(prompt["query_contract"]["metrics"], [])
-        self.assertIn("FGCODE", prompt["shape_contract"]["required_projection"])
-        self.assertIn("DISTINCT 去重", "\n".join(prompt["instructions"]["sql_preferences"]))
-
-    def test_detail_follow_up_inherits_context_when_llm_echoes_session_time_version(self) -> None:
-        llm_client = ContextEchoDetailLLMClient()
-        planner = QueryPlanner(
-            self.domain_config,
-            llm_client,
-            self.prompt_builder,
-            IntentNormalizer(self.semantic_runtime),
-            semantic_runtime=self.semantic_runtime,
-        )
-        session_state = SessionState(
-            session_id="sess_detail",
-            subject_domain="demand",
-            tables=["p_demand", "product_attributes"],
-            metrics=["product_count", "demand_qty"],
-            filters=[
-                FilterItem(field="source_table", op="=", value="p_demand"),
-                FilterItem(field="IS_OXIDE", op="=", value="Y"),
-                FilterItem(field="demand_month", op="=", value="202605"),
-                FilterItem(field="PM_VERSION", op="latest_n", value={"count": 1, "source_table": "p_demand"}),
-                FilterItem(field="demand_qty", op=">", value=0),
-            ],
-            time_context=TimeContext(
-                grain="month",
-                range=TimeRange(start="2026-05-01", end="2026-05-31"),
-            ),
-            version_context=VersionContext(field="PM_VERSION", value="LATEST_N:1"),
-        )
-
-        trace = planner.build_planning_trace(
-            question="对应的具体型号是什么",
-            session_state=session_state,
-        )
-        query_plan = planner.build_plan_from_intent(
-            query_intent=trace["query_intent"],
-            classification=trace["classification"],
-            session_state=session_state,
-            semantic_bundle=trace["semantic_bundle"],
-        )
-
-        self.assertEqual(trace["classification"].question_type, "new")
-        self.assertFalse(trace["classification"].inherit_context)
-        self.assertFalse(trace["query_intent"].has_follow_up_cue)
-        self.assertEqual(trace["semantic_bundle"].decision, "answerable")
-        self.assertEqual(trace["contract_compilation"]["source"], "semantic_bundle_contract_hint")
-        self.assertEqual(query_plan.metrics, [])
-        self.assertEqual(query_plan.tables, ["p_demand", "product_attributes"])
-        self.assertIn("FGCODE", query_plan.dimensions)
-        self.assertIn(FilterItem(field="source_table", op="=", value="p_demand"), query_plan.filters)
-        self.assertIn(FilterItem(field="IS_OXIDE", op="=", value="Y"), query_plan.filters)
-        self.assertIn(FilterItem(field="PM_VERSION", op="latest_n", value={"count": 1, "source_table": "p_demand"}), query_plan.filters)
-        self.assertIn(FilterItem(field="demand_qty", op=">", value=0), query_plan.filters)
-        self.assertNotIn("v_demand", query_plan.tables)
+        self.assertEqual(query_plan.filters, [])
 
     def test_sql_prompt_includes_physical_time_filter_examples_for_plan_actual_compare(self) -> None:
         query_plan = QueryPlan(
@@ -484,13 +384,12 @@ class PromptCompactionTests(unittest.TestCase):
             question="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
         )
 
-        filter_resolution = prompt["field_resolution"]["filters"]["biz_month"]
-        self.assertIn("monthly_plan_approved.plan_month", filter_resolution["physical_candidates"])
-        self.assertIn("monthly_plan_approved.plan_month = '202602'", filter_resolution["filter_examples"])
-        self.assertIn("SUBSTR(production_actuals.work_date, 1, 6) = '202602'", filter_resolution["filter_examples"])
-        self.assertNotIn("'2026-02-01'", "\n".join(filter_resolution["filter_examples"]))
+        filter_resolution = prompt["planning_context"]["field_resolution"]["filters"]
+        self.assertNotIn("biz_month", filter_resolution)
+        self.assertIn("production_actuals.FACTORY", filter_resolution["factory"])
+        self.assertIn("production_actuals.act_type", filter_resolution["act_type"])
 
-    def test_sql_prompt_compacts_business_notes_and_examples(self) -> None:
+    def test_sql_prompt_compacts_business_knowledge_and_examples(self) -> None:
         query_plan = QueryPlan(
             question_type="new",
             subject_domain="inventory",
@@ -504,13 +403,13 @@ class PromptCompactionTests(unittest.TestCase):
         )
 
         prompt = self.prompt_builder.build_sql_prompt(query_plan, question="最新 OMS 库存库龄分布")
-        business_notes = prompt["business_notes"]
+        business_knowledge = prompt["retrieval_context"]["business_knowledge"]
 
-        self.assertLessEqual(len(business_notes), 1600)
-        self.assertIn("不要自行追加 common_categories", business_notes)
-        self.assertIn("默认取 oms_inventory.report_month 的最新月份", business_notes)
-        self.assertIn(">12M = SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty", business_notes)
-        self.assertNotIn("[join_pattern:", business_notes)
+        self.assertLessEqual(len(business_knowledge), 1600)
+        self.assertIn("不要自行追加 common_categories", business_knowledge)
+        self.assertIn("默认取 oms_inventory.report_month 的最新月份", business_knowledge)
+        self.assertIn(">12M = SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty", business_knowledge)
+        self.assertNotIn("[join_pattern:", business_knowledge)
 
     def test_sql_prompt_retrieved_examples_omit_full_intent_text(self) -> None:
         query_plan = QueryPlan(
@@ -538,7 +437,7 @@ class PromptCompactionTests(unittest.TestCase):
             retrieval=retrieval,
             question="最新 OMS 库存库龄分布",
         )
-        examples = prompt["instructions"]["few_shot"]["retrieved_examples"]
+        examples = prompt["retrieval_context"]["examples"]
 
         self.assertEqual(len(examples), 1)
         self.assertNotIn("intent", examples[0])
@@ -592,7 +491,7 @@ FETCH FIRST 200 ROWS ONLY
         )
 
         self.assertEqual(example.question_type, "new")
-        self.assertEqual(example.subject_domain, "plan_actual")
+        self.assertEqual(example.subject_domain, "unknown")
         self.assertEqual(example.tables, ["monthly_plan_approved", "production_actuals"])
         self.assertEqual(example.dimensions, ["factory"])
         self.assertIn("approved_input_panel_qty", example.metrics)
@@ -609,9 +508,9 @@ FETCH FIRST 200 ROWS ONLY
             }
         )
 
-        self.assertEqual(example.subject_domain, "inventory")
+        self.assertEqual(example.subject_domain, "unknown")
         self.assertEqual(example.tables, ["oms_inventory"])
-        self.assertIn("inventory", example.coverage_tags)
+        self.assertIn("unknown", example.coverage_tags)
 
     def test_complete_example_shape_is_rejected_as_template_input(self) -> None:
         factory = ExampleFactory(self.domain_config, self.semantic_runtime)
@@ -717,7 +616,7 @@ FETCH FIRST 200 ROWS ONLY
         )
 
         prompt = prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question="最新 OMS 库存")
-        example = prompt["instructions"]["few_shot"]["retrieved_examples"][0]
+        example = prompt["retrieval_context"]["examples"][0]
 
         self.assertIn("FETCH FIRST 50 ROWS ONLY", example["sql"])
         self.assertNotIn("intent", example)
@@ -756,22 +655,23 @@ FETCH FIRST 200 ROWS ONLY
         )
 
         prompt = prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question="最新 OMS 库存")
-        example = prompt["instructions"]["few_shot"]["retrieved_examples"][0]
+        example = prompt["retrieval_context"]["examples"][0]
 
         self.assertNotIn("sql", example)
         self.assertIn("sql_omitted_reason", example)
 
 
-    def test_sql_prompt_assets_reference_compact_contract_names(self) -> None:
-        assets = self.prompt_builder._prompt_assets()
-        sql_text = "\n".join(
-            assets["sql_generation"]["base_preferences"]
-            + assets["sql_generation"]["base_constraints"]
-            + assets["sql_generation"]["latest_n_preferences"]
+    def test_sql_prompt_fallback_constraints_reference_available_tables(self) -> None:
+        query_plan = QueryPlan(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+            metrics=["inventory_qty"],
         )
+        prompt = self.prompt_builder.build_sql_prompt(query_plan, question="最新 OMS 库存")
+        sql_text = "\n".join(prompt["instructions"]["constraints"])
 
-        self.assertIn("query_contract", sql_text)
-        self.assertIn("table_schemas", sql_text)
+        self.assertIn("available_tables", sql_text)
         self.assertNotIn("tables_metadata", sql_text)
         self.assertNotIn("query_plan.", sql_text)
 

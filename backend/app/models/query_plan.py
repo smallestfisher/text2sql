@@ -100,4 +100,3 @@ class QueryPlan(BaseModel):
     limit: int = 200
     reason: str | None = None
     semantic_brief: str | None = None
-    calculation_contract: dict[str, Any] = Field(default_factory=dict)

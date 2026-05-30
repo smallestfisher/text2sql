@@ -8,6 +8,7 @@ import type {
   EvaluationSummary,
   FeedbackSummary,
   MetadataOverview,
+  QueryPlan,
   RoleRecord,
   RuntimeQueryLogRecord,
   RuntimeSqlAuditRecord,
@@ -50,18 +51,18 @@ const PROGRESS_STAGE_META: Record<string, { label: string; note: string; icon: s
     icon: "↺",
   },
   planning: {
-    label: "解析与规划",
-    note: "识别指标、维度、时间和业务域，生成本轮 Query Plan。",
+    label: "问题上下文",
+    note: "识别追问关系，改写完整问题，并生成本轮 plan shell。",
     icon: "◎",
   },
   retrieval: {
     label: "检索上下文",
-    note: "补充相关表结构、业务知识和真实样例上下文。",
+    note: "按完整问题召回表结构、业务知识和真实样例。",
     icon: "⌕",
   },
   sql_generation: {
     label: "生成 SQL",
-    note: "结合 Query Plan 和上下文生成候选 SQL。",
+    note: "结合可用表、检索上下文和 plan shell 生成候选 SQL。",
     icon: "Σ",
   },
   sql_validation: {
@@ -1050,6 +1051,7 @@ function App() {
                     <SqlPanel
                       latestResponse={inspectorResponse}
                       latestSqlAudit={inspectorSqlAudit}
+                      latestTrace={inspectorTrace}
                       sessionState={sessionState}
                     />
                   )}
@@ -1450,7 +1452,7 @@ function AdminView(props: {
                   {(() => {
                     const promptSummary = normalizePromptSummary(log.prompt_context_summary);
                     const selectedSources = promptSummary.selectedSources.join(", ");
-                    const notesChars = promptSummary.businessNotesChars ? `${promptSummary.businessNotesChars} chars` : "";
+                    const knowledgeChars = promptSummary.businessKnowledgeChars ? `${promptSummary.businessKnowledgeChars} chars` : "";
                     const fewShotUsed = promptSummary.fewShotUsed == null ? "" : promptSummary.fewShotUsed ? "few-shot" : "no few-shot";
                     return (
                       <>
@@ -1464,11 +1466,11 @@ function AdminView(props: {
                   <div className="mini-tags">
                     <span className="mini-tag">{describeResponseStatus(log.answer_status || "unknown")}</span>
                     <span className="mini-tag">{String(log.row_count ?? 0)} rows</span>
-                    {promptSummary.businessNotesSource ? <span className="mini-tag">{promptSummary.businessNotesSource}</span> : null}
+                    {promptSummary.businessKnowledgeSource ? <span className="mini-tag">{promptSummary.businessKnowledgeSource}</span> : null}
                     {promptSummary.joinPatternIds.map((joinPatternId) => (
                       <span className="mini-tag" key={joinPatternId}>{joinPatternId}</span>
                     ))}
-                    {notesChars ? <span className="mini-tag">{notesChars}</span> : null}
+                    {knowledgeChars ? <span className="mini-tag">{knowledgeChars}</span> : null}
                     {fewShotUsed ? <span className="mini-tag">{fewShotUsed}</span> : null}
                   </div>
                   <div className="admin-user-actions">
@@ -1732,6 +1734,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
   const answer = props.latestResponse.answer;
   const execution = props.latestResponse.execution;
   const retrieval = props.latestResponse.retrieval;
+  const questionContext = props.latestResponse.question_context;
   const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
 
   return (
@@ -1786,22 +1789,27 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       </div>
 
       <div className="detail-card">
-        <div className="detail-title">分类摘要</div>
+        <div className="detail-title">问题上下文</div>
         <div className="meta-stack">
-          <MetaRow label="问题类型" value={props.latestResponse.classification.question_type || "-"} />
-          <MetaRow label="业务域" value={props.latestResponse.classification.subject_domain || "-"} />
-          <MetaRow label="继承上下文" value={String(props.latestResponse.classification.inherit_context)} />
-          <MetaRow label="原因码" value={props.latestResponse.classification.reason_code || "-"} />
+          <MetaRow label="原始问题" value={questionContext?.original_question || "-"} />
+          <MetaRow label="完整问题" value={questionContext?.effective_question || "-"} />
+          <MetaRow label="上下文关系" value={describeContextRelation(questionContext?.context_relation)} />
+          <MetaRow label="上下文决策" value={describeQuestionDecision(questionContext?.decision)} />
+          <MetaRow label="业务域" value={questionContext?.subject_domain || props.latestResponse.classification.subject_domain || "-"} />
+          <MetaRow label="来源" value={questionContext?.source || "-"} />
         </div>
+        {questionContext?.semantic_brief ? (
+          <div className="detail-copy">{questionContext.semantic_brief}</div>
+        ) : null}
       </div>
 
       <div className="detail-card">
-        <div className="detail-title">语义解析</div>
+        <div className="detail-title">分类与计划</div>
         <div className="meta-stack">
-          <MetaRow label="命中指标" value={props.latestResponse.query_intent.matched_metrics.join(", ") || "-"} />
-          <MetaRow label="命中实体" value={props.latestResponse.query_intent.matched_entities.join(", ") || "-"} />
-          <MetaRow label="显式槽位" value={String(props.latestResponse.query_intent.has_explicit_slots)} />
-          <MetaRow label="续问提示词" value={String(props.latestResponse.query_intent.has_follow_up_cue)} />
+          <MetaRow label="问题类型" value={props.latestResponse.classification.question_type || "-"} />
+          <MetaRow label="业务域" value={props.latestResponse.classification.subject_domain || "-"} />
+          <MetaRow label="Plan Shell" value={describePlanShell(props.latestResponse.query_plan)} />
+          <MetaRow label="原因码" value={props.latestResponse.classification.reason_code || "-"} />
         </div>
       </div>
 
@@ -1811,7 +1819,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
           <MetaRow label="规划校验" value={props.latestResponse.plan_validation.valid ? "通过" : "未通过"} />
           <MetaRow label="业务域" value={(retrieval?.domains || []).join(", ") || "-"} />
           <MetaRow label="指标" value={(retrieval?.metrics || []).join(", ") || "-"} />
-          <MetaRow label="知识来源" value={promptSummary.businessNotesSource || "-"} />
+          <MetaRow label="知识来源" value={promptSummary.businessKnowledgeSource || "-"} />
           <MetaRow label="Join Pattern" value={promptSummary.joinPatternIds.join(", ") || "-"} />
         </div>
       </div>
@@ -1822,15 +1830,17 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
 function SqlPanel(props: {
   latestResponse: ChatResponse | null;
   latestSqlAudit: RuntimeSqlAuditRecord | null;
+  latestTrace: TraceRecord | null;
   sessionState: SessionState | null;
 }) {
   const sql = props.latestResponse?.sql || props.latestSqlAudit?.sql_text || "";
   const queryPlan = props.latestResponse?.query_plan || props.sessionState?.last_query_plan;
+  const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
 
   if (!sql && !queryPlan) {
     return (
       <section className="tab-panel">
-        <div className="empty-card subtle-card">这里会展示 LLM 生成 SQL、校验信息和 Query Plan。</div>
+        <div className="empty-card subtle-card">这里会展示 LLM 生成 SQL、校验信息和 plan shell。</div>
       </section>
     );
   }
@@ -1860,7 +1870,18 @@ function SqlPanel(props: {
       </div>
 
       <div className="detail-card">
-        <div className="detail-title">Query Plan</div>
+        <div className="detail-title">SQL 输入上下文</div>
+        <div className="meta-stack">
+          <MetaRow label="可用表" value={promptSummary.selectedSources.join(", ") || "-"} />
+          <MetaRow label="表结构数" value={formatOptionalNumber(promptSummary.tableSchemasCount)} />
+          <MetaRow label="业务知识" value={formatPromptKnowledge(promptSummary)} />
+          <MetaRow label="样例" value={formatPromptExamples(promptSummary)} />
+          <MetaRow label="时间解析" value={formatOptionalNumber(promptSummary.timeResolutionCount)} />
+        </div>
+      </div>
+
+      <div className="detail-card">
+        <div className="detail-title">Plan Shell</div>
         <pre className="json-block">{JSON.stringify(queryPlan || {}, null, 2)}</pre>
       </div>
     </section>
@@ -1957,11 +1978,68 @@ function getPromptContextSummaryFromTrace(trace: TraceRecord | null | undefined)
 function normalizePromptSummary(summary: Record<string, unknown> | null | undefined) {
   return {
     selectedSources: getStringArrayValue(summary?.selected_sources),
-    businessNotesChars: typeof summary?.business_notes_chars === "number" ? summary.business_notes_chars : null,
+    tableSchemasCount: getNumberValue(summary?.table_schemas_count),
+    businessKnowledgeChars: typeof summary?.business_knowledge_chars === "number" ? summary.business_knowledge_chars : null,
     fewShotUsed: typeof summary?.few_shot_used === "boolean" ? summary.few_shot_used : null,
-    businessNotesSource: getStringValue(summary?.business_notes_source),
+    retrievedExampleCount: getNumberValue(summary?.retrieved_example_count),
+    retrievedExampleIds: getStringArrayValue(summary?.retrieved_example_ids),
+    timeResolutionCount: getNumberValue(summary?.time_resolution_count),
+    businessKnowledgeSource: getStringValue(summary?.business_knowledge_source),
     joinPatternIds: getStringArrayValue(summary?.join_pattern_ids),
   };
+}
+
+function getNumberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatOptionalNumber(value: number | null) {
+  return value == null ? "-" : String(value);
+}
+
+function formatPromptKnowledge(summary: ReturnType<typeof normalizePromptSummary>) {
+  const chars = summary.businessKnowledgeChars == null ? "-" : `${summary.businessKnowledgeChars} chars`;
+  return summary.businessKnowledgeSource ? `${summary.businessKnowledgeSource} · ${chars}` : chars;
+}
+
+function formatPromptExamples(summary: ReturnType<typeof normalizePromptSummary>) {
+  if (summary.retrievedExampleCount == null) {
+    return "-";
+  }
+  const ids = summary.retrievedExampleIds.slice(0, 3).join(", ");
+  return ids ? `${summary.retrievedExampleCount} · ${ids}` : String(summary.retrievedExampleCount);
+}
+
+function describeContextRelation(value: string | null | undefined) {
+  if (value === "follow_up") {
+    return "追问";
+  }
+  if (value === "ambiguous") {
+    return "不明确";
+  }
+  if (value === "new") {
+    return "新问题";
+  }
+  return "-";
+}
+
+function describeQuestionDecision(value: string | null | undefined) {
+  if (value === "answerable") {
+    return "可回答";
+  }
+  if (value === "clarification_needed") {
+    return "需澄清";
+  }
+  if (value === "invalid") {
+    return "无效";
+  }
+  return "-";
+}
+
+function describePlanShell(queryPlan: QueryPlan) {
+  const tables = queryPlan.tables.length ? `${queryPlan.tables.length} 表` : "等待检索选表";
+  const limit = queryPlan.limit ? `limit ${queryPlan.limit}` : "无行数限制";
+  return `${tables} · ${limit}`;
 }
 
 function getStringArrayValue(value: unknown) {
@@ -2093,7 +2171,7 @@ function describeProgressStepNote(
     return "正在根据 Query Plan 生成 SQL 语句。";
   }
   if (tone === "active" && stage === "planning") {
-    return "正在解析用户问题，识别指标和筛选条件。";
+    return "正在识别追问关系，并整理完整问题上下文。";
   }
   return getProgressStageMeta(stage).note;
 }

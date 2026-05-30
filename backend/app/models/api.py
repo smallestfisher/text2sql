@@ -5,7 +5,7 @@ from typing import Literal
 
 from .answer import AnswerPayload
 from .auth import UserContext
-from .classification import QuestionClassification, QueryIntent
+from .classification import QuestionClassification
 from .query_plan import QueryPlan
 from .question_context import QuestionContext
 from .retrieval import RetrievalContext
@@ -20,13 +20,8 @@ class PlanRequest(BaseModel):
     user_context: UserContext | None = None
 
 
-class PlanValidationRequest(BaseModel):
-    query_plan: QueryPlan
-
-
 class SqlGenerationRequest(BaseModel):
     question: str | None = None
-    query_intent: QueryIntent | None = None
     query_plan: QueryPlan
     user_context: UserContext | None = None
 
@@ -38,7 +33,6 @@ class SqlExecutionRequest(BaseModel):
 
 class PlanResponse(BaseModel):
     classification: QuestionClassification
-    query_intent: QueryIntent
     query_plan: QueryPlan
     domain_summary: dict
     warnings: list[str]
@@ -46,13 +40,7 @@ class PlanResponse(BaseModel):
 
 class ClassificationResponse(BaseModel):
     classification: QuestionClassification
-    query_intent: QueryIntent
     warnings: list[str]
-
-
-class RetrievalPreviewResponse(BaseModel):
-    query_intent: QueryIntent
-    retrieval: RetrievalContext
 
 
 RiskLevel = Literal["low", "medium", "high"]
@@ -102,7 +90,6 @@ class ExecutionResponse(BaseModel):
 class ChatResponse(BaseModel):
     question_context: QuestionContext | None = None
     classification: QuestionClassification
-    query_intent: QueryIntent
     retrieval: RetrievalContext | None = None
     trace: TraceRecord | None = None
     answer: AnswerPayload | None = None

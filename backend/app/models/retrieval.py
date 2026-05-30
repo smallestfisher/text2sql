@@ -8,7 +8,7 @@ class RetrievalHit(BaseModel):
     source_id: str
     score: float
     summary: str
-    retrieval_channel: str = "structured"
+    retrieval_channel: str = "keyword"
     source_score: float | None = None
     matched_features: list[str] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)

@@ -67,6 +67,8 @@ class SessionStateService:
         state.last_effective_question = question
         state.recent_turns = self._append_turn(previous_state, query_plan, question)
         state.conversation_summary = self._conversation_summary(state.recent_turns)
+        if not query_plan.need_clarification:
+            state.pending_clarification = None
         return state
 
     def _new_state(
@@ -98,6 +100,7 @@ class SessionStateService:
             last_semantic_brief=query_plan.semantic_brief,
             last_effective_question=question,
             recent_turns=self._append_turn(previous_state, query_plan, question),
+            pending_clarification=None,
         )
         state.conversation_summary = self._conversation_summary(state.recent_turns)
         return state
@@ -136,7 +139,6 @@ class SessionStateService:
                 effective_question=question,
                 summary=self._query_summary(query_plan),
                 semantic_brief=query_plan.semantic_brief,
-                query_contract={},
             )
         )
         return turns[-4:]
@@ -156,23 +158,6 @@ class SessionStateService:
             if parts:
                 lines.append("；".join(parts))
         return "\n".join(lines)
-
-    def _query_contract(self, query_plan: QueryPlan) -> dict:
-        return {
-            "question_type": query_plan.question_type,
-            "subject_domain": query_plan.subject_domain,
-            "tables": list(query_plan.tables),
-            "metrics": list(query_plan.metrics),
-            "dimensions": list(query_plan.dimensions),
-            "filters": [item.model_dump(mode="json") for item in query_plan.filters],
-            "time_context": query_plan.time_context.model_dump(mode="json"),
-            "version_context": query_plan.version_context.model_dump(mode="json") if query_plan.version_context else None,
-            "analysis_mode": query_plan.analysis_mode,
-            "sort": [item.model_dump(mode="json") for item in query_plan.sort],
-            "limit": query_plan.limit,
-            "semantic_brief": query_plan.semantic_brief,
-            "calculation_contract": dict(query_plan.calculation_contract),
-        }
 
     def _query_summary(self, query_plan: QueryPlan) -> str:
         parts = [query_plan.subject_domain]

@@ -4,8 +4,9 @@ from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecor
 from backend.app.models.answer import AnswerPayload, normalize_answer_status
 from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
 from backend.app.models.auth import UserContext
-from backend.app.models.classification import QuestionClassification, QueryIntent
+from backend.app.models.classification import QuestionClassification
 from backend.app.models.conversation import ChatMessage
+from backend.app.models.question_context import QuestionContext
 from backend.app.models.query_plan import QueryPlan, TimeContext
 from backend.app.models.retrieval import RetrievalContext
 from backend.app.models.session_state import SessionState
@@ -67,8 +68,6 @@ class ChatResponseRestoreService:
         sql_audit: RuntimeSqlAuditRecord | None,
     ) -> ChatResponse:
         payload = dict(snapshot_payload)
-        if "query_intent" not in payload and "semantic_parse" in payload:
-            payload["query_intent"] = payload.pop("semantic_parse")
         payload["trace"] = trace
         payload["sql"] = sql_audit.sql_text if sql_audit is not None else None
         self._normalize_legacy_answer_payload(payload)
@@ -90,7 +89,6 @@ class ChatResponseRestoreService:
         execute_metadata = self._step_metadata(trace, "execute")
 
         classification_payload = plan_metadata.get("classification") or {}
-        query_intent_payload = plan_metadata.get("query_intent") or plan_metadata.get("semantic_parse") or {}
         compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
 
         restored_state = session_state or SessionState(session_id=query_log.session_id or "session_pending")
@@ -107,22 +105,6 @@ class ChatResponseRestoreService:
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
         })
-        query_intent = QueryIntent(**{
-            "normalized_question": query_intent_payload.get("normalized_question", query_log.question or ""),
-            "matched_metrics": query_intent_payload.get("matched_metrics", []),
-            "matched_entities": query_intent_payload.get("matched_entities", []),
-            "requested_dimensions": query_intent_payload.get("requested_dimensions", []),
-            "filters": query_intent_payload.get("filters", []),
-            "time_context": query_intent_payload.get("time_context", {}),
-            "version_context": query_intent_payload.get("version_context"),
-            "requested_sort": query_intent_payload.get("requested_sort", []),
-            "requested_limit": query_intent_payload.get("requested_limit"),
-            "analysis_mode": query_intent_payload.get("analysis_mode"),
-            "subject_domain": query_intent_payload.get("subject_domain", classification.subject_domain),
-            "has_follow_up_cue": query_intent_payload.get("has_follow_up_cue", False),
-            "has_explicit_slots": query_intent_payload.get("has_explicit_slots", False),
-        })
-
         query_plan_source = (
             restored_state.last_query_plan.model_dump(mode="json")
             if restored_state.last_query_plan is not None
@@ -192,8 +174,8 @@ class ChatResponseRestoreService:
         )
 
         return ChatResponse(
+            question_context=self._restore_question_context(query_log),
             classification=classification,
-            query_intent=query_intent,
             retrieval=retrieval,
             trace=trace,
             answer=answer,
@@ -204,6 +186,28 @@ class ChatResponseRestoreService:
             execution=execution,
             next_session_state=restored_state,
         )
+
+    def _restore_question_context(self, query_log: RuntimeQueryLogRecord) -> QuestionContext | None:
+        payload = dict(query_log.question_context)
+        if not payload and not any(
+            [
+                query_log.question,
+                query_log.effective_question,
+                query_log.context_relation,
+                query_log.question_decision,
+                query_log.conversation_summary,
+                query_log.semantic_brief,
+            ]
+        ):
+            return None
+        payload.setdefault("original_question", query_log.question or "")
+        payload.setdefault("effective_question", query_log.effective_question or query_log.question or "")
+        payload.setdefault("context_relation", query_log.context_relation or "new")
+        payload.setdefault("decision", query_log.question_decision or "answerable")
+        payload.setdefault("conversation_summary", query_log.conversation_summary or "")
+        payload.setdefault("semantic_brief", query_log.semantic_brief or payload["effective_question"])
+        payload.setdefault("subject_domain", query_log.subject_domain or "unknown")
+        return QuestionContext(**payload)
 
     def _restore_execution(
         self,

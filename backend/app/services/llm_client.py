@@ -66,7 +66,7 @@ class LLMClient:
         system_prompt = (
             "你是 Text2SQL 系统的问题上下文整理器。"
             "你只负责判断当前问题是否可回答、是否依赖上下文，并在追问时改写成完整自然语言问题。"
-            "不要生成 SQL，不要输出 metrics、dimensions、filters、contract_hint、calculation_contract。"
+            "不要生成 SQL，只输出指定 JSON 字段。"
             "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
         )
         messages = [
@@ -109,16 +109,6 @@ class LLMClient:
                 time.sleep(min(0.4 * attempt, 1.0))
 
         raise LLMServiceError("llm returned invalid JSON during question context generation")
-
-    def generate_semantic_bundle(
-        self,
-        prompt_payload: dict,
-        cancellation_token: CancellationToken | None = None,
-    ) -> dict:
-        return self.generate_question_context(
-            prompt_payload,
-            cancellation_token=cancellation_token,
-        )
 
     def generate_sql_hint(
         self,

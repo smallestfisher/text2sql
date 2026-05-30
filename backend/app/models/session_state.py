@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
 from .query_plan import FilterItem, QueryPlan, SortItem, SubjectDomain, TimeContext, VersionContext
@@ -12,7 +10,14 @@ class QueryTurnRecord(BaseModel):
     effective_question: str | None = None
     summary: str | None = None
     semantic_brief: str | None = None
-    query_contract: dict[str, Any] = Field(default_factory=dict)
+
+
+class PendingClarification(BaseModel):
+    original_question: str
+    clarification_question: str
+    effective_question: str | None = None
+    semantic_brief: str | None = None
+    reason: str | None = None
 
 
 class SessionState(BaseModel):
@@ -37,3 +42,4 @@ class SessionState(BaseModel):
     last_semantic_brief: str | None = None
     last_effective_question: str | None = None
     recent_turns: list[QueryTurnRecord] = Field(default_factory=list)
+    pending_clarification: PendingClarification | None = None

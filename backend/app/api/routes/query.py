@@ -4,13 +4,11 @@ from fastapi import APIRouter, Depends, Request
 
 from backend.app.api.dependencies import get_container, resolve_request_user_context
 from backend.app.core.container import AppContainer
-from backend.app.models.classification import QueryIntent
 from backend.app.models.api import (
     ClassificationResponse,
     ExecutionResponse,
     PlanRequest,
     PlanResponse,
-    PlanValidationRequest,
     SqlExecutionRequest,
     SqlGenerationRequest,
     SqlResponse,
@@ -48,48 +46,6 @@ def _sql_skip_warning(query_plan) -> str | None:
     return None
 
 
-def _query_intent_from_query_plan(query_plan) -> QueryIntent:
-    return QueryIntent(
-        normalized_question="",
-        matched_metrics=list(query_plan.metrics),
-        matched_entities=list(query_plan.entities),
-        requested_dimensions=list(query_plan.dimensions),
-        filters=list(query_plan.filters),
-        time_context=query_plan.time_context,
-        version_context=query_plan.version_context,
-        requested_sort=list(query_plan.sort),
-        requested_limit=query_plan.limit,
-        analysis_mode=query_plan.analysis_mode,
-        subject_domain=query_plan.subject_domain,
-        has_follow_up_cue=False,
-        has_explicit_slots=bool(
-            query_plan.metrics
-            or query_plan.dimensions
-            or query_plan.filters
-            or (query_plan.time_context and query_plan.time_context.grain != "unknown")
-            or query_plan.version_context is not None
-            or query_plan.sort
-            or query_plan.limit is not None
-            or query_plan.analysis_mode is not None
-        ),
-    )
-
-
-def _resolve_sql_generation_intent(request: SqlGenerationRequest) -> QueryIntent:
-    if request.query_intent is not None:
-        return request.query_intent
-
-    query_plan = request.query_plan
-    base_intent = _query_intent_from_query_plan(query_plan)
-    if request.question:
-        return base_intent.model_copy(
-            update={
-                "normalized_question": request.question.strip().lower(),
-            }
-        )
-    return base_intent
-
-
 @router.post("/classify", response_model=ClassificationResponse)
 def classify_query(
     request: PlanRequest,
@@ -101,13 +57,12 @@ def classify_query(
         container,
         default_user_context=request.user_context,
     )
-    query_intent, classification, warnings = container.query_planner.classify(
+    classification, warnings = container.query_planner.classify(
         question=request.question,
         session_state=request.session_state,
     )
     return ClassificationResponse(
         classification=classification,
-        query_intent=query_intent,
         warnings=warnings,
     )
 
@@ -123,35 +78,16 @@ def create_query_plan(
         container,
         default_user_context=request.user_context,
     )
-    query_intent, classification, query_plan, warnings = container.query_planner.create_plan(
+    classification, query_plan, warnings = container.query_planner.create_plan(
         question=request.question,
         session_state=request.session_state,
     )
     _sync_classification_with_query_plan(classification, query_plan)
     return PlanResponse(
         classification=classification,
-        query_intent=query_intent,
         query_plan=query_plan,
         domain_summary=container.domain_config_loader.summary(),
         warnings=warnings,
-    )
-
-
-@router.post("/plan/validate", response_model=ValidationResponse)
-def validate_query_plan(
-    request: PlanValidationRequest,
-    container: AppContainer = Depends(get_container),
-) -> ValidationResponse:
-    result = container.query_plan_validator.validate_detailed(
-        query_plan=request.query_plan,
-        domain_config=container.domain_config,
-    )
-    return ValidationResponse(
-        valid=not result.errors,
-        errors=result.errors,
-        warnings=result.warnings,
-        risk_level=result.risk_level,
-        risk_flags=result.risk_flags,
     )
 
 

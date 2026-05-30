@@ -84,16 +84,18 @@ export interface QuestionClassification {
   context_delta?: Record<string, unknown>;
 }
 
-export interface QueryIntent {
-  normalized_question: string;
-  matched_metrics: string[];
-  matched_entities: string[];
-  filters: FilterItem[];
-  time_context: TimeContext;
-  version_context?: VersionContext | null;
+export interface QuestionContext {
+  original_question: string;
+  effective_question: string;
+  context_relation: string;
+  decision: string;
+  conversation_summary: string;
+  semantic_brief: string;
+  clarification_question?: string | null;
+  reason?: string | null;
+  source: string;
+  raw_payload: Record<string, unknown>;
   subject_domain: string;
-  has_follow_up_cue: boolean;
-  has_explicit_slots: boolean;
 }
 
 export interface RetrievalHit {
@@ -189,8 +191,8 @@ export interface SessionState {
 }
 
 export interface ChatResponse {
+  question_context?: QuestionContext | null;
   classification: QuestionClassification;
-  query_intent: QueryIntent;
   retrieval?: RetrievalContext | null;
   trace?: TraceRecord | null;
   answer?: AnswerPayload | null;

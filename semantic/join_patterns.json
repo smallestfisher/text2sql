@@ -19,14 +19,15 @@
       "id": "demand_product_mapping_sales_financial_join",
       "domains": ["demand", "sales_financial"],
       "tables": ["p_demand", "v_demand", "product_mapping", "sales_financial_perf"],
-      "keywords": ["FGCODE", "product_mapping", "sales_financial_perf", "Cell", "Array", "CF"],
+      "keywords": ["FGCODE", "product_mapping", "sales_financial_perf", "Cell No", "Array No", "CF No"],
       "join_path": [
         "p_demand.FGCODE = product_mapping.FGCODE",
         "v_demand.FGCODE = product_mapping.FGCODE",
         "sales_financial_perf.FGCODE = product_mapping.FGCODE"
       ],
       "notes": [
-        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell、Array、CF 分别对应不同阶段编码。",
+        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell No、Array No、CF No 分别对应不同阶段编码列。",
+        "只有在 product_mapping、FGCODE、需求到销售/财务映射这类语境中，Cell No、Array No、CF No 才表示阶段产品编码；不要把它们和生产计划/实际语境中的 Cell工厂、Array工厂、CF工厂混用。",
         "当需求问题需要和销售或财务业绩对比时，通常通过 FGCODE 与 sales_financial_perf 关联。"
       ]
     },

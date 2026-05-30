@@ -21,23 +21,4 @@ class QuestionContext(BaseModel):
     source: str = "llm"
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
-    # Temporary migration field for legacy API shells. It is not a SQL contract.
     subject_domain: str = "unknown"
-
-    @property
-    def context_decision(self) -> str:
-        if self.context_relation == "ambiguous":
-            return "clarification_needed"
-        return self.context_relation
-
-    @property
-    def user_intent(self) -> str:
-        return self.semantic_brief or self.effective_question
-
-    @property
-    def knowledge_brief(self) -> str:
-        return ""
-
-    @property
-    def contract_hint(self) -> dict[str, Any]:
-        return {}
