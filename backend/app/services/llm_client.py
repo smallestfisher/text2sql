@@ -329,14 +329,7 @@ class LLMClient:
         self._record_metric(task_name, "provider_calls")
         self._record_metric(task_name, "prompt_chars", prompt_chars)
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=0.1,
-                timeout=self.timeout_seconds,
-                stream=True,
-            )
-            content = self._response_content(response)
+            content = self._complete_once(messages, stream=False)
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             self._record_metric(task_name, "response_chars", len(content))
             self._record_metric(task_name, "elapsed_ms", elapsed_ms)
@@ -363,6 +356,29 @@ class LLMClient:
                 exc,
             )
             raise
+
+    def _complete_once(self, messages: list[dict], *, stream: bool) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.1,
+                timeout=self.timeout_seconds,
+                stream=stream,
+            )
+            return self._response_content(response)
+        except TypeError:
+            if stream:
+                raise
+            logger.info("llm non-stream response was not parseable; retrying with stream=true")
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.1,
+                timeout=self.timeout_seconds,
+                stream=True,
+            )
+            return self._response_content(response)
 
     def _response_content(self, response) -> str:
         choices = getattr(response, "choices", None)
