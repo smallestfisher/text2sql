@@ -236,6 +236,8 @@ class PromptBuilder:
     ) -> list[str]:
         expanded = list(selected_sources)
         selected_set = set(selected_sources)
+        if not selected_set:
+            return expanded
         for pattern in selected_join_patterns:
             pattern_tables = pattern.get("tables", [])
             if not isinstance(pattern_tables, list):
@@ -726,7 +728,7 @@ class PromptBuilder:
                 candidates[payload["id"]] = ranked
 
         ranked_patterns = sorted(candidates.values(), reverse=True)
-        return [payload for _score, _negative_index, payload in ranked_patterns[:2]]
+        return [payload for _score, _negative_index, payload in ranked_patterns[:1]]
 
     def _join_pattern_payload_from_hit(self, hit: RetrievalHit) -> dict:
         return {

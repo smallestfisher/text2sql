@@ -88,7 +88,7 @@ class RetrievalService:
         hits.extend(self._retrieve_text_document_hits(query_tokens))
         hits.extend(self._retrieve_text_vector_hits(" ".join(retrieval_terms)))
         hits = self._rerank_hits(hits)
-        top_hits = hits[:8]
+        top_hits = hits[:5]
         return RetrievalContext(
             domains=self._domains_from_hits(top_hits),
             metrics=self._metrics_from_hits(top_hits),
@@ -617,10 +617,10 @@ class RetrievalService:
         )
 
         quotas = {
-            "example": 3,
-            "table_schema": 3,
-            "knowledge": 3,
-            "join_pattern": 2,
+            "example": 2,
+            "table_schema": 2,
+            "knowledge": 2,
+            "join_pattern": 1,
         }
         selected: list[RetrievalHit] = []
         selected_keys: set[tuple[str, str]] = set()
