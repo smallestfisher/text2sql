@@ -24,7 +24,7 @@ from backend.app.models.evaluation import (
     EvaluationSummary,
     RuntimeQueryLogMaterializeCaseRequest,
 )
-from backend.app.models.query_plan import QueryPlan
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.utils import atomic_write_text
 
 
@@ -192,9 +192,9 @@ class EvaluationService:
             coverage_tags=list(dict.fromkeys(request.coverage_tags)),
             expected_domain=snapshot.classification.subject_domain,
             expected_question_type=snapshot.classification.question_type,
-            expected_metrics=list(snapshot.query_plan.metrics),
-            expected_dimensions=list(snapshot.query_plan.dimensions),
-            expected_sort_fields=[item.field for item in snapshot.query_plan.sort],
+            expected_metrics=self._response_metrics(snapshot),
+            expected_dimensions=self._response_dimensions(snapshot),
+            expected_sort_fields=self._response_sort_fields(snapshot),
             expected_filter_fields=self._extract_filter_fields(snapshot),
             expected_status=snapshot.answer.status if snapshot.answer is not None else None,
             expected_reason_code=snapshot.classification.reason_code,
@@ -241,11 +241,14 @@ class EvaluationService:
             ),
             question=record.question,
             subject_domain=snapshot.classification.subject_domain,
-            metrics=list(snapshot.query_plan.metrics),
-            dimensions=list(snapshot.query_plan.dimensions),
+            metrics=self._response_metrics(snapshot),
+            dimensions=self._response_dimensions(snapshot),
             tags=merged_tags,
             sql=snapshot.sql,
-            result_shape=self._derive_example_result_shape(snapshot.query_plan),
+            result_shape=self._derive_example_result_shape(
+                self._response_metrics(snapshot),
+                self._response_dimensions(snapshot),
+            ),
             notes=notes or f"materialized from runtime query log {trace_id}",
         )
 
@@ -275,11 +278,11 @@ class EvaluationService:
                     classification_domain=response.classification.subject_domain,
                     answer_status=response.answer.status if response.answer else None,
                     actual_reason_code=response.classification.reason_code,
-                    actual_metrics=list(response.query_plan.metrics),
-                    actual_dimensions=list(response.query_plan.dimensions),
+                    actual_metrics=self._response_metrics(response),
+                    actual_dimensions=self._response_dimensions(response),
                     actual_filter_fields=self._extract_filter_fields(response),
                     actual_warnings=actual_warnings,
-                    plan_valid=response.plan_validation.valid,
+                    context_valid=response.context_validation.valid,
                     sql_valid=response.sql_validation.valid,
                     executed=bool(response.execution and response.execution.executed),
                     passed=not failures,
@@ -324,10 +327,10 @@ class EvaluationService:
             )
         )
 
-    def _derive_example_result_shape(self, query_plan: QueryPlan) -> str:
-        if query_plan.dimensions:
-            return "_by_".join(query_plan.dimensions)
-        if query_plan.metrics:
+    def _derive_example_result_shape(self, metrics: list[str], dimensions: list[str]) -> str:
+        if dimensions:
+            return "_by_".join(dimensions)
+        if metrics:
             return "metric_only"
         return "unknown"
 
@@ -347,8 +350,8 @@ class EvaluationService:
         failures: list[str] = []
         answer_status = response.answer.status if response.answer else None
         terminal_non_sql_statuses = {"clarification_needed", "invalid", "chat"}
-        actual_metrics = list(response.query_plan.metrics)
-        actual_dimensions = list(response.query_plan.dimensions)
+        actual_metrics = self._response_metrics(response)
+        actual_dimensions = self._response_dimensions(response)
         actual_filter_fields = self._extract_filter_fields(response)
         actual_reason_code = response.classification.reason_code
         actual_warnings = self._collect_response_warnings(response)
@@ -391,22 +394,35 @@ class EvaluationService:
                 if not any(expected_warning in warning for warning in actual_warnings):
                     failures.append(f"missing_warning_substring={expected_warning}")
         should_require_sql = answer_status not in terminal_non_sql_statuses
-        if not response.plan_validation.valid and should_require_sql:
-            failures.append("plan_validation_failed")
+        if not response.context_validation.valid and should_require_sql:
+            failures.append("context_validation_failed")
         if not response.sql_validation.valid and should_require_sql:
             failures.append("sql_validation_failed")
         return failures
 
     def _extract_filter_fields(self, response) -> list[str]:
         fields: list[str] = []
-        for item in response.query_plan.filters:
+        state = getattr(response, "next_session_state", None)
+        for item in list(getattr(state, "filters", []) or []):
             if item.field not in fields:
                 fields.append(item.field)
         return fields
 
+    def _response_metrics(self, response) -> list[str]:
+        state = getattr(response, "next_session_state", None)
+        return list(getattr(state, "metrics", []) or [])
+
+    def _response_dimensions(self, response) -> list[str]:
+        state = getattr(response, "next_session_state", None)
+        return list(getattr(state, "dimensions", []) or [])
+
+    def _response_sort_fields(self, response) -> list[str]:
+        state = getattr(response, "next_session_state", None)
+        return [item.field for item in list(getattr(state, "sort", []) or [])]
+
     def _collect_response_warnings(self, response) -> list[str]:
         warnings: list[str] = []
-        for warning in list(response.plan_validation.warnings) + list(response.sql_validation.warnings):
+        for warning in list(response.context_validation.warnings) + list(response.sql_validation.warnings):
             if warning not in warnings:
                 warnings.append(warning)
         if response.execution is not None:
@@ -478,20 +494,20 @@ class EvaluationService:
         if trace is None or query_log is None:
             return None
 
-        classification_metadata = self._step_metadata(trace, "plan")
-        compile_metadata = self._step_metadata(trace, "compile_plan")
-        validate_plan_metadata = self._step_metadata(trace, "validate_plan")
+        classification_metadata = self._step_metadata(trace, "classification")
+        sql_context_metadata = self._step_metadata(trace, "sql_context_tables")
+        validate_context_metadata = self._step_metadata(trace, "validate_context")
 
         from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
         from backend.app.models.answer import AnswerPayload
         from backend.app.models.classification import QuestionClassification
-        from backend.app.models.query_plan import QueryPlan
+        from backend.app.models.context_summary import ContextSummary
         from backend.app.models.answer import normalize_answer_status
         from backend.app.models.retrieval import RetrievalContext
         from backend.app.models.session_state import SessionState
 
         classification_payload = classification_metadata.get("classification") or {}
-        compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
+        sql_context_payload = sql_context_metadata.get("sql_context") or {}
 
         classification = QuestionClassification(**{
             "question_type": classification_payload.get("question_type", query_log.question_type or "new"),
@@ -504,32 +520,32 @@ class EvaluationService:
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
         })
-        query_plan = QueryPlan(**{
-            "question_type": compiled_plan_payload.get("question_type", classification.question_type),
-            "subject_domain": compiled_plan_payload.get("subject_domain", classification.subject_domain),
-            "tables": compiled_plan_payload.get("tables", []),
-            "entities": compiled_plan_payload.get("entities", []),
-            "metrics": compiled_plan_payload.get("metrics", []),
-            "dimensions": compiled_plan_payload.get("dimensions", []),
-            "filters": compiled_plan_payload.get("filters", []),
-            "join_path": compiled_plan_payload.get("join_path", []),
-            "time_context": compiled_plan_payload.get("time_context", {}),
-            "version_context": compiled_plan_payload.get("version_context"),
-            "inherit_context": compiled_plan_payload.get("inherit_context", classification.inherit_context),
-            "context_delta": compiled_plan_payload.get("context_delta", {}),
-            "need_clarification": compiled_plan_payload.get("need_clarification", classification.need_clarification),
-            "clarification_question": compiled_plan_payload.get("clarification_question", classification.clarification_question),
-            "reason_code": compiled_plan_payload.get("reason_code", classification.reason_code),
-            "sort": compiled_plan_payload.get("sort", []),
-            "limit": compiled_plan_payload.get("limit", 200),
-            "reason": compiled_plan_payload.get("reason", classification.reason),
+        sql_context = SqlGenerationContext(**{
+            "question_type": sql_context_payload.get("question_type", classification.question_type),
+            "subject_domain": sql_context_payload.get("subject_domain", classification.subject_domain),
+            "tables": sql_context_payload.get("tables", []),
+            "entities": sql_context_payload.get("entities", []),
+            "metrics": sql_context_payload.get("metrics", []),
+            "dimensions": sql_context_payload.get("dimensions", []),
+            "filters": sql_context_payload.get("filters", []),
+            "join_path": sql_context_payload.get("join_path", []),
+            "time_context": sql_context_payload.get("time_context", {}),
+            "version_context": sql_context_payload.get("version_context"),
+            "inherit_context": sql_context_payload.get("inherit_context", classification.inherit_context),
+            "context_delta": sql_context_payload.get("context_delta", {}),
+            "need_clarification": sql_context_payload.get("need_clarification", classification.need_clarification),
+            "clarification_question": sql_context_payload.get("clarification_question", classification.clarification_question),
+            "reason_code": sql_context_payload.get("reason_code", classification.reason_code),
+            "sort": sql_context_payload.get("sort", []),
+            "limit": sql_context_payload.get("limit", 200),
+            "reason": sql_context_payload.get("reason", classification.reason),
         })
-        plan_validation = ValidationResponse(
-            valid=bool(query_log.plan_valid),
-            errors=validate_plan_metadata.get("errors", []),
-            warnings=validate_plan_metadata.get("warnings", []),
-            risk_level=query_log.plan_risk_level or "low",
-            risk_flags=query_log.plan_risk_flags,
+        context_validation = ValidationResponse(
+            valid=bool(query_log.context_valid),
+            errors=validate_context_metadata.get("errors", []),
+            warnings=validate_context_metadata.get("warnings", []),
+            risk_level=query_log.context_risk_level or "low",
+            risk_flags=query_log.context_risk_flags,
         )
         sql_validation = ValidationResponse(
             valid=bool(query_log.sql_valid),
@@ -543,28 +559,71 @@ class EvaluationService:
         answer = AnswerPayload(status=answer_status, summary=query_log.answer_status or answer_status)
         return ChatResponse(
             classification=classification,
+            context_summary=ContextSummary(
+                question_type=sql_context.question_type,
+                subject_domain=sql_context.subject_domain,
+                semantic_brief=sql_context.semantic_brief,
+                tables=list(sql_context.tables),
+                retrieval_domains=[],
+                retrieval_metrics=[],
+                limit=sql_context.limit,
+                need_clarification=sql_context.need_clarification,
+                clarification_question=sql_context.clarification_question,
+                source="evaluation_restore",
+            ),
             retrieval=RetrievalContext(hits=[]),
             trace=trace,
             answer=answer,
-            query_plan=query_plan,
             sql=sql_audit.sql_text if sql_audit is not None else None,
-            plan_validation=plan_validation,
+            context_validation=context_validation,
             sql_validation=sql_validation,
             execution=execution,
-            next_session_state=SessionState(session_id=query_log.session_id),
+            next_session_state=SessionState(
+                session_id=query_log.session_id,
+                subject_domain=sql_context.subject_domain,
+                entities=list(sql_context.entities),
+                tables=list(sql_context.tables),
+                metrics=list(sql_context.metrics),
+                dimensions=list(sql_context.dimensions),
+                filters=list(sql_context.filters),
+                sort=list(sql_context.sort),
+                limit=sql_context.limit,
+                time_context=sql_context.time_context,
+                version_context=sql_context.version_context,
+                analysis_mode=sql_context.analysis_mode,
+                last_question_type=sql_context.question_type,
+                last_context_summary=ContextSummary(
+                    question_type=sql_context.question_type,
+                    subject_domain=sql_context.subject_domain,
+                    semantic_brief=sql_context.semantic_brief,
+                    tables=list(sql_context.tables),
+                    retrieval_domains=[],
+                    retrieval_metrics=[],
+                    limit=sql_context.limit,
+                    need_clarification=sql_context.need_clarification,
+                    clarification_question=sql_context.clarification_question,
+                    source="evaluation_restore",
+                ),
+                last_sql=sql_audit.sql_text if sql_audit is not None else None,
+                last_result_shape=self._derive_example_result_shape(
+                    list(sql_context.metrics),
+                    list(sql_context.dimensions),
+                ),
+                last_semantic_brief=sql_context.semantic_brief,
+            ),
         )
 
     def _build_replay_diff(self, original_response, replay_response) -> EvaluationReplayDiff | None:
         if original_response is None:
             return None
-        original_metrics = set(original_response.query_plan.metrics)
-        replay_metrics = set(replay_response.query_plan.metrics)
-        original_dimensions = set(original_response.query_plan.dimensions)
-        replay_dimensions = set(replay_response.query_plan.dimensions)
+        original_metrics = set(self._response_metrics(original_response))
+        replay_metrics = set(self._response_metrics(replay_response))
+        original_dimensions = set(self._response_dimensions(original_response))
+        replay_dimensions = set(self._response_dimensions(replay_response))
         original_filters = set(self._extract_filter_fields(original_response))
         replay_filters = set(self._extract_filter_fields(replay_response))
-        original_plan_flags = set(original_response.plan_validation.risk_flags)
-        replay_plan_flags = set(replay_response.plan_validation.risk_flags)
+        original_context_flags = set(original_response.context_validation.risk_flags)
+        replay_context_flags = set(replay_response.context_validation.risk_flags)
         original_sql_flags = set(original_response.sql_validation.risk_flags)
         replay_sql_flags = set(replay_response.sql_validation.risk_flags)
         original_prompt_context = self._prompt_context_summary(original_response)
@@ -578,8 +637,8 @@ class EvaluationService:
             question_type_changed=original_response.classification.question_type != replay_response.classification.question_type,
             subject_domain_changed=original_response.classification.subject_domain != replay_response.classification.subject_domain,
             answer_status_changed=(original_response.answer.status if original_response.answer else None) != (replay_response.answer.status if replay_response.answer else None),
-            plan_valid_changed=original_response.plan_validation.valid != replay_response.plan_validation.valid,
-            plan_risk_level_changed=original_response.plan_validation.risk_level != replay_response.plan_validation.risk_level,
+            context_valid_changed=original_response.context_validation.valid != replay_response.context_validation.valid,
+            context_risk_level_changed=original_response.context_validation.risk_level != replay_response.context_validation.risk_level,
             sql_valid_changed=original_response.sql_validation.valid != replay_response.sql_validation.valid,
             sql_risk_level_changed=original_response.sql_validation.risk_level != replay_response.sql_validation.risk_level,
             execution_status_changed=(original_response.execution.status if original_response.execution else None) != (replay_response.execution.status if replay_response.execution else None),
@@ -593,8 +652,8 @@ class EvaluationService:
             dimensions_removed=sorted(original_dimensions - replay_dimensions),
             filter_fields_added=sorted(replay_filters - original_filters),
             filter_fields_removed=sorted(original_filters - replay_filters),
-            plan_risk_flags_added=sorted(replay_plan_flags - original_plan_flags),
-            plan_risk_flags_removed=sorted(original_plan_flags - replay_plan_flags),
+            context_risk_flags_added=sorted(replay_context_flags - original_context_flags),
+            context_risk_flags_removed=sorted(original_context_flags - replay_context_flags),
             sql_risk_flags_added=sorted(replay_sql_flags - original_sql_flags),
             sql_risk_flags_removed=sorted(original_sql_flags - replay_sql_flags),
         )

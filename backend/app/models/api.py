@@ -6,7 +6,7 @@ from typing import Literal
 from .answer import AnswerPayload
 from .auth import UserContext
 from .classification import QuestionClassification
-from .query_plan import QueryPlan
+from .context_summary import ContextSummary
 from .question_context import QuestionContext
 from .retrieval import RetrievalContext
 from .session_state import SessionState
@@ -20,22 +20,9 @@ class PlanRequest(BaseModel):
     user_context: UserContext | None = None
 
 
-class SqlGenerationRequest(BaseModel):
-    question: str | None = None
-    query_plan: QueryPlan
-    user_context: UserContext | None = None
-
-
 class SqlExecutionRequest(BaseModel):
     sql: str
     user_context: UserContext | None = None
-
-
-class PlanResponse(BaseModel):
-    classification: QuestionClassification
-    query_plan: QueryPlan
-    domain_summary: dict
-    warnings: list[str]
 
 
 class ClassificationResponse(BaseModel):
@@ -52,12 +39,6 @@ class ValidationResponse(BaseModel):
     warnings: list[str]
     risk_level: RiskLevel = "low"
     risk_flags: list[str] = Field(default_factory=list)
-
-
-class SqlResponse(BaseModel):
-    query_plan: QueryPlan
-    sql: str | None
-    validation: ValidationResponse
 
 
 ExecutionStatus = Literal[
@@ -90,12 +71,12 @@ class ExecutionResponse(BaseModel):
 class ChatResponse(BaseModel):
     question_context: QuestionContext | None = None
     classification: QuestionClassification
+    context_summary: ContextSummary
     retrieval: RetrievalContext | None = None
     trace: TraceRecord | None = None
     answer: AnswerPayload | None = None
-    query_plan: QueryPlan
     sql: str | None
-    plan_validation: ValidationResponse
+    context_validation: ValidationResponse
     sql_validation: ValidationResponse
     execution: ExecutionResponse | None
     next_session_state: SessionState

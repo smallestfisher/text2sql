@@ -39,7 +39,7 @@ class SqlExecutor:
                 errors=["sql is empty"],
                 warnings=[],
                 elapsed_ms=None,
-                error_category="planner",
+                error_category="analysis_service",
             )
 
         blocked_reason = self._preflight_block_reason(sql)

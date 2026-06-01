@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .query_plan import ContextDelta, QuestionType, SubjectDomain
+from .semantic_types import ContextDelta, QuestionType, SubjectDomain
 
 
 class QuestionClassification(BaseModel):

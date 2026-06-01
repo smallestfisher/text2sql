@@ -8,7 +8,6 @@ from backend.app.api.middleware import RequestTraceMiddleware
 from backend.app.api.routes.auth import router as auth_router
 from backend.app.api.routes.chat import router as chat_router
 from backend.app.api.routes.health import router as health_router
-from backend.app.api.routes.query import router as query_router
 from backend.app.api.routes.semantic import router as semantic_router
 from backend.app.api.routes.sessions import router as sessions_router
 from backend.app.core.error_handlers import register_error_handlers
@@ -31,7 +30,6 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(auth_router)
     app.include_router(semantic_router)
-    app.include_router(query_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)
 

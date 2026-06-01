@@ -6,8 +6,9 @@ from typing import Any
 
 from backend.app.core.cancellation import CancellationToken
 from backend.app.models.classification import QuestionClassification
-from backend.app.models.query_plan import QueryPlan, TimeContext
+from backend.app.models.semantic_types import TimeContext
 from backend.app.models.session_state import SessionState
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_context_service import QuestionContextService
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_SUBJECT_DOMAINS = {"inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"}
 
 
-class QueryPlanner:
+class QuestionAnalysisService:
     def __init__(
         self,
         domain_config: dict[str, Any],
@@ -33,7 +34,7 @@ class QueryPlanner:
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
         self.question_context_service = question_context_service or QuestionContextService(llm_client, prompt_builder)
 
-    def build_planning_trace(
+    def analyze_question(
         self,
         question: str,
         session_state: SessionState | None = None,
@@ -47,17 +48,17 @@ class QueryPlanner:
             cancellation_token=cancellation_token,
         )
         effective_question = question_context.effective_question or question
-        self._log_timing("planner.question_context", stage_started)
+        self._log_timing("analysis.question_context", stage_started)
 
         stage_started = time.perf_counter()
         classification = self._classification_from_question_context(
             question_context=question_context,
         )
-        self._log_timing("planner.classify", stage_started)
+        self._log_timing("analysis.classify", stage_started)
         warnings: list[str] = []
         if classification.need_clarification:
             warnings.append("clarification required before stable SQL generation")
-        self._log_timing("planner.total", total_started)
+        self._log_timing("analysis.total", total_started)
         return {
             "original_question": question,
             "effective_question": effective_question,
@@ -139,51 +140,51 @@ class QueryPlanner:
             return subject_domain
         return "unknown"
 
-    def classify(
+    def classify_question(
         self,
         question: str,
         session_state: SessionState | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> tuple[QuestionClassification, list[str]]:
-        planning_trace = self.build_planning_trace(
+        analysis_trace = self.analyze_question(
             question=question,
             session_state=session_state,
             cancellation_token=cancellation_token,
         )
-        return planning_trace["classification"], planning_trace["warnings"]
+        return analysis_trace["classification"], analysis_trace["warnings"]
 
-    def create_plan(
+    def create_sql_context(
         self,
         question: str,
         session_state: SessionState | None = None,
         cancellation_token: CancellationToken | None = None,
-    ) -> tuple[QuestionClassification, QueryPlan, list[str]]:
-        planning_trace = self.build_planning_trace(
+    ) -> tuple[QuestionClassification, SqlGenerationContext, list[str]]:
+        analysis_trace = self.analyze_question(
             question=question,
             session_state=session_state,
             cancellation_token=cancellation_token,
         )
-        classification = planning_trace["classification"]
-        warnings = planning_trace["warnings"]
+        classification = analysis_trace["classification"]
+        warnings = analysis_trace["warnings"]
 
-        query_plan = self.build_plan_shell(
+        sql_context = self.build_sql_context(
             classification=classification,
             session_state=session_state,
-            question_context=planning_trace.get("question_context"),
+            question_context=analysis_trace.get("question_context"),
         )
-        return classification, query_plan, warnings
+        return classification, sql_context, warnings
 
-    def build_plan_shell(
+    def build_sql_context(
         self,
         *,
         classification: QuestionClassification,
         session_state: SessionState | None = None,
         question_context=None,
-    ) -> QueryPlan:
+    ) -> SqlGenerationContext:
         _ = session_state
         subject_domain = classification.subject_domain
         limit = self.semantic_runtime.default_limit(subject_domain)
-        query_plan = QueryPlan(
+        sql_context = SqlGenerationContext(
             subject_domain=subject_domain,
             question_type=classification.question_type,
             metrics=[],
@@ -199,10 +200,12 @@ class QueryPlanner:
             entities=[],
             need_clarification=classification.need_clarification,
             clarification_question=classification.clarification_question,
+            reason=classification.reason,
+            reason_code=classification.reason_code,
         )
-        query_plan.semantic_brief = (
+        sql_context.semantic_brief = (
             getattr(question_context, "semantic_brief", None)
             or getattr(question_context, "effective_question", None)
             or "查询业务数据。"
         )
-        return query_plan
+        return sql_context

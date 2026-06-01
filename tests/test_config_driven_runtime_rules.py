@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import OrderedDict
 import unittest
 
-from backend.app.models.query_plan import FilterItem, QueryPlan
+from backend.app.models.semantic_types import FilterItem
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, SessionState
@@ -12,7 +13,7 @@ from backend.app.services.llm_client import LLMClient
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.sql_dialect import SqlDialect
 from backend.app.services.prompt_builder import PromptBuilder
-from backend.app.services.query_planner import QueryPlanner
+from backend.app.services.question_analysis_service import QuestionAnalysisService
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.session_state_service import SessionStateService
 
@@ -185,7 +186,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         client = StubRepairLLMClient()
 
         repaired_sql = client.repair_sql(
-            prompt_payload={"query_plan": {"tables": ["demo_table"]}},
+            prompt_payload={"sql_context": {"tables": ["demo_table"]}},
             sql="SELECT 1;",
             errors=["sql is missing limit"],
             warnings=[],
@@ -199,20 +200,20 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(health["metrics"]["repair"]["provider_calls"], 3)
 
     def test_schema_boundary_does_not_apply_inventory_source_rules(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             tables=["daily_inventory", "oms_inventory"],
             filters=[FilterItem(field="source_table", op="=", value="oms_inventory")],
         )
 
-        sanitized = self.semantic_runtime.sanitize_query_plan(query_plan)
+        sanitized = self.semantic_runtime.sanitize_sql_context(sql_context_value)
 
         self.assertEqual(sanitized.tables, ["daily_inventory", "oms_inventory"])
         self.assertEqual(sanitized.filters, [FilterItem(field="source_table", op="=", value="oms_inventory")])
 
     def test_schema_boundary_does_not_apply_demand_post_process_rules(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="demand",
             tables=["p_demand"],
@@ -223,7 +224,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             ],
         )
 
-        sanitized = self.semantic_runtime.sanitize_query_plan(query_plan)
+        sanitized = self.semantic_runtime.sanitize_sql_context(sql_context_value)
 
         self.assertEqual(sanitized.tables, ["p_demand"])
         self.assertEqual(sanitized.dimensions, ["biz_month"])
@@ -236,7 +237,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         )
 
     def test_plan_actual_support_table_rule_appends_product_attributes(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="plan_actual",
             metrics=["actual_output_qty"],
@@ -244,14 +245,14 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             dimensions=["common_categories"],
         )
 
-        sanitized = self.semantic_runtime.sanitize_query_plan(query_plan)
+        sanitized = self.semantic_runtime.sanitize_sql_context(sql_context_value)
 
         self.assertEqual(sanitized.tables, ["production_actuals"])
 
     def test_llm_filter_string_follow_up_replaces_product_attribute_flag(self) -> None:
         llm_client = StubFollowUpXpsQuestionContextLLMClient()
         prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
-        planner = QueryPlanner(
+        analysis_service = QuestionAnalysisService(
             domain_config=self.domain_config,
             llm_client=llm_client,
             prompt_builder=prompt_builder,
@@ -270,11 +271,11 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             ],
         )
 
-        trace = planner.build_planning_trace(
+        trace = analysis_service.analyze_question(
             question="XPS呢",
             session_state=session_state,
         )
-        query_plan = planner.build_plan_shell(
+        sql_context_value = analysis_service.build_sql_context(
             classification=trace["classification"],
             session_state=session_state,
             question_context=trace["question_context"],
@@ -290,14 +291,14 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(llm_client.rewrite_calls, 1)
         self.assertEqual(trace["classification"].question_type, "follow_up")
         self.assertFalse(trace["classification"].inherit_context)
-        self.assertEqual(query_plan.semantic_brief, trace["question_context"].semantic_brief)
-        self.assertEqual(query_plan.filters, [])
-        self.assertEqual(query_plan.tables, [])
+        self.assertEqual(sql_context_value.semantic_brief, trace["question_context"].semantic_brief)
+        self.assertEqual(sql_context_value.filters, [])
+        self.assertEqual(sql_context_value.tables, [])
 
     def test_question_context_can_replace_year_in_follow_up(self) -> None:
         llm_client = StubFollowUpXpsQuestionContextLLMClient()
         prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
-        planner = QueryPlanner(
+        analysis_service = QuestionAnalysisService(
             domain_config=self.domain_config,
             llm_client=llm_client,
             prompt_builder=prompt_builder,
@@ -317,11 +318,11 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             ],
         )
 
-        trace = planner.build_planning_trace(
+        trace = analysis_service.analyze_question(
             question="2025年呢",
             session_state=session_state,
         )
-        query_plan = planner.build_plan_shell(
+        sql_context_value = analysis_service.build_sql_context(
             classification=trace["classification"],
             session_state=session_state,
             question_context=trace["question_context"],
@@ -331,11 +332,11 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(trace["question_context"].context_relation, "follow_up")
         self.assertEqual(trace["classification"].question_type, "follow_up")
         self.assertFalse(trace["classification"].inherit_context)
-        self.assertEqual(query_plan.filters, [])
+        self.assertEqual(sql_context_value.filters, [])
 
-    def test_query_planner_trace_uses_question_context_shape(self) -> None:
+    def test_question_analysis_service_trace_uses_question_context_shape(self) -> None:
         prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
-        planner = QueryPlanner(
+        analysis_service = QuestionAnalysisService(
             domain_config=self.domain_config,
             llm_client=StubFollowUpXpsQuestionContextLLMClient(),
             prompt_builder=prompt_builder,
@@ -343,7 +344,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         )
         question = "XPS呢"
 
-        trace = planner.build_planning_trace(question=question)
+        trace = analysis_service.analyze_question(question=question)
 
         self.assertEqual(
             sorted(trace.keys()),
@@ -351,7 +352,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         )
 
     def test_session_state_stores_semantic_brief_in_recent_turns(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="plan_actual",
             tables=["production_actuals", "product_attributes"],
@@ -362,13 +363,13 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         )
 
         state = SessionStateService().build_next_state(
-            query_plan=query_plan,
+            update=SessionStateService.update_from_sql_context(sql_context_value),
             previous_state=None,
             question="2026年Array工厂XPS类产品，每个月分别投入多少物量",
         )
 
-        self.assertEqual(state.last_semantic_brief, query_plan.semantic_brief)
-        self.assertEqual(state.recent_turns[-1].semantic_brief, query_plan.semantic_brief)
+        self.assertEqual(state.last_semantic_brief, sql_context_value.semantic_brief)
+        self.assertEqual(state.recent_turns[-1].semantic_brief, sql_context_value.semantic_brief)
 
     def test_answerable_turn_clears_pending_clarification(self) -> None:
         previous_state = SessionState(
@@ -378,39 +379,39 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
                 clarification_question="你是指2026年3月吗？",
             ),
         )
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="plan_actual",
             semantic_brief="查询2026年3月Array工厂审批版投入物量与实际物量的Gap和达成率。",
         )
 
         state = SessionStateService().build_next_state(
-            query_plan=query_plan,
+            update=SessionStateService.update_from_sql_context(sql_context_value),
             previous_state=previous_state,
             question="2026年3月Array工厂审批版投入物量与实际物量Gap和达成率",
         )
 
         self.assertIsNone(state.pending_clarification)
 
-    def test_plan_shell_uses_question_context_only(self) -> None:
+    def test_sql_context_uses_question_context_only(self) -> None:
         prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
-        planner = QueryPlanner(
+        analysis_service = QuestionAnalysisService(
             domain_config=self.domain_config,
             llm_client=StubFollowUpXpsQuestionContextLLMClient(),
             prompt_builder=prompt_builder,
             semantic_runtime=self.semantic_runtime,
         )
 
-        query_plan = planner.build_plan_shell(
+        sql_context_value = analysis_service.build_sql_context(
             classification=QuestionClassification(question_type="new", subject_domain="plan_actual"),
         )
 
-        self.assertEqual(query_plan.filters, [])
+        self.assertEqual(sql_context_value.filters, [])
 
     def test_domain_backfill_ignores_non_schema_domain_labels(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
-        orchestrator.query_planner = type(
-            "QueryPlannerStub",
+        orchestrator.question_analysis_service = type(
+            "QuestionAnalysisServiceStub",
             (),
             {"semantic_runtime": self.semantic_runtime},
         )()
@@ -424,7 +425,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             (),
             {"subject_domain": "oms库存"},
         )()
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="unknown",
             tables=["oms_inventory"],
@@ -438,17 +439,17 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             },
         )()
 
-        _, resolved_plan, _ = orchestrator._apply_retrieval_domain_to_plan_shell(
+        _, resolved_context, _ = orchestrator._apply_retrieval_domain_to_sql_context(
             classification=classification,
-            query_plan=query_plan,
+            sql_context=sql_context_value,
             question_context=question_context,
             retrieval=retrieval,
         )
 
-        self.assertEqual(resolved_plan.subject_domain, "inventory")
+        self.assertEqual(resolved_context.subject_domain, "inventory")
 
         state = SessionStateService().build_next_state(
-            query_plan=resolved_plan,
+            update=SessionStateService.update_from_sql_context(resolved_context),
             previous_state=None,
             question="oms库存，近6个月库存变化趋势",
         )
@@ -464,7 +465,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             clarification_question="请确认版本字段的判定口径。",
             reason_code="question_context_clarification",
         )
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="clarification_needed",
             subject_domain="demand",
             tables=["p_demand"],
@@ -504,21 +505,21 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             ],
         )
 
-        resolved_classification, resolved_plan, resolved_context = orchestrator._apply_retrieval_support_to_clarification(
+        resolved_classification, resolved_context, resolved_question_context = orchestrator._apply_retrieval_support_to_clarification(
             classification=classification,
-            query_plan=query_plan,
+            sql_context=sql_context_value,
             question_context=question_context,
             retrieval=retrieval,
             original_question="我是指的最新5版p版需求中，202603需求量最多的fgcode是哪一个",
         )
 
         self.assertFalse(resolved_classification.need_clarification)
-        self.assertFalse(resolved_plan.need_clarification)
+        self.assertFalse(resolved_context.need_clarification)
         self.assertEqual(resolved_classification.question_type, "new")
-        self.assertEqual(resolved_plan.question_type, "new")
-        self.assertEqual(resolved_context.decision, "answerable")
+        self.assertEqual(resolved_context.question_type, "new")
+        self.assertEqual(resolved_question_context.decision, "answerable")
         self.assertEqual(
-            resolved_context.effective_question,
+            resolved_question_context.effective_question,
             "我是指的最新5版p版需求中，202603需求量最多的fgcode是哪一个",
         )
 

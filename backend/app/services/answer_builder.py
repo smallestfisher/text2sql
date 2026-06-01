@@ -4,7 +4,6 @@ from backend.app.models.answer import AnswerPayload
 from backend.app.models.api import ExecutionResponse, ValidationResponse
 from backend.app.models.auth import CHITCHAT_ROLE, UserContext, has_role
 from backend.app.models.classification import QuestionClassification
-from backend.app.models.query_plan import QueryPlan
 
 
 class AnswerBuilder:
@@ -14,11 +13,11 @@ class AnswerBuilder:
     def build(
         self,
         classification: QuestionClassification,
-        query_plan: QueryPlan,
         execution: ExecutionResponse | None,
-        plan_validation: ValidationResponse,
+        context_validation: ValidationResponse,
         sql_validation: ValidationResponse,
         user_context: UserContext | None = None,
+        metrics: list[str] | None = None,
     ) -> AnswerPayload:
         if classification.question_type == "invalid":
             if (
@@ -48,11 +47,11 @@ class AnswerBuilder:
                 detail=classification.reason,
             )
 
-        if not plan_validation.valid or not sql_validation.valid:
+        if not context_validation.valid or not sql_validation.valid:
             return AnswerPayload(
                 status="error",
                 summary="查询链路已生成，但校验未通过。",
-                detail="; ".join(plan_validation.errors + sql_validation.errors),
+                detail="; ".join(context_validation.errors + sql_validation.errors),
             )
 
         if execution is not None and execution.executed:
@@ -86,7 +85,7 @@ class AnswerBuilder:
                 detail="; ".join(execution.errors),
             )
 
-        metric_text = ", ".join(query_plan.metrics) if query_plan.metrics else "未识别指标"
+        metric_text = ", ".join(metrics or []) if metrics else "未识别指标"
         return AnswerPayload(
             status="error",
             summary="查询链路未返回执行结果。",

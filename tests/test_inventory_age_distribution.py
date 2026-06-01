@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import unittest
 
-from backend.app.models.query_plan import FilterItem, QueryPlan
+from backend.app.models.semantic_types import FilterItem
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.semantic_runtime import SemanticRuntime
 
 
 QUESTION = "最新OMS库存，TtL物量，对应库龄分布情况，库龄分为<3M、3-6M、6-12M、>12M"
+
+
+def sql_context(sql_context_value: SqlGenerationContext) -> SqlGenerationContext:
+    return SqlGenerationContext(**sql_context_value.model_dump(mode="python"))
 
 
 class InventoryAgeDistributionTests(unittest.TestCase):
@@ -39,7 +44,7 @@ class InventoryAgeDistributionTests(unittest.TestCase):
         self.assertIn("<3M = ONE_AGE_panel_qty + TWO_AGE_panel_qty + THREE_AGE_panel_qty", business_knowledge)
 
     def test_sql_prompt_contains_generic_latest_n_guidance_and_age_bucket_knowledge(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -55,7 +60,10 @@ class InventoryAgeDistributionTests(unittest.TestCase):
             analysis_mode="distribution",
         )
 
-        prompt = self.prompt_builder.build_sql_prompt(query_plan, question=QUESTION)
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question=QUESTION,
+        )
         preferences = "\n".join(prompt["instructions"]["sql_preferences"])
         business_knowledge = prompt["retrieval_context"]["business_knowledge"]
 
@@ -70,7 +78,7 @@ class InventoryAgeDistributionTests(unittest.TestCase):
         self.assertIn("inventory_oms_latest_ttl_age_distribution_001", examples)
 
     def test_schema_boundary_does_not_inject_default_sort(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -82,7 +90,7 @@ class InventoryAgeDistributionTests(unittest.TestCase):
             limit=200,
         )
 
-        sanitized = self.semantic_runtime.sanitize_query_plan(query_plan)
+        sanitized = self.semantic_runtime.sanitize_sql_context(sql_context_value)
 
         self.assertEqual(sanitized.sort, [])
 

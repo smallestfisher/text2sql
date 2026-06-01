@@ -15,8 +15,9 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
 用户问题
   -> 读取会话状态
   -> QuestionContext 生成完整问题和语义摘要
-  -> 轻量分类与 QueryPlan 响应载体
+  -> 轻量分类与内部 plan shell
   -> Retrieval 检索表结构、业务知识、样例和 join pattern
+  -> ContextSummary 汇总进入 SQL 生成的证据
   -> SQL Prompt 组装真实表字段、业务规则和 few-shot
   -> LLM 生成 Oracle SQL
   -> SQL Validator 校验并按需 repair
@@ -26,7 +27,7 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
   -> Workspace 聚合给前端恢复
 ```
 
-前端主入口是 `POST /api/chat/query/stream`，非流式入口是 `POST /api/chat/query`。`/api/query/*` 提供单步调试能力。
+前端主入口是 `POST /api/chat/query/stream`，非流式入口是 `POST /api/chat/query`。调试通过 trace、workspace、runtime query log 和 replay 接口完成，不再提供独立的 `/api/query/*` 单步调试 API。
 
 ## 核心对象
 
@@ -46,9 +47,11 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
 
 QuestionContext prompt 会带入最近会话、待澄清上下文、相关业务知识摘录和候选表字段，但不生成 SQL。
 
-### QueryPlan
+### ContextSummary
 
-`QueryPlan` 是 API、trace 和前端详情中的轻量载体，用来承载业务域、语义摘要、候选表、默认 limit、澄清状态和校验结果。SQL 生成不依赖本地结构化编译器，而是依赖完整 prompt 中的真实表结构、检索命中、业务知识、样例和 join pattern。
+`ContextSummary` 是检索后的上下文摘要，用来告诉前端和 SQL prompt 当前问题最终使用了哪些必要信息。它承载业务域、语义摘要、候选表、检索域、检索指标、limit 和澄清状态。
+
+`SqlGenerationContext` 是 SQL prompt 的内部输入载体，只打包问题分类、语义摘要、检索选出的表、澄清状态和会话必要信息。它不作为结构化业务规则引擎，也不承载场景化硬编码约束；业务口径、字段关系、join 方式和示例应来自检索证据与语义资产。
 
 ### RetrievalContext
 
@@ -72,9 +75,9 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 
 - `load_session`
 - `question_context`
-- `plan`
+- `classification`
 - `retrieve`
-- `plan_shell_tables`
+- `sql_context_tables`
 - `build_sql_prompt`
 - `generate_sql`
 - `validate_sql`
@@ -90,7 +93,7 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 - `recent_turns`
 - `last_effective_question`
 - `last_semantic_brief`
-- `last_query_plan`
+- `last_context_summary`
 - `last_sql`
 - `pending_clarification`
 
@@ -101,10 +104,9 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 SQL prompt 由 `PromptBuilder` 生成，包含：
 
 - 当前问题和 `semantic_brief`。
-- QueryPlan 中的业务域、候选表和 limit。
+- `context_summary` 和 `evidence_context`。
 - retrieval 命中的业务知识、样例和 join pattern。
 - 真实物理表和字段说明。
-- 字段解析、时间解析和输出形态提示。
 - Oracle SQL 生成约束。
 
 核心约束：
@@ -137,12 +139,12 @@ SQL 通过校验后由 `SqlExecutor` 在 Oracle 上执行，受超时、最大�
 
 - `question_context`
 - `classification`
+- `context_summary`
 - `retrieval`
 - `trace`
 - `answer`
-- `query_plan`
 - `sql`
-- `plan_validation`
+- `context_validation`
 - `sql_validation`
 - `execution`
 - `next_session_state`

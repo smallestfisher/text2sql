@@ -8,7 +8,6 @@ from backend.app.config import (
     BUSINESS_KNOWLEDGE_PATH,
     EXAMPLES_TEMPLATE_PATH,
     JOIN_PATTERNS_PATH,
-    QUERY_PLAN_SCHEMA_PATH,
     SESSION_STATE_SCHEMA_PATH,
     TABLES_METADATA_PATH,
 )
@@ -21,7 +20,6 @@ class MetadataRegistry:
             "examples_template": EXAMPLES_TEMPLATE_PATH,
             "tables_metadata": TABLES_METADATA_PATH,
             "join_patterns": JOIN_PATTERNS_PATH,
-            "query_plan_schema": QUERY_PLAN_SCHEMA_PATH,
             "session_state_schema": SESSION_STATE_SCHEMA_PATH,
         }
         self._cache: dict[str, object] = {}

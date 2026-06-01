@@ -11,6 +11,7 @@ from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.vector_retriever import VectorRetriever
 
@@ -26,7 +27,7 @@ class RetrievalService:
         metadata_registry: MetadataRegistry | None = None,
         vector_retriever: VectorRetriever | None = None,
         vector_corpus_store_service: VectorCorpusStoreService | None = None,
-        vector_top_k: int = 3,
+        vector_top_k: int = 8,
         async_vector_index: bool = True,
         prewarm_vector_index: bool = False,
     ) -> None:
@@ -34,6 +35,7 @@ class RetrievalService:
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
         self.metadata_registry = metadata_registry or MetadataRegistry()
         self.example_factory = ExampleFactory(domain_config, self.semantic_runtime)
+        self.sql_inspector = SqlAstValidator()
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
         self.vector_corpus_store_service = vector_corpus_store_service
         self.vector_top_k = vector_top_k
@@ -269,6 +271,7 @@ class RetrievalService:
                 f"{item.field} {item.op} {self._stringify_filter_value(item.value)}"
                 for item in example.filters
             ]
+            sql_features = self._example_sql_features(example)
             documents.append(
                 self._build_document(
                     source_type="example",
@@ -288,6 +291,7 @@ class RetrievalService:
                         "filter_fields": [item.field for item in example.filters],
                         "join_path": example.join_path,
                         "result_shape": example.result_shape,
+                        "sql_features": sql_features,
                     },
                     text_parts=[
                         example.question,
@@ -304,10 +308,99 @@ class RetrievalService:
                         " ".join(example.join_path),
                         example.result_shape or "",
                         example.notes or "",
+                        self._format_sql_features(sql_features),
+                        self._sql_retrieval_outline(example.sql),
                     ],
                 )
             )
         return documents
+
+    def _example_sql_features(self, example: ExampleRecord) -> dict:
+        inspection = self.sql_inspector.inspect(example.sql)
+        physical_sources = [
+            source
+            for source in inspection.sources
+            if source not in set(inspection.cte_names)
+        ]
+        return {
+            "sources": self._unique(physical_sources),
+            "cte_names": inspection.cte_names,
+            "functions": inspection.functions,
+            "referenced_fields": inspection.referenced_fields,
+            "select_fields": inspection.select_fields,
+            "group_by_fields": inspection.group_by_fields,
+            "order_by_fields": inspection.order_by_fields,
+            "has_distinct": inspection.has_distinct,
+            "has_having": inspection.has_having,
+            "has_subquery": inspection.has_subquery,
+            "sql_patterns": self._sql_patterns(example.sql),
+            "where_terms": self._compact_sql_clause(inspection.all_where_clause),
+        }
+
+    def _format_sql_features(self, sql_features: dict) -> str:
+        parts: list[str] = []
+        for label, key in (
+            ("sql_sources", "sources"),
+            ("sql_cte", "cte_names"),
+            ("sql_functions", "functions"),
+            ("sql_fields", "referenced_fields"),
+            ("sql_select", "select_fields"),
+            ("sql_group_by", "group_by_fields"),
+            ("sql_order_by", "order_by_fields"),
+            ("sql_patterns", "sql_patterns"),
+        ):
+            values = sql_features.get(key, [])
+            if isinstance(values, list) and values:
+                parts.append(f"{label}: " + " ".join(str(item) for item in values[:80] if item))
+        where_terms = sql_features.get("where_terms")
+        if isinstance(where_terms, str) and where_terms:
+            parts.append(f"sql_where: {where_terms}")
+        flags = [
+            flag
+            for flag in ("has_distinct", "has_having", "has_subquery")
+            if sql_features.get(flag)
+        ]
+        if flags:
+            parts.append("sql_flags: " + " ".join(flags))
+        return " ".join(parts)
+
+    def _sql_patterns(self, sql: str) -> list[str]:
+        pattern_map = {
+            "with_cte": r"\bWITH\b",
+            "union_all_unpivot": r"\bUNION\s+ALL\b",
+            "row_number_version_pick": r"\bROW_NUMBER\s*\(",
+            "dense_rank": r"\bDENSE_RANK\s*\(",
+            "regexp_version_parse": r"\bREGEXP_SUBSTR\s*\(",
+            "substr_time_parse": r"\bSUBSTR\s*\(",
+            "add_months_time_shift": r"\bADD_MONTHS\s*\(",
+            "to_date_time_parse": r"\bTO_DATE\s*\(",
+            "nvl_null_handling": r"\bNVL\s*\(",
+            "nullif_zero_guard": r"\bNULLIF\s*\(",
+            "case_when": r"\bCASE\b.+\bWHEN\b",
+            "left_join": r"\bLEFT\s+JOIN\b",
+            "cross_join": r"\bCROSS\s+JOIN\b",
+            "full_outer_join": r"\bFULL\s+OUTER\s+JOIN\b",
+            "fetch_first_limit": r"\bFETCH\s+FIRST\b",
+        }
+        return [
+            label
+            for label, pattern in pattern_map.items()
+            if re.search(pattern, sql, re.IGNORECASE | re.DOTALL)
+        ]
+
+    def _compact_sql_clause(self, clause: str, *, max_length: int = 1200) -> str:
+        compacted = re.sub(r"\s+", " ", clause or "").strip()
+        if len(compacted) <= max_length:
+            return compacted
+        return compacted[:max_length].rsplit(" ", 1)[0]
+
+    def _sql_retrieval_outline(self, sql: str, *, max_length: int = 2200) -> str:
+        compacted = re.sub(r"/\*.*?\*/", " ", sql or "", flags=re.DOTALL)
+        compacted = re.sub(r"--.*?(?:\n|$)", " ", compacted)
+        compacted = re.sub(r"\s+", " ", compacted).strip()
+        if len(compacted) <= max_length:
+            return "sql_outline: " + compacted
+        return "sql_outline: " + compacted[:max_length].rsplit(" ", 1)[0]
 
     def _build_document(
         self,

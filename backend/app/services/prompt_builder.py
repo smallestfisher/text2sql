@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from backend.app.models.example_library import ExampleRecord
-from backend.app.models.query_plan import QueryPlan
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.metadata_registry import MetadataRegistry
@@ -43,7 +43,7 @@ class PromptBuilder:
         parser_signals = parser_signals or {}
         subject_domain = str(parser_signals.get("subject_domain") or (session_state.subject_domain if session_state else "unknown"))
         focus_tables = self._question_context_focus_tables(subject_domain, parser_signals, session_state)
-        conversation_summary = self._prior_conversation_summary(session_state) if session_state is not None else ""
+        conversation_summary = self._conversation_summary(session_state) if session_state is not None else ""
         recent_turns = [
             self._turn_text(item)
             for item in (session_state.recent_turns[-4:] if session_state is not None else [])
@@ -131,71 +131,63 @@ class PromptBuilder:
 
     def build_sql_prompt(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         retrieval: RetrievalContext | None = None,
         question: str | None = None,
     ) -> dict:
-        selected_sources = self._selected_sources_for_sql(query_plan, retrieval)
-        time_resolution = self._time_resolution(query_plan)
-        field_resolution = self._field_resolution(query_plan, time_resolution=time_resolution)
-        output_shape = self._output_shape(query_plan, time_resolution=time_resolution)
+        selected_sources = self._selected_sources_for_sql(context, retrieval)
+        prompt_context = context.model_copy(update={"tables": selected_sources})
+        time_resolution = self._time_resolution(prompt_context)
+        retrieved_examples = self._select_retrieved_examples(context, retrieval)
         source_schemas = {
             table_name: self._compact_table_schema(
                 table_name,
                 self._tables_metadata.get(table_name, {}),
-                query_plan=query_plan,
-                field_resolution=field_resolution,
-                time_resolution=time_resolution,
             )
             for table_name in selected_sources
             if table_name in self._tables_metadata
         }
-        retrieved_examples = self._select_retrieved_examples(query_plan, retrieval)
         sql_preferences = self._prompt_asset_strings("sql_generation", "base_preferences")
-        if output_shape["required_projection"]:
+        if any(item.op == "latest_n" for item in context.filters) and not any("latest_n" in item for item in sql_preferences):
             sql_preferences = [
-                "如果用户问题或 semantic_brief 明确要求按某些维度拆分，最终 SELECT 和 GROUP BY 应自然体现这些维度。",
                 *sql_preferences,
+                "当过滤条件使用 latest_n 时，必须保留最新排序语义，并结合真实排序字段生成 SQL，例如使用 MAX(真实排序字段) 或等价排序表达式。",
             ]
-        if output_shape["dimension_hints"]:
-            sql_preferences = [
-                *output_shape["dimension_hints"],
-                *sql_preferences,
-            ]
-        if query_plan.analysis_mode == "detail":
-            sql_preferences = [
-                "如果用户要求明细、具体型号、列表或去重集合，不要沿用上一轮聚合口径；按问题文本选择明细字段并在需要时 DISTINCT 去重。",
-                *sql_preferences,
-            ]
-        if self._has_latest_n_filter(query_plan):
-            sql_preferences = [
-                *self._latest_n_preferences(),
-                *sql_preferences,
-            ]
-        business_knowledge = self._business_knowledge_for_plan(query_plan, selected_sources, retrieval)
-        business_knowledge_source = self._business_knowledge_source_for_plan(query_plan, selected_sources, retrieval)
+        business_knowledge = self._business_knowledge_for_context(context, selected_sources, retrieval)
+        business_knowledge_source = self._business_knowledge_source_for_context(context, selected_sources, retrieval)
         context_budget = {
             "business_knowledge_max_chars": self.BUSINESS_KNOWLEDGE_MAX_CHARS,
             "business_knowledge_mode": "ranked_relevant_chunks",
-            "table_schemas_mode": "retrieval_selected_tables_relevant_columns",
+            "table_schemas_mode": "retrieval_selected_tables_full_columns",
         }
         context_summary = {
             "selected_sources": selected_sources,
             "table_schemas_count": len(source_schemas),
+            "table_schema_columns_count": {
+                table_name: len(schema.get("columns", []))
+                for table_name, schema in source_schemas.items()
+                if isinstance(schema, dict)
+            },
             "business_knowledge_chars": len(business_knowledge),
             "business_knowledge_source": business_knowledge_source,
             "time_resolution_count": len(time_resolution),
             "few_shot_used": bool(retrieved_examples),
             "retrieved_example_count": len(retrieved_examples),
             "retrieved_example_ids": [item["id"] for item in retrieved_examples],
-            "subject_domain": query_plan.subject_domain,
-            "business_knowledge_entry_ids": self._selected_business_knowledge_ids(query_plan, selected_sources, retrieval),
+            "subject_domain": context.subject_domain,
+            "business_knowledge_entry_ids": self._selected_business_knowledge_ids(context, selected_sources, retrieval),
             "join_pattern_ids": self._selected_join_pattern_ids(retrieval),
+        }
+        evidence_context = {
+            "time_resolution": time_resolution,
+            "allowed_sources": selected_sources,
+            "limit": context.limit,
+            "context_source": "retrieval_evidence",
         }
         return {
             "task": "oracle_text2sql",
             "question": question,
-            "semantic_brief": query_plan.semantic_brief,
+            "semantic_brief": context.semantic_brief,
             "retrieval_context": {
                 "business_knowledge": business_knowledge,
                 "examples": retrieved_examples,
@@ -214,21 +206,16 @@ class PromptBuilder:
                 "constraints": self._sql_generation_constraints(),
                 "sql_preferences": sql_preferences,
             },
-            "planning_context": {
-                "field_resolution": field_resolution,
-                "time_resolution": time_resolution,
-                "output_shape": output_shape,
-                "allowed_sources": selected_sources,
-            },
+            "evidence_context": evidence_context,
         }
 
     def _selected_sources_for_sql(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         retrieval: RetrievalContext | None,
     ) -> list[str]:
         selected: list[str] = []
-        for table_name in query_plan.tables:
+        for table_name in context.tables:
             if table_name in self._tables_metadata and table_name not in selected:
                 selected.append(table_name)
         if retrieval is not None:
@@ -275,21 +262,21 @@ class PromptBuilder:
     def _business_knowledge(self) -> list[dict]:
         return self._load_business_knowledge()
 
-    def _business_knowledge_for_plan(
+    def _business_knowledge_for_context(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> str:
-        return self._structured_business_knowledge_for_plan(query_plan, selected_sources, retrieval)
+        return self._structured_business_knowledge_for_context(context, selected_sources, retrieval)
 
-    def _business_knowledge_source_for_plan(
+    def _business_knowledge_source_for_context(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> str:
-        selected_entries = self._select_business_knowledge_entries(query_plan, selected_sources, retrieval)
+        selected_entries = self._select_business_knowledge_entries(context, selected_sources, retrieval)
         if not selected_entries:
             return "none"
         if self._retrieved_knowledge_hit_scores(retrieval):
@@ -300,35 +287,25 @@ class PromptBuilder:
         self,
         table_name: str,
         payload: dict,
-        *,
-        query_plan: QueryPlan,
-        field_resolution: dict[str, dict[str, list[str]]],
-        time_resolution: dict,
     ) -> dict:
-        relevant_columns = self._relevant_table_columns(
-            table_name,
-            query_plan=query_plan,
-            field_resolution=field_resolution,
-            time_resolution=time_resolution,
-        )
         return self._compact_mapping(
             {
                 "description": payload.get("description"),
-                "columns": self._compact_columns(payload.get("columns", []), relevant_columns),
+                "columns": self._compact_columns(payload.get("columns", [])),
                 "MAIN_KEY": payload.get("MAIN_KEY"),
                 "time_fields": payload.get("time_fields"),
                 "relationships": payload.get("relationships"),
             }
         )
 
-    def _compact_columns(self, raw_columns: list, relevant_columns: set[str]) -> list[str]:
+    def _compact_columns(self, raw_columns: list, relevant_columns: set[str] | None = None) -> list[str]:
         selected: list[str] = []
         for raw_column in raw_columns:
             column_text = str(raw_column).strip()
             if not column_text:
                 continue
             column_name = column_text.split("(", 1)[0].strip()
-            if column_name not in relevant_columns:
+            if relevant_columns is not None and column_name not in relevant_columns:
                 continue
             selected.append(column_text)
         return selected
@@ -337,7 +314,7 @@ class PromptBuilder:
         self,
         table_name: str,
         *,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         field_resolution: dict[str, dict[str, list[str]]],
         time_resolution: dict,
     ) -> set[str]:
@@ -358,10 +335,10 @@ class PromptBuilder:
                 column_name = self._column_name_from_field(candidate.get("field"))
                 if column_name in table_fields:
                     columns.add(column_name)
-        for item in [*query_plan.dimensions, *(filter_item.field for filter_item in query_plan.filters), *(sort_item.field for sort_item in query_plan.sort)]:
+        for item in [*context.dimensions, *(filter_item.field for filter_item in context.filters), *(sort_item.field for sort_item in context.sort)]:
             if item in table_fields:
                 columns.add(item)
-        for metric_name in query_plan.metrics:
+        for metric_name in context.metrics:
             columns.update(
                 column
                 for column in self.semantic_runtime.metric_expression_columns(metric_name, table_names=[table_name])
@@ -394,19 +371,19 @@ class PromptBuilder:
             return flattened
         return [value]
 
-    def _structured_business_knowledge_for_plan(
+    def _structured_business_knowledge_for_context(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> str:
-        selected_entries = self._select_business_knowledge_entries(query_plan, selected_sources, retrieval)
+        selected_entries = self._select_business_knowledge_entries(context, selected_sources, retrieval)
         if not selected_entries:
             return ""
         sections: list[str] = []
         total_chars = 0
         for entry in selected_entries:
-            notes = self._ranked_business_knowledge_items(entry, query_plan, selected_sources)
+            notes = self._ranked_business_knowledge_items(entry, context, selected_sources)
             if not notes:
                 continue
             title = str(entry.get("id", "business_knowledge"))
@@ -430,7 +407,7 @@ class PromptBuilder:
     def _ranked_business_knowledge_items(
         self,
         entry: dict,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
     ) -> list[str]:
         notes = [
@@ -440,7 +417,7 @@ class PromptBuilder:
         ]
         if not notes:
             return []
-        terms = self._business_knowledge_terms(query_plan, selected_sources)
+        terms = self._business_knowledge_terms(context, selected_sources)
         scored = []
         for index, note in enumerate(notes):
             lower_note = note.lower()
@@ -471,33 +448,33 @@ class PromptBuilder:
         return sum(2 for term in critical_terms if term in lower_note)
 
 
-    def _business_knowledge_terms(self, query_plan: QueryPlan, selected_sources: list[str] | None) -> set[str]:
+    def _business_knowledge_terms(self, context: SqlGenerationContext, selected_sources: list[str] | None) -> set[str]:
         terms = {
-            query_plan.subject_domain,
+            context.subject_domain,
             *(selected_sources or []),
-            *query_plan.tables,
-            *query_plan.metrics,
-            *query_plan.dimensions,
-            *(item.field for item in query_plan.filters),
+            *context.tables,
+            *context.metrics,
+            *context.dimensions,
+            *(item.field for item in context.filters),
         }
-        if query_plan.version_context and query_plan.version_context.field:
-            terms.add(query_plan.version_context.field)
+        if context.version_context and context.version_context.field:
+            terms.add(context.version_context.field)
         return {str(term).lower() for term in terms if term}
 
     def _select_business_knowledge_entries(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> list[dict]:
         if not self._business_knowledge:
             return []
-        terms = self._business_knowledge_terms(query_plan, selected_sources)
+        terms = self._business_knowledge_terms(context, selected_sources)
         knowledge_hit_scores = self._retrieved_knowledge_hit_scores(retrieval)
         selected: list[tuple[float, int, dict]] = []
         for index, entry in enumerate(self._business_knowledge):
             score = self._score_business_knowledge_entry(
-                query_plan,
+                context,
                 selected_sources,
                 terms,
                 entry,
@@ -511,19 +488,19 @@ class PromptBuilder:
 
     def _selected_business_knowledge_ids(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> list[str]:
         return [
             str(entry.get("id"))
-            for entry in self._select_business_knowledge_entries(query_plan, selected_sources, retrieval)
+            for entry in self._select_business_knowledge_entries(context, selected_sources, retrieval)
             if entry.get("id")
         ]
 
     def _score_business_knowledge_entry(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         selected_sources: list[str] | None,
         terms: set[str],
         entry: dict,
@@ -531,13 +508,13 @@ class PromptBuilder:
     ) -> float:
         score = 0.0
         domains = {str(item).lower() for item in entry.get("domains", []) if item}
-        if query_plan.subject_domain and query_plan.subject_domain.lower() in domains:
+        if context.subject_domain and context.subject_domain.lower() in domains:
             score += 5
         entry_tables = {str(item).lower() for item in entry.get("tables", []) if item}
         for source in selected_sources or []:
             if source.lower() in entry_tables:
                 score += 4
-        for table_name in query_plan.tables:
+        for table_name in context.tables:
             if table_name.lower() in entry_tables:
                 score += 4
         entry_keywords = {str(item).lower() for item in entry.get("keywords", []) if item}
@@ -592,7 +569,7 @@ class PromptBuilder:
 
     def _select_retrieved_examples(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         retrieval: RetrievalContext | None,
     ) -> list[dict]:
         if retrieval is None:
@@ -606,7 +583,7 @@ class PromptBuilder:
             example = examples.get(hit.source_id)
             if example is None:
                 continue
-            if not self._retrieved_example_matches_plan(query_plan, example, hit):
+            if not self._retrieved_example_matches_context(context, example, hit):
                 continue
             payload = {
                 "id": example.id,
@@ -673,26 +650,26 @@ class PromptBuilder:
     def _selected_join_pattern_ids(self, retrieval: RetrievalContext | None) -> list[str]:
         return [item["id"] for item in self._selected_join_patterns(retrieval)]
 
-    def _retrieved_example_matches_plan(
+    def _retrieved_example_matches_context(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         example: ExampleRecord,
         hit: RetrievalHit,
     ) -> bool:
-        if example.subject_domain == query_plan.subject_domain:
+        if example.subject_domain == context.subject_domain:
             return True
 
-        plan_tables = set(query_plan.tables)
-        if plan_tables and plan_tables.intersection(example.tables):
+        context_tables = set(context.tables)
+        if context_tables and context_tables.intersection(example.tables):
             return True
 
-        plan_metrics = set(query_plan.metrics)
-        if plan_metrics and plan_metrics.intersection(example.metrics):
+        context_metrics = set(context.metrics)
+        if context_metrics and context_metrics.intersection(example.metrics):
             return True
 
-        plan_filter_fields = {item.field for item in query_plan.filters}
+        context_filter_fields = {item.field for item in context.filters}
         example_filter_fields = {item.field for item in example.filters}
-        if plan_filter_fields and plan_filter_fields.intersection(example_filter_fields):
+        if context_filter_fields and context_filter_fields.intersection(example_filter_fields):
             return True
 
         return bool(
@@ -708,62 +685,62 @@ class PromptBuilder:
             return None
         return self.semantic_runtime.query_profile(subject_domain)
 
-    def _allowed_fields(self, query_plan: QueryPlan) -> set[str]:
+    def _allowed_fields(self, context: SqlGenerationContext) -> set[str]:
         if self.semantic_runtime is None:
             return set()
-        return self.semantic_runtime.allowed_fields_for_plan(query_plan)
+        return self.semantic_runtime.allowed_fields_for_context(context)
 
-    def _sql_allowed_fields(self, query_plan: QueryPlan) -> set[str]:
+    def _sql_allowed_fields(self, context: SqlGenerationContext) -> set[str]:
         if self.semantic_runtime is None:
-            return self._allowed_fields(query_plan)
+            return self._allowed_fields(context)
 
         fields: set[str] = set()
-        for table_name in query_plan.tables:
+        for table_name in context.tables:
             fields.update(self.semantic_runtime.table_fields(table_name))
-        for metric_name in query_plan.metrics:
+        for metric_name in context.metrics:
             fields.update(
                 self.semantic_runtime.metric_expression_columns(
                     metric_name,
-                    table_names=query_plan.tables,
+                    table_names=context.tables,
                 )
             )
-        return fields or self._allowed_fields(query_plan)
+        return fields or self._allowed_fields(context)
 
     def _field_resolution(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         time_resolution: dict | None = None,
     ) -> dict[str, dict]:
         return {
-            "dimensions": self._field_resolution_map(query_plan, query_plan.dimensions),
+            "dimensions": self._field_resolution_map(context, context.dimensions),
             "filters": self._field_resolution_map(
-                query_plan,
-                [item.field for item in query_plan.filters],
+                context,
+                [item.field for item in context.filters],
                 time_resolution=time_resolution,
             ),
             "metrics": {
-                metric_name: self._physical_metric_candidates(query_plan, metric_name)
-                for metric_name in query_plan.metrics
-                if self._physical_metric_candidates(query_plan, metric_name)
+                metric_name: self._physical_metric_candidates(context, metric_name)
+                for metric_name in context.metrics
+                if self._physical_metric_candidates(context, metric_name)
             },
             "sort": self._field_resolution_map(
-                query_plan,
-                [item.field for item in query_plan.sort],
+                context,
+                [item.field for item in context.sort],
             ),
         }
 
     def _field_resolution_map(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         fields: list[str],
         time_resolution: dict | None = None,
     ) -> dict[str, dict | list[str]]:
         resolved: dict[str, dict | list[str]] = {}
         time_resolution = time_resolution or {}
         for field in fields:
-            physical_candidates = self._physical_candidates(query_plan, field)
+            physical_candidates = self._physical_candidates(context, field)
             if physical_candidates:
-                time_filter_examples = self._time_filter_examples(field, time_resolution, query_plan=query_plan)
+                time_filter_examples = self._time_filter_examples(field, time_resolution, context=context)
                 if time_filter_examples:
                     resolved[field] = {
                         "physical_candidates": physical_candidates,
@@ -778,7 +755,7 @@ class PromptBuilder:
         logical_field: str,
         time_resolution: dict,
         *,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
     ) -> list[str]:
         if logical_field not in {"biz_date", "biz_month", "demand_month"}:
             return []
@@ -787,7 +764,7 @@ class PromptBuilder:
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
-            if not self._time_candidate_belongs_to_query_tables(candidate, query_plan):
+            if not self._time_candidate_belongs_to_query_tables(candidate, context):
                 continue
             for key in ("month_filter_example", "month_range_filter_example", "day_filter_example"):
                 value = candidate.get(key)
@@ -802,41 +779,41 @@ class PromptBuilder:
                     examples.append(value)
         return examples[:6]
 
-    def _time_candidate_belongs_to_query_tables(self, candidate: dict, query_plan: QueryPlan) -> bool:
+    def _time_candidate_belongs_to_query_tables(self, candidate: dict, context: SqlGenerationContext) -> bool:
         field = str(candidate.get("field") or "")
         if "." not in field:
             return False
         table_name = field.split(".", 1)[0]
-        return table_name in set(query_plan.tables)
+        return table_name in set(context.tables)
 
-    def _physical_candidates(self, query_plan: QueryPlan, logical_field: str) -> list[str]:
+    def _physical_candidates(self, context: SqlGenerationContext, logical_field: str) -> list[str]:
         if self.semantic_runtime is None:
             return []
         resolved = self.semantic_runtime.resolve_field_candidates(
-            query_plan.subject_domain,
-            query_plan.tables,
+            context.subject_domain,
+            context.tables,
             logical_field,
         )
-        physical_allowed = self._sql_allowed_fields(query_plan)
+        physical_allowed = self._sql_allowed_fields(context)
         allowed_candidates = sorted(item for item in resolved if item in physical_allowed)
-        qualified = self._qualify_columns(query_plan, allowed_candidates)
+        qualified = self._qualify_columns(context, allowed_candidates)
         return qualified or allowed_candidates
 
-    def _physical_metric_candidates(self, query_plan: QueryPlan, metric_name: str) -> list[str]:
+    def _physical_metric_candidates(self, context: SqlGenerationContext, metric_name: str) -> list[str]:
         if self.semantic_runtime is None:
             return []
         metric_columns = sorted(
             self.semantic_runtime.metric_expression_columns(
                 metric_name,
-                table_names=query_plan.tables,
+                table_names=context.tables,
             )
         )
-        qualified = self._qualify_columns(query_plan, metric_columns)
+        qualified = self._qualify_columns(context, metric_columns)
         return qualified or metric_columns
 
-    def _output_shape(self, query_plan: QueryPlan, time_resolution: dict | None = None) -> dict:
-        required_projection = list(query_plan.dimensions)
-        aggregate_metrics = list(query_plan.metrics)
+    def _output_shape(self, context: SqlGenerationContext, time_resolution: dict | None = None) -> dict:
+        required_projection = list(context.dimensions)
+        aggregate_metrics = list(context.metrics)
         dimension_hints: list[str] = []
         logical_dimension_examples: dict[str, list[str]] = {}
         time_resolution = time_resolution or {}
@@ -865,26 +842,26 @@ class PromptBuilder:
                 examples.append(example)
         return examples
 
-    def _time_resolution(self, query_plan: QueryPlan) -> dict:
+    def _time_resolution(self, context: SqlGenerationContext) -> dict:
         if self.semantic_runtime is None:
             return {}
         resolution: dict[str, dict] = {}
         for logical_field in ["biz_date", "biz_month"]:
-            candidates = self._time_resolution_candidates(query_plan, logical_field)
+            candidates = self._time_resolution_candidates(context, logical_field)
             if candidates:
                 resolution[logical_field] = {
                     "candidates": candidates,
                 }
         return resolution
 
-    def _time_resolution_candidates(self, query_plan: QueryPlan, logical_field: str) -> list[dict]:
+    def _time_resolution_candidates(self, context: SqlGenerationContext, logical_field: str) -> list[dict]:
         if self.semantic_runtime is None:
             return []
         if logical_field == "biz_date":
             candidates: list[dict] = []
             for candidate in self.semantic_runtime.resolve_time_field_candidates(
-                query_plan.subject_domain,
-                query_plan.tables,
+                context.subject_domain,
+                context.tables,
                 logical_field,
             ):
                 field_expr = candidate["qualified_field"]
@@ -893,11 +870,11 @@ class PromptBuilder:
                     "grain": candidate.get("grain"),
                     "format": candidate.get("format"),
                 }
-                day_filter_example = self._day_filter_example(query_plan, field_expr, candidate.get("format"))
+                day_filter_example = self._day_filter_example(context, field_expr, candidate.get("format"))
                 if day_filter_example:
                     payload["day_filter_example"] = day_filter_example
                 month_range_example = self._month_range_filter_example(
-                    query_plan,
+                    context,
                     field_expr,
                     candidate.get("format"),
                 )
@@ -910,10 +887,10 @@ class PromptBuilder:
             return []
 
         candidates = []
-        sample_month = self._example_compact_month(query_plan)
+        sample_month = self._example_compact_month(context)
         for candidate in self.semantic_runtime.resolve_time_field_candidates(
-            query_plan.subject_domain,
-            query_plan.tables,
+            context.subject_domain,
+            context.tables,
             logical_field,
         ):
             field_expr = candidate["qualified_field"]
@@ -930,8 +907,8 @@ class PromptBuilder:
             candidates.append(payload)
 
         for candidate in self.semantic_runtime.resolve_time_field_candidates(
-            query_plan.subject_domain,
-            query_plan.tables,
+            context.subject_domain,
+            context.tables,
             "biz_date",
         ):
             field_expr = candidate["qualified_field"]
@@ -947,7 +924,7 @@ class PromptBuilder:
             if sample_month:
                 payload["month_filter_example"] = f"{projection_expr} = '{sample_month}'"
             month_range_example = self._month_range_filter_example(
-                query_plan,
+                context,
                 field_expr,
                 candidate.get("format"),
             )
@@ -987,9 +964,9 @@ class PromptBuilder:
     def _substring_function(self) -> str:
         return "SUBSTR"
 
-    def _example_compact_month(self, query_plan: QueryPlan) -> str:
+    def _example_compact_month(self, context: SqlGenerationContext) -> str:
         if self.semantic_runtime is not None:
-            for item in query_plan.filters:
+            for item in context.filters:
                 if item.field not in {"biz_month", "demand_month"}:
                     continue
                 candidate_values = [item.value]
@@ -999,7 +976,7 @@ class PromptBuilder:
                     compact_month = self.semantic_runtime.compact_month_value(str(candidate_value))
                     if compact_month:
                         return compact_month
-            time_context = query_plan.time_context
+            time_context = context.time_context
             if time_context and time_context.range:
                 for candidate_value in [time_context.range.start, time_context.range.end]:
                     compact_month = self.semantic_runtime.compact_month_value(candidate_value)
@@ -1007,9 +984,9 @@ class PromptBuilder:
                         return compact_month
         return "202604"
 
-    def _example_iso_day(self, query_plan: QueryPlan) -> str:
+    def _example_iso_day(self, context: SqlGenerationContext) -> str:
         if self.semantic_runtime is not None:
-            for item in query_plan.filters:
+            for item in context.filters:
                 if item.field != "biz_date":
                     continue
                 candidate_values = [item.value]
@@ -1019,13 +996,13 @@ class PromptBuilder:
                     iso_day = self.semantic_runtime.format_time_literal(str(candidate_value), "YYYY-MM-DD")
                     if iso_day:
                         return iso_day
-            time_context = query_plan.time_context
+            time_context = context.time_context
             if time_context and time_context.range:
                 for candidate_value in [time_context.range.end, time_context.range.start]:
                     iso_day = self.semantic_runtime.format_time_literal(candidate_value, "YYYY-MM-DD")
                     if iso_day:
                         return iso_day
-            sample_month = self._example_compact_month(query_plan)
+            sample_month = self._example_compact_month(context)
             month_range = self.semantic_runtime.month_range_literals(sample_month, "YYYY-MM-DD")
             if month_range:
                 return month_range[1]
@@ -1033,13 +1010,13 @@ class PromptBuilder:
 
     def _day_filter_example(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         field_expression: str,
         field_format: str | None,
     ) -> str | None:
         if self.semantic_runtime is None:
             return None
-        iso_day = self._example_iso_day(query_plan)
+        iso_day = self._example_iso_day(context)
         literal = self.semantic_runtime.format_time_literal(iso_day, field_format)
         if not literal:
             return None
@@ -1047,28 +1024,28 @@ class PromptBuilder:
 
     def _month_range_filter_example(
         self,
-        query_plan: QueryPlan,
+        context: SqlGenerationContext,
         field_expression: str,
         field_format: str | None,
     ) -> str | None:
         if self.semantic_runtime is None:
             return None
-        compact_month = self._example_compact_month(query_plan)
+        compact_month = self._example_compact_month(context)
         literals = self.semantic_runtime.month_range_literals(compact_month, field_format)
         if not literals:
             return None
         start_literal, end_literal = literals
         return f"{field_expression} BETWEEN '{start_literal}' AND '{end_literal}'"
 
-    def _has_latest_n_filter(self, query_plan: QueryPlan) -> bool:
-        return any(item.op == "latest_n" for item in query_plan.filters)
+    def _has_latest_n_filter(self, context: SqlGenerationContext) -> bool:
+        return any(item.op == "latest_n" for item in context.filters)
 
-    def _qualify_columns(self, query_plan: QueryPlan, columns: list[str]) -> list[str]:
+    def _qualify_columns(self, context: SqlGenerationContext, columns: list[str]) -> list[str]:
         if self.semantic_runtime is None:
             return []
         qualified: list[str] = []
         for column in columns:
-            for table_name in query_plan.tables:
+            for table_name in context.tables:
                 if column in self.semantic_runtime.table_fields(table_name):
                     candidate = f"{table_name}.{column}"
                     if candidate not in qualified:

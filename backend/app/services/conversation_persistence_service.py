@@ -40,7 +40,7 @@ class ConversationPersistenceService:
                 connection,
                 trace_id=trace.trace_id,
                 sql=response.sql,
-                plan_validation=response.plan_validation,
+                context_validation=response.context_validation,
                 sql_validation=response.sql_validation,
                 execution=response.execution,
             )
@@ -55,7 +55,7 @@ class ConversationPersistenceService:
         classification=None,
         retrieval=None,
         question_context=None,
-        plan_validation: ValidationResponse | None = None,
+        context_validation: ValidationResponse | None = None,
         sql_validation: ValidationResponse | None = None,
         execution=None,
         sql: str | None = None,
@@ -72,17 +72,17 @@ class ConversationPersistenceService:
                 answer_status=answer_status,
                 classification=classification,
                 question_context=question_context,
-                plan_validation=plan_validation,
+                context_validation=context_validation,
                 sql_validation=sql_validation,
                 execution=execution,
             )
             self._replace_retrieval_logs(connection, trace_id=trace.trace_id, retrieval=retrieval)
-            if plan_validation is not None and sql_validation is not None:
+            if context_validation is not None and sql_validation is not None:
                 self._replace_sql_audit(
                     connection,
                     trace_id=trace.trace_id,
                     sql=sql,
-                    plan_validation=plan_validation,
+                    context_validation=context_validation,
                     sql_validation=sql_validation,
                     execution=execution,
                 )
@@ -210,13 +210,13 @@ class ConversationPersistenceService:
         answer_status: str | None = None,
         classification=None,
         question_context=None,
-        plan_validation: ValidationResponse | None = None,
+        context_validation: ValidationResponse | None = None,
         sql_validation: ValidationResponse | None = None,
         execution=None,
     ) -> None:
         final_classification = response.classification if response is not None else classification
         final_question_context = response.question_context if response is not None else question_context
-        final_plan_validation = response.plan_validation if response is not None else plan_validation
+        final_context_validation = response.context_validation if response is not None else context_validation
         final_sql_validation = response.sql_validation if response is not None else sql_validation
         final_execution = response.execution if response is not None else execution
         final_answer_status = (
@@ -267,9 +267,9 @@ class ConversationPersistenceService:
             "question_type": final_classification.question_type if final_classification is not None else None,
             "subject_domain": final_classification.subject_domain if final_classification is not None else None,
             "answer_status": final_answer_status,
-            "plan_valid": final_plan_validation.valid if final_plan_validation is not None else None,
-            "plan_risk_level": final_plan_validation.risk_level if final_plan_validation is not None else None,
-            "plan_risk_flags_json": json_dumps(final_plan_validation.risk_flags) if final_plan_validation is not None else None,
+            "context_valid": final_context_validation.valid if final_context_validation is not None else None,
+            "context_risk_level": final_context_validation.risk_level if final_context_validation is not None else None,
+            "context_risk_flags_json": json_dumps(final_context_validation.risk_flags) if final_context_validation is not None else None,
             "sql_valid": final_sql_validation.valid if final_sql_validation is not None else None,
             "sql_risk_level": final_sql_validation.risk_level if final_sql_validation is not None else None,
             "sql_risk_flags_json": json_dumps(final_sql_validation.risk_flags) if final_sql_validation is not None else None,
@@ -295,9 +295,9 @@ class ConversationPersistenceService:
                     question_type = :question_type,
                     subject_domain = :subject_domain,
                     answer_status = :answer_status,
-                    plan_valid = :plan_valid,
-                    plan_risk_level = :plan_risk_level,
-                    plan_risk_flags_json = :plan_risk_flags_json,
+                    context_valid = :context_valid,
+                    context_risk_level = :context_risk_level,
+                    context_risk_flags_json = :context_risk_flags_json,
                     sql_valid = :sql_valid,
                     sql_risk_level = :sql_risk_level,
                     sql_risk_flags_json = :sql_risk_flags_json,
@@ -319,14 +319,14 @@ class ConversationPersistenceService:
                     trace_id, session_id, user_id, question, effective_question,
                     context_relation, question_decision, conversation_summary, semantic_brief,
                     question_context_json, question_type, subject_domain,
-                    answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
+                    answer_status, context_valid, context_risk_level, context_risk_flags_json,
                     sql_valid, sql_risk_level, sql_risk_flags_json,
                     executed, row_count, warnings_json, trace_json, created_at
                 ) VALUES (
                     :trace_id, :session_id, :user_id, :question, :effective_question,
                     :context_relation, :question_decision, :conversation_summary, :semantic_brief,
                     :question_context_json, :question_type, :subject_domain,
-                    :answer_status, :plan_valid, :plan_risk_level, :plan_risk_flags_json,
+                    :answer_status, :context_valid, :context_risk_level, :context_risk_flags_json,
                     :sql_valid, :sql_risk_level, :sql_risk_flags_json,
                     :executed, :row_count, :warnings_json, :trace_json, :created_at
                 )
@@ -380,7 +380,7 @@ class ConversationPersistenceService:
         *,
         trace_id: str,
         sql: str | None,
-        plan_validation: ValidationResponse,
+        context_validation: ValidationResponse,
         sql_validation: ValidationResponse,
         execution,
     ) -> None:
@@ -392,10 +392,10 @@ class ConversationPersistenceService:
             text(
                 """
                 INSERT INTO sql_audit_logs (
-                    sql_audit_id, trace_id, sql_text, plan_valid, plan_risk_level, plan_risk_flags_json,
+                    sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
                     sql_valid, executed, sql_risk_level, sql_risk_flags_json, row_count, warnings_json, errors_json, created_at
                 ) VALUES (
-                    :sql_audit_id, :trace_id, :sql_text, :plan_valid, :plan_risk_level, :plan_risk_flags_json,
+                    :sql_audit_id, :trace_id, :sql_text, :context_valid, :context_risk_level, :context_risk_flags_json,
                     :sql_valid, :executed, :sql_risk_level, :sql_risk_flags_json, :row_count, :warnings_json, :errors_json, :created_at
                 )
                 """
@@ -404,9 +404,9 @@ class ConversationPersistenceService:
                 "sql_audit_id": f"sa_{uuid.uuid4().hex[:16]}",
                 "trace_id": trace_id,
                 "sql_text": sql,
-                "plan_valid": plan_validation.valid,
-                "plan_risk_level": plan_validation.risk_level,
-                "plan_risk_flags_json": json_dumps(plan_validation.risk_flags),
+                "context_valid": context_validation.valid,
+                "context_risk_level": context_validation.risk_level,
+                "context_risk_flags_json": json_dumps(context_validation.risk_flags),
                 "sql_valid": sql_validation.valid,
                 "sql_risk_level": sql_validation.risk_level,
                 "sql_risk_flags_json": json_dumps(sql_validation.risk_flags),
@@ -415,7 +415,7 @@ class ConversationPersistenceService:
                 "warnings_json": json_dumps(
                     sql_validation.warnings + (execution.warnings if execution is not None else [])
                 ),
-                "errors_json": json_dumps(plan_validation.errors + sql_validation.errors),
+                "errors_json": json_dumps(context_validation.errors + sql_validation.errors),
                 "created_at": datetime.utcnow(),
             },
         )

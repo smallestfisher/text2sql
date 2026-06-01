@@ -5,9 +5,11 @@ from backend.app.models.answer import AnswerPayload, normalize_answer_status
 from backend.app.models.api import ChatResponse, ExecutionResponse, ValidationResponse
 from backend.app.models.auth import UserContext
 from backend.app.models.classification import QuestionClassification
+from backend.app.models.context_summary import ContextSummary
 from backend.app.models.conversation import ChatMessage
 from backend.app.models.question_context import QuestionContext
-from backend.app.models.query_plan import QueryPlan, TimeContext
+from backend.app.models.semantic_types import TimeContext
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.retrieval import RetrievalContext
 from backend.app.models.session_state import SessionState
 from backend.app.models.trace import TraceRecord
@@ -70,6 +72,9 @@ class ChatResponseRestoreService:
         payload = dict(snapshot_payload)
         payload["trace"] = trace
         payload["sql"] = sql_audit.sql_text if sql_audit is not None else None
+        payload.pop("sql_context", None)
+        if payload.get("context_summary") is None:
+            raise ValueError("response snapshot missing context_summary")
         self._normalize_legacy_answer_payload(payload)
         return ChatResponse(**payload)
 
@@ -82,14 +87,14 @@ class ChatResponseRestoreService:
         session_state: SessionState | None,
         messages: list[ChatMessage],
     ) -> ChatResponse:
-        plan_metadata = self._step_metadata(trace, "plan")
-        compile_metadata = self._step_metadata(trace, "compile_plan")
-        validate_plan_metadata = self._step_metadata(trace, "validate_plan")
+        classification_metadata = self._step_metadata(trace, "classification")
+        sql_context_metadata = self._step_metadata(trace, "sql_context_tables")
+        validate_context_metadata = self._step_metadata(trace, "validate_context")
         retrieve_metadata = self._step_metadata(trace, "retrieve")
         execute_metadata = self._step_metadata(trace, "execute")
 
-        classification_payload = plan_metadata.get("classification") or {}
-        compiled_plan_payload = compile_metadata.get("compiled_plan") or {}
+        classification_payload = classification_metadata.get("classification") or {}
+        sql_context_payload = sql_context_metadata.get("sql_context") or {}
 
         restored_state = session_state or SessionState(session_id=query_log.session_id or "session_pending")
 
@@ -105,36 +110,32 @@ class ChatResponseRestoreService:
             "context_delta": classification_payload.get("context_delta", {}),
             "confidence": classification_payload.get("confidence", 0.0),
         })
-        query_plan_source = (
-            restored_state.last_query_plan.model_dump(mode="json")
-            if restored_state.last_query_plan is not None
-            else compiled_plan_payload
-        )
-        query_plan = QueryPlan(**{
-            "question_type": query_plan_source.get("question_type", classification.question_type),
-            "subject_domain": query_plan_source.get("subject_domain", classification.subject_domain),
-            "tables": query_plan_source.get("tables", []),
-            "entities": query_plan_source.get("entities", []),
-            "metrics": query_plan_source.get("metrics", []),
-            "dimensions": query_plan_source.get("dimensions", []),
-            "filters": query_plan_source.get("filters", []),
-            "join_path": query_plan_source.get("join_path", []),
-            "time_context": query_plan_source.get("time_context", {}),
-            "version_context": query_plan_source.get("version_context"),
-            "inherit_context": query_plan_source.get("inherit_context", classification.inherit_context),
-            "context_delta": query_plan_source.get("context_delta", classification.context_delta.model_dump(mode="json")),
-            "need_clarification": query_plan_source.get("need_clarification", classification.need_clarification),
-            "clarification_question": query_plan_source.get("clarification_question", classification.clarification_question),
-            "reason_code": query_plan_source.get("reason_code", classification.reason_code),
-            "analysis_mode": query_plan_source.get("analysis_mode"),
-            "sort": query_plan_source.get("sort", []),
-            "limit": query_plan_source.get("limit", restored_state.limit or 200),
-            "reason": query_plan_source.get("reason", classification.reason),
+        sql_context_source = sql_context_payload
+        sql_context = SqlGenerationContext(**{
+            "question_type": sql_context_source.get("question_type", classification.question_type),
+            "subject_domain": sql_context_source.get("subject_domain", classification.subject_domain),
+            "tables": sql_context_source.get("tables", []),
+            "entities": sql_context_source.get("entities", []),
+            "metrics": sql_context_source.get("metrics", []),
+            "dimensions": sql_context_source.get("dimensions", []),
+            "filters": sql_context_source.get("filters", []),
+            "join_path": sql_context_source.get("join_path", []),
+            "time_context": sql_context_source.get("time_context", {}),
+            "version_context": sql_context_source.get("version_context"),
+            "inherit_context": sql_context_source.get("inherit_context", classification.inherit_context),
+            "context_delta": sql_context_source.get("context_delta", classification.context_delta.model_dump(mode="json")),
+            "need_clarification": sql_context_source.get("need_clarification", classification.need_clarification),
+            "clarification_question": sql_context_source.get("clarification_question", classification.clarification_question),
+            "reason_code": sql_context_source.get("reason_code", classification.reason_code),
+            "analysis_mode": sql_context_source.get("analysis_mode"),
+            "sort": sql_context_source.get("sort", []),
+            "limit": sql_context_source.get("limit", restored_state.limit or 200),
+            "reason": sql_context_source.get("reason", classification.reason),
         })
 
         retrieval = RetrievalContext(
             domains=[classification.subject_domain] if classification.subject_domain != "unknown" else [],
-            metrics=query_plan.metrics,
+            metrics=sql_context.metrics,
             retrieval_terms=[],
             retrieval_channels=retrieve_metadata.get("channels", []),
             hits=[],
@@ -142,12 +143,12 @@ class ChatResponseRestoreService:
             hit_count_by_channel=retrieve_metadata.get("hit_count_by_channel", {}),
         )
 
-        plan_validation = ValidationResponse(
-            valid=bool(query_log.plan_valid),
-            errors=validate_plan_metadata.get("errors", []),
-            warnings=validate_plan_metadata.get("warnings", []),
-            risk_level=query_log.plan_risk_level or "low",
-            risk_flags=query_log.plan_risk_flags,
+        context_validation = ValidationResponse(
+            valid=bool(query_log.context_valid),
+            errors=validate_context_metadata.get("errors", []),
+            warnings=validate_context_metadata.get("warnings", []),
+            risk_level=query_log.context_risk_level or "low",
+            risk_flags=query_log.context_risk_flags,
         )
         sql_validation = ValidationResponse(
             valid=bool(query_log.sql_valid) if query_log.sql_valid is not None else bool(sql_audit is not None and sql_audit.sql_valid),
@@ -176,15 +177,41 @@ class ChatResponseRestoreService:
         return ChatResponse(
             question_context=self._restore_question_context(query_log),
             classification=classification,
+            context_summary=self._restore_context_summary(
+                restored_state=restored_state,
+                sql_context=sql_context,
+                retrieval=retrieval,
+            ),
             retrieval=retrieval,
             trace=trace,
             answer=answer,
-            query_plan=query_plan,
             sql=sql_audit.sql_text if sql_audit is not None else None,
-            plan_validation=plan_validation,
+            context_validation=context_validation,
             sql_validation=sql_validation,
             execution=execution,
             next_session_state=restored_state,
+        )
+
+    def _restore_context_summary(
+        self,
+        *,
+        restored_state: SessionState,
+        sql_context: SqlGenerationContext,
+        retrieval: RetrievalContext,
+    ) -> ContextSummary:
+        if restored_state.last_context_summary is not None:
+            return restored_state.last_context_summary
+        return ContextSummary(
+            question_type=sql_context.question_type,
+            subject_domain=sql_context.subject_domain,
+            semantic_brief=sql_context.semantic_brief,
+            tables=list(sql_context.tables),
+            retrieval_domains=list(retrieval.domains),
+            retrieval_metrics=list(retrieval.metrics),
+            limit=sql_context.limit,
+            need_clarification=sql_context.need_clarification,
+            clarification_question=sql_context.clarification_question,
+            source="response_restore",
         )
 
     def _restore_question_context(self, query_log: RuntimeQueryLogRecord) -> QuestionContext | None:

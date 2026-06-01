@@ -55,7 +55,7 @@ class EvaluationResultItem(BaseModel):
     actual_dimensions: list[str] = Field(default_factory=list)
     actual_filter_fields: list[str] = Field(default_factory=list)
     actual_warnings: list[str] = Field(default_factory=list)
-    plan_valid: bool = False
+    context_valid: bool = False
     sql_valid: bool = False
     executed: bool = False
     passed: bool = False
@@ -110,8 +110,8 @@ class EvaluationReplayDiff(BaseModel):
     question_type_changed: bool = False
     subject_domain_changed: bool = False
     answer_status_changed: bool = False
-    plan_valid_changed: bool = False
-    plan_risk_level_changed: bool = False
+    context_valid_changed: bool = False
+    context_risk_level_changed: bool = False
     sql_valid_changed: bool = False
     sql_risk_level_changed: bool = False
     execution_status_changed: bool = False
@@ -125,8 +125,8 @@ class EvaluationReplayDiff(BaseModel):
     dimensions_removed: list[str] = Field(default_factory=list)
     filter_fields_added: list[str] = Field(default_factory=list)
     filter_fields_removed: list[str] = Field(default_factory=list)
-    plan_risk_flags_added: list[str] = Field(default_factory=list)
-    plan_risk_flags_removed: list[str] = Field(default_factory=list)
+    context_risk_flags_added: list[str] = Field(default_factory=list)
+    context_risk_flags_removed: list[str] = Field(default_factory=list)
     sql_risk_flags_added: list[str] = Field(default_factory=list)
     sql_risk_flags_removed: list[str] = Field(default_factory=list)
 

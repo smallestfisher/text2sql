@@ -4,6 +4,16 @@ from backend.app.config import RUNTIME_STORE_SCHEMA_PATH
 from backend.app.services.database_connector import DatabaseConnector
 
 
+OBSOLETE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("query_logs", "plan_valid"),
+    ("query_logs", "plan_risk_level"),
+    ("query_logs", "plan_risk_flags_json"),
+    ("sql_audit_logs", "plan_valid"),
+    ("sql_audit_logs", "plan_risk_level"),
+    ("sql_audit_logs", "plan_risk_flags_json"),
+)
+
+
 class RuntimeStoreInitializer:
     def __init__(
         self,
@@ -29,6 +39,9 @@ class RuntimeStoreInitializer:
             )
 
         migration_errors: list[str] = []
+        for table_name, column_name in OBSOLETE_COLUMNS:
+            self._drop_column_if_exists(table_name, column_name, migration_errors)
+
         self._ensure_column(
             "query_logs",
             "effective_question",
@@ -67,13 +80,19 @@ class RuntimeStoreInitializer:
         )
         self._ensure_column(
             "query_logs",
-            "plan_risk_level",
+            "context_valid",
+            "BOOLEAN NULL",
+            migration_errors,
+        )
+        self._ensure_column(
+            "query_logs",
+            "context_risk_level",
             "VARCHAR(16) NULL",
             migration_errors,
         )
         self._ensure_column(
             "query_logs",
-            "plan_risk_flags_json",
+            "context_risk_flags_json",
             self._text_column_definition(),
             migration_errors,
         )
@@ -91,13 +110,19 @@ class RuntimeStoreInitializer:
         )
         self._ensure_column(
             "sql_audit_logs",
-            "plan_risk_level",
+            "context_valid",
+            "BOOLEAN NOT NULL",
+            migration_errors,
+        )
+        self._ensure_column(
+            "sql_audit_logs",
+            "context_risk_level",
             "VARCHAR(16) NULL",
             migration_errors,
         )
         self._ensure_column(
             "sql_audit_logs",
-            "plan_risk_flags_json",
+            "context_risk_flags_json",
             self._text_column_definition(),
             migration_errors,
         )
@@ -178,6 +203,22 @@ class RuntimeStoreInitializer:
             )
         except Exception as exc:
             errors.append(f"ensure column {table_name}.{column_name} failed: {exc}")
+
+    def _drop_column_if_exists(
+        self,
+        table_name: str,
+        column_name: str,
+        errors: list[str],
+    ) -> None:
+        try:
+            existing = self._find_column(table_name, column_name)
+            if existing is None:
+                return
+            self.database_connector.execute_write(
+                f"ALTER TABLE {table_name} DROP COLUMN {column_name}"
+            )
+        except Exception as exc:
+            errors.append(f"drop obsolete column {table_name}.{column_name} failed: {exc}")
 
     def _ensure_index(
         self,

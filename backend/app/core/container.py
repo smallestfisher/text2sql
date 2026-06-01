@@ -26,7 +26,7 @@ from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_context_service import QuestionContextService
-from backend.app.services.query_planner import QueryPlanner
+from backend.app.services.question_analysis_service import QuestionAnalysisService
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.runtime_admin_service import RuntimeAdminService
 from backend.app.services.domain_config_loader import DomainConfigLoader
@@ -121,7 +121,7 @@ class AppContainer:
             llm_client=self.llm_client,
             prompt_builder=self.prompt_builder,
         )
-        self.query_planner = QueryPlanner(
+        self.question_analysis_service = QuestionAnalysisService(
             domain_config=self.domain_config,
             semantic_runtime=self.semantic_runtime,
             llm_client=self.llm_client,
@@ -212,7 +212,7 @@ class AppContainer:
         )
 
         self.orchestrator = ConversationOrchestrator(
-            query_planner=self.query_planner,
+            question_analysis_service=self.question_analysis_service,
             session_state_service=self.session_state_service,
             sql_validator=self.sql_validator,
             sql_executor=self.sql_executor,

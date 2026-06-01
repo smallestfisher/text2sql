@@ -64,14 +64,15 @@ class RuntimeQueryLogRecord(BaseModel):
     question_type: str | None = None
     subject_domain: str | None = None
     answer_status: str | None = None
-    plan_valid: bool | None = None
-    plan_risk_level: str | None = None
-    plan_risk_flags: list[str] = Field(default_factory=list)
+    context_valid: bool | None = None
+    context_risk_level: str | None = None
+    context_risk_flags: list[str] = Field(default_factory=list)
     sql_valid: bool | None = None
     sql_risk_level: str | None = None
     sql_risk_flags: list[str] = Field(default_factory=list)
     executed: bool | None = None
     row_count: int | None = None
+    total_elapsed_ms: int | None = None
     warnings: list[str] = Field(default_factory=list)
     prompt_context_summary: dict = Field(default_factory=dict)
     created_at: datetime
@@ -113,9 +114,9 @@ class RuntimeSqlAuditRecord(BaseModel):
     sql_audit_id: str
     trace_id: str
     sql_text: str | None = None
-    plan_valid: bool
-    plan_risk_level: str | None = None
-    plan_risk_flags: list[str] = Field(default_factory=list)
+    context_valid: bool
+    context_risk_level: str | None = None
+    context_risk_flags: list[str] = Field(default_factory=list)
     sql_valid: bool
     sql_risk_level: str | None = None
     sql_risk_flags: list[str] = Field(default_factory=list)

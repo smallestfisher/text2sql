@@ -7,7 +7,7 @@
 - 先复现，再看 `trace_id`，不要凭感觉改 prompt 或规则。
 - 先判断错在哪一层：QuestionContext、Retrieval、SQL Prompt、SQL Validator、Execution、Workspace。
 - 准确率修复优先沉淀到 `semantic/tables.json`、`semantic/business_knowledge.json`、`examples/nl2sql_examples.template.json`、`semantic/join_patterns.json`、retrieval、prompt 或 validator。
-- `QueryPlan` 是响应和审计载体，不是新的业务规则引擎。
+- `context_summary`、`SqlGenerationContext` 和 `evidence_context` 是 SQL 生成的主要可观测输入；业务约束应来自语义资产、检索证据和 few-shot。
 - 修完后 replay 原 trace；高价值问题再物化成 eval case 或 example。
 
 ## 5 分钟排查
@@ -52,13 +52,6 @@
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/run`
-
-单步调试：
-
-- `POST /api/query/classify`
-- `POST /api/query/plan`
-- `POST /api/query/sql`
-- `POST /api/query/execute`
 
 ## Workspace
 

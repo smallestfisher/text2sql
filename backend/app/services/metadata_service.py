@@ -152,7 +152,14 @@ class MetadataService:
         content = self.metadata_repository.read(name)
         return MetadataDocument(name=name, path=str(path), content=content)
 
-    def update_document(self, name: str, content) -> MetadataDocument:
+    def update_document(
+        self,
+        name: str,
+        content,
+        retrieval_service: RetrievalService | None = None,
+    ) -> MetadataDocument:
         with self._lock:
             path = self.metadata_repository.write(name, content)
+        if retrieval_service is not None:
+            retrieval_service.reload()
         return MetadataDocument(name=name, path=str(path), content=content)

@@ -4,7 +4,8 @@ import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from backend.app.models.query_plan import FilterItem, QueryPlan, TimeContext, TimeRange, VersionContext
+from backend.app.models.semantic_types import FilterItem, TimeContext, TimeRange, VersionContext
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
 from backend.app.models.api import ExecutionResponse
@@ -15,8 +16,12 @@ from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.prompt_builder import PromptBuilder
-from backend.app.services.query_planner import QueryPlanner
+from backend.app.services.question_analysis_service import QuestionAnalysisService
 from backend.app.services.semantic_runtime import SemanticRuntime
+
+
+def sql_context(sql_context_value: SqlGenerationContext) -> SqlGenerationContext:
+    return SqlGenerationContext(**sql_context_value.model_dump(mode="python"))
 
 
 class EmptyAuditRepository:
@@ -120,8 +125,8 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn("只做问题上下文整理，不生成 SQL", constraints)
         self.assertIn("只判断用户这句话和可用会话上下文是否足以形成完整自然语言问题", constraints)
         self.assertIn("不要判断业务知识、字段、表、计算方法或 SQL 是否足够", constraints)
-        self.assertIn("“3月呢”表示把上一轮月份替换为3月", constraints)
-        self.assertIn("不要先询问用户是否确认该替换", constraints)
+        self.assertIn("如果用户表达替换、删除或新增条件，必须在 effective_question 中自然语言表达出来。", constraints)
+        self.assertIn("短追问优先基于最近一轮用户问题补全", constraints)
         self.assertNotIn("matched_examples", prompt["context_hints"])
         self.assertNotIn("matched_join_patterns", prompt["context_hints"])
 
@@ -152,7 +157,7 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn("不要把“是的”“不是”“对”等确认词当成独立业务问题", constraints)
 
     def test_sql_prompt_includes_semantic_brief(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="plan_actual",
             tables=["production_actuals", "product_attributes"],
@@ -162,9 +167,12 @@ class PromptCompactionTests(unittest.TestCase):
             semantic_brief="查询XPS类产品的actual_input_qty，并按biz_month展示。",
         )
 
-        prompt = self.prompt_builder.build_sql_prompt(query_plan, question="2026年Array工厂XPS类产品，每个月分别投入多少物量")
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="2026年Array工厂XPS类产品，每个月分别投入多少物量",
+        )
 
-        self.assertEqual(prompt["semantic_brief"], query_plan.semantic_brief)
+        self.assertEqual(prompt["semantic_brief"], sql_context_value.semantic_brief)
 
     def test_prompt_assets_keep_only_sql_generation_assets(self) -> None:
         assets = self.prompt_builder._prompt_assets()
@@ -178,7 +186,7 @@ class PromptCompactionTests(unittest.TestCase):
             errors=[],
             sql="SELECT 1",
             llm_sql="SELECT 1",
-            plan_errors=[],
+            context_errors=[],
             sql_prompt={},
         )
         self.assertFalse(allowed)
@@ -188,7 +196,7 @@ class PromptCompactionTests(unittest.TestCase):
             errors=["sql is empty"],
             sql=None,
             llm_sql=None,
-            plan_errors=[],
+            context_errors=[],
             sql_prompt={},
         )
         self.assertFalse(allowed)
@@ -198,7 +206,7 @@ class PromptCompactionTests(unittest.TestCase):
             errors=["sql references unknown sources: fake_table"],
             sql="SELECT * FROM fake_table",
             llm_sql="SELECT * FROM fake_table",
-            plan_errors=[],
+            context_errors=[],
             sql_prompt={},
         )
         self.assertTrue(allowed)
@@ -208,7 +216,7 @@ class PromptCompactionTests(unittest.TestCase):
             errors=["forbidden keyword detected:delete"],
             sql="DELETE FROM t",
             llm_sql="DELETE FROM t",
-            plan_errors=[],
+            context_errors=[],
             sql_prompt={},
         )
         self.assertFalse(allowed)
@@ -260,8 +268,8 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertEqual(reason, "repairable_execution_error")
 
 
-    def test_sql_prompt_uses_available_tables_and_planning_context(self) -> None:
-        query_plan = QueryPlan(
+    def test_sql_prompt_uses_available_tables_and_evidence_context(self) -> None:
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -272,28 +280,70 @@ class PromptCompactionTests(unittest.TestCase):
             limit=50,
         )
 
-        prompt = self.prompt_builder.build_sql_prompt(query_plan, question="最新 OMS 库存")
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存",
+        )
 
         self.assertIn("available_tables", prompt)
-        self.assertIn("planning_context", prompt)
+        self.assertIn("evidence_context", prompt)
         self.assertIn("retrieval_context", prompt)
-        self.assertNotIn("query_plan", prompt)
+        self.assertNotIn("sql_context", prompt)
         self.assertNotIn("tables_metadata", prompt)
         self.assertNotIn("allowed_fields", prompt)
 
         schema = prompt["available_tables"]["oms_inventory"]
         schema_text = "\n".join(schema["columns"])
         self.assertIn("product_ID", schema_text)
-        self.assertNotIn("report_month", schema_text)
-        self.assertNotIn("panel_qty", schema_text)
-        self.assertNotIn("glass_qty", schema_text)
-        self.assertNotIn("LGORT_DL", schema_text)
+        self.assertIn("report_month", schema_text)
+        self.assertIn("panel_qty", schema_text)
+        self.assertIn("glass_qty", schema_text)
+        self.assertIn("LGORT_DL", schema_text)
         self.assertIn("time_fields", schema)
         self.assertIn("relationships", schema)
         self.assertIn("table_schemas_count", prompt["context_summary"])
+        self.assertEqual(prompt["context_summary"]["table_schema_columns_count"]["oms_inventory"], len(schema["columns"]))
         self.assertNotIn("tables_metadata_count", prompt["context_summary"])
+
+    def test_sql_prompt_keeps_required_columns_when_sql_context_has_no_fields(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="demand",
+            tables=[],
+            metrics=[],
+            dimensions=[],
+            filters=[],
+            semantic_brief="查询最近6个月TTL需求。",
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="demand_latest_p_recent6m_ttl_001",
+                    score=5.0,
+                    summary="recent 6 month ttl demand",
+                    matched_features=["vector:0.900"],
+                    metadata={"tables": ["p_demand", "v_demand"]},
+                )
+            ]
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question="最近6个月TTL需求",
+        )
+
+        demand_schema_text = "\n".join(prompt["available_tables"]["p_demand"]["columns"])
+
+        self.assertIn("PM_VERSION", demand_schema_text)
+        self.assertIn("REQUIREMENT_QTY", demand_schema_text)
+        self.assertIn("MONTH7", demand_schema_text)
+        self.assertNotIn("field_resolution", prompt["evidence_context"])
+        self.assertEqual(prompt["evidence_context"]["context_source"], "retrieval_evidence")
+
     def test_sql_prompt_preserves_demand_horizontal_and_product_attribute_columns(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="demand",
             metrics=["product_count", "demand_qty"],
@@ -323,7 +373,7 @@ class PromptCompactionTests(unittest.TestCase):
         )
 
         prompt = self.prompt_builder.build_sql_prompt(
-            query_plan,
+            sql_context(sql_context_value),
             retrieval=retrieval,
             question="最新P版，2026年5月Oxide产品数量是多少",
         )
@@ -338,12 +388,7 @@ class PromptCompactionTests(unittest.TestCase):
         business_knowledge = prompt["retrieval_context"]["business_knowledge"]
         self.assertIn("IS_xxx 字段使用 Y/N 标记", business_knowledge)
         self.assertIn("目标需求月份仍然必须基于横表展开后的 demand_month 过滤", business_knowledge)
-        self.assertIn("目标需求月份不能简单理解成 base MONTH 本身", business_knowledge)
-        filter_resolution = prompt["planning_context"]["field_resolution"]["filters"]
-        self.assertIn("p_demand.PM_VERSION", filter_resolution["PM_VERSION"])
-        self.assertIn("product_attributes.IS_OXIDE", filter_resolution["IS_OXIDE"])
-        self.assertNotIn("biz_month", filter_resolution)
-        self.assertNotIn("demand_qty", filter_resolution)
+        self.assertNotIn("field_resolution", prompt["evidence_context"])
         examples = prompt["retrieval_context"]["examples"]
         self.assertEqual(examples[0]["id"], "demand_latest_p_202605_oxide_product_count_001")
         self.assertIn("demand_unpivot", examples[0]["sql"])
@@ -351,23 +396,23 @@ class PromptCompactionTests(unittest.TestCase):
 
     def test_demand_product_count_question_also_requests_total_demand(self) -> None:
         llm_client = QuestionContextDetailLLMClient()
-        planner = QueryPlanner(
+        analysis_service = QuestionAnalysisService(
             self.domain_config,
             llm_client,
             self.prompt_builder,
             semantic_runtime=self.semantic_runtime,
         )
 
-        classification, query_plan, _warnings = planner.create_plan(
+        classification, sql_context_value, _warnings = analysis_service.create_sql_context(
             "最新P版，2026年5月Oxide产品数量是多少"
         )
 
         self.assertEqual(classification.question_type, "new")
-        self.assertEqual(query_plan.metrics, [])
-        self.assertEqual(query_plan.filters, [])
+        self.assertEqual(sql_context_value.metrics, [])
+        self.assertEqual(sql_context_value.filters, [])
 
     def test_sql_prompt_includes_physical_time_filter_examples_for_plan_actual_compare(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="plan_actual",
             metrics=["approved_input_qty", "actual_input_qty", "input_gap_qty", "input_achievement_rate"],
@@ -380,17 +425,17 @@ class PromptCompactionTests(unittest.TestCase):
         )
 
         prompt = self.prompt_builder.build_sql_prompt(
-            query_plan,
+            sql_context(sql_context_value),
             question="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
         )
 
-        filter_resolution = prompt["planning_context"]["field_resolution"]["filters"]
-        self.assertNotIn("biz_month", filter_resolution)
-        self.assertIn("production_actuals.FACTORY", filter_resolution["factory"])
-        self.assertIn("production_actuals.act_type", filter_resolution["act_type"])
+        self.assertNotIn("field_resolution", prompt["evidence_context"])
+        production_actuals_schema = "\n".join(prompt["available_tables"]["production_actuals"]["columns"])
+        self.assertIn("FACTORY", production_actuals_schema)
+        self.assertIn("act_type", production_actuals_schema)
 
     def test_sql_prompt_compacts_business_knowledge_and_examples(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -402,7 +447,10 @@ class PromptCompactionTests(unittest.TestCase):
             analysis_mode="distribution",
         )
 
-        prompt = self.prompt_builder.build_sql_prompt(query_plan, question="最新 OMS 库存库龄分布")
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存库龄分布",
+        )
         business_knowledge = prompt["retrieval_context"]["business_knowledge"]
 
         self.assertLessEqual(len(business_knowledge), 1600)
@@ -412,7 +460,7 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertNotIn("[join_pattern:", business_knowledge)
 
     def test_sql_prompt_retrieved_examples_omit_full_intent_text(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -433,7 +481,7 @@ class PromptCompactionTests(unittest.TestCase):
         )
 
         prompt = self.prompt_builder.build_sql_prompt(
-            query_plan,
+            sql_context(sql_context_value),
             retrieval=retrieval,
             question="最新 OMS 库存库龄分布",
         )
@@ -541,7 +589,6 @@ FETCH FIRST 200 ROWS ONLY
                     "tables_metadata": Path("semantic/tables.json"),
                     "business_knowledge": Path("semantic/business_knowledge.json"),
                     "join_patterns": Path("semantic/join_patterns.json"),
-                    "query_plan_schema": Path("schemas/query_plan.schema.json"),
                     "session_state_schema": Path("schemas/session_state.schema.json"),
                 }
             )
@@ -581,6 +628,43 @@ FETCH FIRST 200 ROWS ONLY
             self.assertNotIn("tables", stored[0])
             self.assertNotIn("filters", stored[0])
 
+    def test_metadata_update_document_triggers_retrieval_reload(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            knowledge_path = Path(temp_dir) / "business_knowledge.json"
+            knowledge_path.write_text('{"entries": []}\n', encoding="utf-8")
+            registry = MetadataRegistry(
+                paths={
+                    "examples_template": Path("examples/nl2sql_examples.template.json"),
+                    "tables_metadata": Path("semantic/tables.json"),
+                    "business_knowledge": knowledge_path,
+                    "join_patterns": Path("semantic/join_patterns.json"),
+                    "session_state_schema": Path("schemas/session_state.schema.json"),
+                }
+            )
+            retrieval_service = type(
+                "ReloadTrackingRetrievalService",
+                (),
+                {
+                    "reload_calls": 0,
+                    "reload": lambda self: setattr(self, "reload_calls", self.reload_calls + 1),
+                },
+            )()
+            service = MetadataService(
+                metadata_repository=FileMetadataRepository(registry),
+                domain_config_loader=DomainConfigLoader(),
+                audit_repository=EmptyAuditRepository(),
+            )
+
+            document = service.update_document(
+                "business_knowledge",
+                {"entries": [{"id": "kb_1", "notes": ["test"]}]},
+                retrieval_service=retrieval_service,
+            )
+
+            self.assertEqual(document.name, "business_knowledge")
+            self.assertEqual(retrieval_service.reload_calls, 1)
+            self.assertEqual(registry.read("business_knowledge"), {"entries": [{"id": "kb_1", "notes": ["test"]}]})
+
     def test_sql_prompt_includes_safe_oracle_example_sql(self) -> None:
         prompt_builder = PromptBuilder(
             semantic_runtime=self.semantic_runtime,
@@ -595,7 +679,7 @@ FETCH FIRST 200 ROWS ONLY
                 ]
             ),
         )
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -614,7 +698,11 @@ FETCH FIRST 200 ROWS ONLY
             ]
         )
 
-        prompt = prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question="最新 OMS 库存")
+        prompt = prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question="最新 OMS 库存",
+        )
         example = prompt["retrieval_context"]["examples"][0]
 
         self.assertIn("FETCH FIRST 50 ROWS ONLY", example["sql"])
@@ -634,7 +722,7 @@ FETCH FIRST 200 ROWS ONLY
                 ]
             ),
         )
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             metrics=["inventory_qty"],
@@ -653,7 +741,11 @@ FETCH FIRST 200 ROWS ONLY
             ]
         )
 
-        prompt = prompt_builder.build_sql_prompt(query_plan, retrieval=retrieval, question="最新 OMS 库存")
+        prompt = prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question="最新 OMS 库存",
+        )
         example = prompt["retrieval_context"]["examples"][0]
 
         self.assertNotIn("sql", example)
@@ -661,18 +753,21 @@ FETCH FIRST 200 ROWS ONLY
 
 
     def test_sql_prompt_fallback_constraints_reference_available_tables(self) -> None:
-        query_plan = QueryPlan(
+        sql_context_value = SqlGenerationContext(
             question_type="new",
             subject_domain="inventory",
             tables=["oms_inventory"],
             metrics=["inventory_qty"],
         )
-        prompt = self.prompt_builder.build_sql_prompt(query_plan, question="最新 OMS 库存")
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存",
+        )
         sql_text = "\n".join(prompt["instructions"]["constraints"])
 
         self.assertIn("available_tables", sql_text)
         self.assertNotIn("tables_metadata", sql_text)
-        self.assertNotIn("query_plan.", sql_text)
+        self.assertNotIn("sql_context.", sql_text)
 
 
 if __name__ == "__main__":

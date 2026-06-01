@@ -60,6 +60,11 @@ class VersionContext(BaseModel):
     value: str | None = None
 
 
+class SortItem(BaseModel):
+    field: str
+    order: SortOrder
+
+
 class ContextDelta(BaseModel):
     add_filters: list[FilterItem] = Field(default_factory=list)
     remove_filters: list[str] = Field(default_factory=list)
@@ -73,30 +78,3 @@ class ContextDelta(BaseModel):
     replace_limit: int | None = None
     replace_analysis_mode: str | None = None
 
-
-class SortItem(BaseModel):
-    field: str
-    order: SortOrder
-
-
-class QueryPlan(BaseModel):
-    question_type: QuestionType
-    subject_domain: SubjectDomain
-    tables: list[str] = Field(default_factory=list)
-    entities: list[str] = Field(default_factory=list)
-    metrics: list[str] = Field(default_factory=list)
-    dimensions: list[str] = Field(default_factory=list)
-    filters: list[FilterItem] = Field(default_factory=list)
-    join_path: list[str] = Field(default_factory=list)
-    time_context: TimeContext = Field(default_factory=TimeContext)
-    version_context: VersionContext | None = None
-    inherit_context: bool = False
-    context_delta: ContextDelta = Field(default_factory=ContextDelta)
-    need_clarification: bool = False
-    clarification_question: str | None = None
-    reason_code: str | None = None
-    analysis_mode: str | None = None
-    sort: list[SortItem] = Field(default_factory=list)
-    limit: int = 200
-    reason: str | None = None
-    semantic_brief: str | None = None

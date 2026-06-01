@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .query_plan import FilterItem, QueryPlan, SortItem, SubjectDomain, TimeContext, VersionContext
+from .context_summary import ContextSummary
+from .semantic_types import ContextDelta, FilterItem, QuestionType, SortItem, SubjectDomain, TimeContext, VersionContext
 
 
 class QueryTurnRecord(BaseModel):
@@ -18,6 +19,26 @@ class PendingClarification(BaseModel):
     effective_question: str | None = None
     semantic_brief: str | None = None
     reason: str | None = None
+
+
+class SessionStateUpdate(BaseModel):
+    question_type: QuestionType
+    subject_domain: SubjectDomain
+    entities: list[str] = Field(default_factory=list)
+    tables: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    filters: list[FilterItem] = Field(default_factory=list)
+    sort: list[SortItem] = Field(default_factory=list)
+    limit: int | None = None
+    time_context: TimeContext = Field(default_factory=TimeContext)
+    version_context: VersionContext | None = None
+    analysis_mode: str | None = None
+    inherit_context: bool = False
+    context_delta: ContextDelta = Field(default_factory=ContextDelta)
+    need_clarification: bool = False
+    clarification_question: str | None = None
+    semantic_brief: str | None = None
 
 
 class SessionState(BaseModel):
@@ -36,7 +57,7 @@ class SessionState(BaseModel):
     version_context: VersionContext | None = None
     analysis_mode: str | None = None
     last_question_type: str | None = None
-    last_query_plan: QueryPlan | None = None
+    last_context_summary: ContextSummary | None = None
     last_sql: str | None = None
     last_result_shape: str | None = None
     last_semantic_brief: str | None = None

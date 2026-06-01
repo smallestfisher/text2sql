@@ -44,7 +44,7 @@ class DbRuntimeLogRepository:
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
                    effective_question, context_relation, question_decision,
                    conversation_summary, semantic_brief, question_context_json,
-                   answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
+                   answer_status, context_valid, context_risk_level, context_risk_flags_json,
                    sql_valid, sql_risk_level, sql_risk_flags_json,
                    executed, row_count, warnings_json, trace_json, created_at
             FROM query_logs
@@ -59,7 +59,7 @@ class DbRuntimeLogRepository:
             records = [
                 record
                 for record in records
-                if risk_flag in record.plan_risk_flags or risk_flag in record.sql_risk_flags
+                if risk_flag in record.context_risk_flags or risk_flag in record.sql_risk_flags
             ]
         return records[:limit]
 
@@ -69,7 +69,7 @@ class DbRuntimeLogRepository:
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
                    effective_question, context_relation, question_decision,
                    conversation_summary, semantic_brief, question_context_json,
-                   answer_status, plan_valid, plan_risk_level, plan_risk_flags_json,
+                   answer_status, context_valid, context_risk_level, context_risk_flags_json,
                    sql_valid, sql_risk_level, sql_risk_flags_json,
                    executed, row_count, warnings_json, trace_json, created_at
             FROM query_logs
@@ -82,7 +82,7 @@ class DbRuntimeLogRepository:
     def summarize_query_risks(self, limit: int = 200) -> dict:
         rows = self.database_connector.fetch_all(
             """
-            SELECT subject_domain, plan_risk_level, plan_risk_flags_json, sql_risk_level, sql_risk_flags_json
+            SELECT subject_domain, context_risk_level, context_risk_flags_json, sql_risk_level, sql_risk_flags_json
             FROM query_logs
             ORDER BY created_at DESC, trace_id DESC
             LIMIT :limit
@@ -93,11 +93,11 @@ class DbRuntimeLogRepository:
         by_risk_flag: dict[str, int] = {}
         by_subject_domain: dict[str, int] = {}
         for row in rows:
-            risk_level = row.get("sql_risk_level") or row.get("plan_risk_level") or "low"
+            risk_level = row.get("sql_risk_level") or row.get("context_risk_level") or "low"
             by_risk_level[risk_level] = by_risk_level.get(risk_level, 0) + 1
             subject_domain = row.get("subject_domain") or "unknown"
             by_subject_domain[subject_domain] = by_subject_domain.get(subject_domain, 0) + 1
-            for flag in json_loads(row.get("plan_risk_flags_json"), []) + json_loads(row.get("sql_risk_flags_json"), []):
+            for flag in json_loads(row.get("context_risk_flags_json"), []) + json_loads(row.get("sql_risk_flags_json"), []):
                 by_risk_flag[flag] = by_risk_flag.get(flag, 0) + 1
         return {
             "total_queries": len(rows),
@@ -160,7 +160,7 @@ class DbRuntimeLogRepository:
     def get_sql_audit(self, trace_id: str) -> RuntimeSqlAuditRecord | None:
         row = self.database_connector.fetch_one(
             """
-            SELECT sql_audit_id, trace_id, sql_text, plan_valid, plan_risk_level, plan_risk_flags_json,
+            SELECT sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
                    sql_valid,
                    sql_risk_level, sql_risk_flags_json, executed,
                    row_count, warnings_json, errors_json, created_at
@@ -177,9 +177,9 @@ class DbRuntimeLogRepository:
             sql_audit_id=row["sql_audit_id"],
             trace_id=row["trace_id"],
             sql_text=row["sql_text"],
-            plan_valid=bool(row["plan_valid"]),
-            plan_risk_level=row.get("plan_risk_level"),
-            plan_risk_flags=json_loads(row.get("plan_risk_flags_json"), []),
+            context_valid=bool(row["context_valid"]),
+            context_risk_level=row.get("context_risk_level"),
+            context_risk_flags=json_loads(row.get("context_risk_flags_json"), []),
             sql_valid=bool(row["sql_valid"]),
             sql_risk_level=row.get("sql_risk_level"),
             sql_risk_flags=json_loads(row.get("sql_risk_flags_json"), []),
@@ -200,7 +200,7 @@ class DbRuntimeLogRepository:
         question_type: str | None,
         subject_domain: str | None,
         answer_status: str | None,
-        plan_validation: ValidationResponse,
+        context_validation: ValidationResponse,
         sql_validation: ValidationResponse,
         execution: ExecutionResponse | None,
         warnings: list[str],
@@ -215,9 +215,9 @@ class DbRuntimeLogRepository:
                 question_type = :question_type,
                 subject_domain = :subject_domain,
                 answer_status = :answer_status,
-                plan_valid = :plan_valid,
-                plan_risk_level = :plan_risk_level,
-                plan_risk_flags_json = :plan_risk_flags_json,
+                context_valid = :context_valid,
+                context_risk_level = :context_risk_level,
+                context_risk_flags_json = :context_risk_flags_json,
                 sql_valid = :sql_valid,
                 sql_risk_level = :sql_risk_level,
                 sql_risk_flags_json = :sql_risk_flags_json,
@@ -234,9 +234,9 @@ class DbRuntimeLogRepository:
                 "question_type": question_type,
                 "subject_domain": subject_domain,
                 "answer_status": answer_status,
-                "plan_valid": plan_validation.valid,
-                "plan_risk_level": plan_validation.risk_level,
-                "plan_risk_flags_json": json.dumps(plan_validation.risk_flags, ensure_ascii=False),
+                "context_valid": context_validation.valid,
+                "context_risk_level": context_validation.risk_level,
+                "context_risk_flags_json": json.dumps(context_validation.risk_flags, ensure_ascii=False),
                 "sql_valid": sql_validation.valid,
                 "sql_risk_level": sql_validation.risk_level,
                 "sql_risk_flags_json": json.dumps(sql_validation.risk_flags, ensure_ascii=False),
@@ -291,7 +291,7 @@ class DbRuntimeLogRepository:
         *,
         trace_id: str,
         sql: str | None,
-        plan_validation: ValidationResponse,
+        context_validation: ValidationResponse,
         sql_validation: ValidationResponse,
         execution: ExecutionResponse | None,
     ) -> None:
@@ -302,10 +302,10 @@ class DbRuntimeLogRepository:
         self.database_connector.execute_write(
             """
             INSERT INTO sql_audit_logs (
-                sql_audit_id, trace_id, sql_text, plan_valid, plan_risk_level, plan_risk_flags_json,
+                sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
                 sql_valid, executed, sql_risk_level, sql_risk_flags_json, row_count, warnings_json, errors_json, created_at
             ) VALUES (
-                :sql_audit_id, :trace_id, :sql_text, :plan_valid, :plan_risk_level, :plan_risk_flags_json,
+                :sql_audit_id, :trace_id, :sql_text, :context_valid, :context_risk_level, :context_risk_flags_json,
                 :sql_valid, :executed, :sql_risk_level, :sql_risk_flags_json, :row_count, :warnings_json, :errors_json, :created_at
             )
             """,
@@ -313,9 +313,9 @@ class DbRuntimeLogRepository:
                 "sql_audit_id": f"sa_{uuid.uuid4().hex[:16]}",
                 "trace_id": trace_id,
                 "sql_text": sql,
-                "plan_valid": plan_validation.valid,
-                "plan_risk_level": plan_validation.risk_level,
-                "plan_risk_flags_json": json.dumps(plan_validation.risk_flags, ensure_ascii=False),
+                "context_valid": context_validation.valid,
+                "context_risk_level": context_validation.risk_level,
+                "context_risk_flags_json": json.dumps(context_validation.risk_flags, ensure_ascii=False),
                 "sql_valid": sql_validation.valid,
                 "sql_risk_level": sql_validation.risk_level,
                 "sql_risk_flags_json": json.dumps(sql_validation.risk_flags, ensure_ascii=False),
@@ -325,7 +325,7 @@ class DbRuntimeLogRepository:
                     sql_validation.warnings + (execution.warnings if execution is not None else []),
                     ensure_ascii=False,
                 ),
-                "errors_json": json.dumps(plan_validation.errors + sql_validation.errors, ensure_ascii=False),
+                "errors_json": json.dumps(context_validation.errors + sql_validation.errors, ensure_ascii=False),
                 "created_at": datetime.utcnow(),
             },
         )
@@ -354,14 +354,15 @@ class DbRuntimeLogRepository:
             question_type=row.get("question_type"),
             subject_domain=row.get("subject_domain"),
             answer_status=row.get("answer_status"),
-            plan_valid=bool(row["plan_valid"]) if row.get("plan_valid") is not None else None,
-            plan_risk_level=row.get("plan_risk_level"),
-            plan_risk_flags=json_loads(row.get("plan_risk_flags_json"), []),
+            context_valid=bool(row["context_valid"]) if row.get("context_valid") is not None else None,
+            context_risk_level=row.get("context_risk_level"),
+            context_risk_flags=json_loads(row.get("context_risk_flags_json"), []),
             sql_valid=bool(row["sql_valid"]) if row.get("sql_valid") is not None else None,
             sql_risk_level=row.get("sql_risk_level"),
             sql_risk_flags=json_loads(row.get("sql_risk_flags_json"), []),
             executed=bool(row["executed"]) if row.get("executed") is not None else None,
             row_count=row.get("row_count"),
+            total_elapsed_ms=self._extract_total_elapsed_ms(trace_payload),
             warnings=json_loads(row.get("warnings_json"), []),
             prompt_context_summary=self._extract_prompt_context_summary(trace_payload),
             created_at=as_datetime(row["created_at"]),
@@ -386,3 +387,13 @@ class DbRuntimeLogRepository:
             if isinstance(question_context, dict):
                 return question_context
         return {}
+
+    def _extract_total_elapsed_ms(self, trace_payload: dict) -> int | None:
+        for step in trace_payload.get("steps", []):
+            if step.get("name") != "chat_total":
+                continue
+            metadata = step.get("metadata") or {}
+            elapsed_ms = metadata.get("elapsed_ms")
+            if isinstance(elapsed_ms, (int, float)):
+                return int(elapsed_ms)
+        return None

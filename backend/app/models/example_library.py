@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .query_plan import FilterItem, QuestionType, SubjectDomain
+from .semantic_types import FilterItem, QuestionType, SubjectDomain
 
 
 class ExampleRecord(BaseModel):

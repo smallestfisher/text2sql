@@ -17,13 +17,15 @@ from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecor
 from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.conversation import ChatMessage, ChatSession
-from backend.app.models.query_plan import QueryPlan
+
+from backend.app.models.context_summary import ContextSummary
 from backend.app.models.session_state import SessionState
 from backend.app.models.trace import TraceRecord
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.progress_service import ProgressService
+from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.session_workspace_service import SessionWorkspaceService
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.llm_client import LLMClient, sqlglot as llm_sqlglot
@@ -87,6 +89,28 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         self.assertTrue(
             all(document["metadata"].get("table") for document in table_schema_documents)
         )
+
+    def test_example_vector_documents_include_sql_structure(self) -> None:
+        domain_config = DomainConfigLoader().load()
+        service = RetrievalService(domain_config=domain_config)
+
+        document = next(
+            item
+            for item in service.corpus_documents
+            if item["source_type"] == "example"
+            and item["source_id"] == "demand_latest5_p_202604_top_fgcode_001"
+        )
+
+        text = document["text"]
+        sql_features = document["metadata"]["sql_features"]
+
+        self.assertIn("sql_outline:", text)
+        self.assertIn("union_all_unpivot", text)
+        self.assertIn("regexp_version_parse", text)
+        self.assertIn("REQUIREMENT_QTY", text)
+        self.assertIn("MONTH7", text)
+        self.assertIn("PM_VERSION", sql_features["referenced_fields"])
+        self.assertIn("union_all_unpivot", sql_features["sql_patterns"])
 
     def test_retrieval_service_raises_when_vector_client_is_missing(self) -> None:
         domain_config = DomainConfigLoader().load()
@@ -170,6 +194,44 @@ class DatabaseConnectorFailFastTests(unittest.TestCase):
         self.assertIn("failed to apply session max execution time", execution.errors[0])
 
 
+class RuntimeQueryLogHydrationTests(unittest.TestCase):
+    def test_query_log_extracts_total_elapsed_ms_from_chat_total_step(self) -> None:
+        connector = type(
+            "FakeRuntimeConnector",
+            (),
+            {
+                "fetch_all": lambda _self, sql, params=None: [],
+                "execute_write": lambda _self, sql, params=None: 1,
+            },
+        )()
+        repository = DbRuntimeLogRepository(connector)
+
+        record = repository._hydrate_query_log(
+            {
+                "trace_id": "trace_elapsed",
+                "session_id": "session_1",
+                "user_id": "user_1",
+                "question": "latest inventory",
+                "question_type": "new",
+                "subject_domain": "inventory",
+                "answer_status": "ok",
+                "context_valid": True,
+                "context_risk_level": "low",
+                "context_risk_flags_json": "[]",
+                "sql_valid": True,
+                "sql_risk_level": "low",
+                "sql_risk_flags_json": "[]",
+                "executed": True,
+                "row_count": 1,
+                "warnings_json": "[]",
+                "trace_json": '{"steps":[{"name":"chat_total","status":"completed","metadata":{"elapsed_ms":1532}}]}',
+                "created_at": datetime.utcnow(),
+            }
+        )
+
+        self.assertEqual(record.total_elapsed_ms, 1532)
+
+
 class StreamingRouteTests(unittest.TestCase):
     def test_stream_emits_failed_event_when_background_task_raises(self) -> None:
         class FakeAuditService:
@@ -241,7 +303,7 @@ class StreamingRouteTests(unittest.TestCase):
                     raise AssertionError("expected cancellation token to be triggered")
                 self.cancelled = True
                 self.progress_service.complete(trace_id)
-                raise ClientCancelledError("client disconnected during planning")
+                raise ClientCancelledError("client disconnected during question_analysis")
 
         class FakeContainer:
             def __init__(self) -> None:
@@ -336,14 +398,12 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
             tables_path = Path(temp_dir) / "tables.json"
             business_path = Path(temp_dir) / "business.json"
             join_path = Path(temp_dir) / "join.json"
-            query_plan_path = Path(temp_dir) / "query_plan.schema.json"
             session_state_path = Path(temp_dir) / "session_state.schema.json"
             domain_config_path = Path(temp_dir) / "domain.json"
             atomic_write_text(examples_path, "{bad json\n")
             atomic_write_text(tables_path, "{}\n")
             atomic_write_text(business_path, "{\"entries\": []}\n")
             atomic_write_text(join_path, "{\"patterns\": []}\n")
-            atomic_write_text(query_plan_path, "{}\n")
             atomic_write_text(session_state_path, "{}\n")
             atomic_write_text(domain_config_path, "{}\n")
 
@@ -355,7 +415,6 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
                         "examples_template": examples_path,
                         "tables_metadata": tables_path,
                         "join_patterns": join_path,
-                        "query_plan_schema": query_plan_path,
                         "session_state_schema": session_state_path,
                     }
                 )
@@ -389,7 +448,7 @@ class SessionWorkspaceFailFastTests(unittest.TestCase):
         sql_audit = RuntimeSqlAuditRecord(
             sql_audit_id="audit_1",
             trace_id="trace_1",
-            plan_valid=True,
+            context_valid=True,
             sql_valid=True,
             executed=False,
             created_at=datetime.utcnow(),
@@ -413,9 +472,9 @@ class SessionWorkspaceFailFastTests(unittest.TestCase):
                 self.captured_session_state = session_state
                 return ChatResponse(
                     classification=QuestionClassification(question_type="new", subject_domain="unknown"),
-                    query_plan=QueryPlan(question_type="new", subject_domain="unknown"),
+                    context_summary=ContextSummary(subject_domain="unknown"),
                     sql=None,
-                    plan_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+                    context_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
                     sql_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
                     execution=None,
                     next_session_state=session_state or SessionState(session_id="sess_1"),

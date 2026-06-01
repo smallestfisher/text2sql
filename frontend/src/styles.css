@@ -700,6 +700,19 @@ button {
   justify-content: flex-end;
 }
 
+.admin-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-status-message {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid rgba(149, 174, 255, 0.08);
+}
+
 .admin-hero-panel {
   position: sticky;
   top: 0;

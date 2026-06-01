@@ -7,6 +7,8 @@ import type {
   EvaluationSummary,
   LoginResponse,
   MetadataOverview,
+  AdminMetadataReloadResponse,
+  AdminVectorPrewarmResponse,
   RoleRecord,
   RuntimeQueryLogCollectionResponse,
   RuntimeSessionCollectionResponse,
@@ -245,6 +247,18 @@ export const api = {
   },
   adminMetadataOverview(token: string): Promise<MetadataOverview> {
     return request("/api/admin/metadata/overview", { token });
+  },
+  adminReloadMetadata(token: string): Promise<AdminMetadataReloadResponse> {
+    return request("/api/admin/metadata/reload", {
+      method: "POST",
+      token,
+    });
+  },
+  adminPrewarmVectorIndex(token: string): Promise<AdminVectorPrewarmResponse> {
+    return request("/api/admin/runtime/vector/prewarm", {
+      method: "POST",
+      token,
+    });
   },
   adminUsers(token: string): Promise<UserContext[]> {
     return request("/api/admin/users", { token });

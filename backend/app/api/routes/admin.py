@@ -105,7 +105,11 @@ def update_metadata_document(
     container: AppContainer = Depends(get_container),
 ) -> MetadataDocument:
     try:
-        return container.metadata_service.update_document(name, request.content)
+        return container.metadata_service.update_document(
+            name,
+            request.content,
+            retrieval_service=container.retrieval_service,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="metadata document not found") from exc
 

@@ -7,8 +7,10 @@ import type {
   EvaluationReplayResult,
   EvaluationSummary,
   FeedbackSummary,
+  AdminMetadataReloadResponse,
+  AdminVectorPrewarmResponse,
+  ContextSummary,
   MetadataOverview,
-  QueryPlan,
   RoleRecord,
   RuntimeQueryLogRecord,
   RuntimeSqlAuditRecord,
@@ -32,7 +34,7 @@ const PROMPTS = [
 const PROGRESS_BASE_STAGES = [
   "accepted",
   "load_session",
-  "planning",
+  "question_analysis",
   "retrieval",
   "sql_generation",
   "sql_validation",
@@ -50,9 +52,9 @@ const PROGRESS_STAGE_META: Record<string, { label: string; note: string; icon: s
     note: "恢复当前会话状态，补足上一轮上下文和筛选条件。",
     icon: "↺",
   },
-  planning: {
+  question_analysis: {
     label: "问题上下文",
-    note: "识别追问关系，改写完整问题，并生成本轮 plan shell。",
+    note: "识别追问关系，改写完整问题，并生成本轮上下文摘要。",
     icon: "◎",
   },
   retrieval: {
@@ -62,7 +64,7 @@ const PROGRESS_STAGE_META: Record<string, { label: string; note: string; icon: s
   },
   sql_generation: {
     label: "生成 SQL",
-    note: "结合可用表、检索上下文和 plan shell 生成候选 SQL。",
+    note: "结合可用表、检索证据和安全约束生成候选 SQL。",
     icon: "Σ",
   },
   sql_validation: {
@@ -159,6 +161,8 @@ function App() {
   const [adminSessions, setAdminSessions] = useState<ChatSession[]>([]);
   const [adminReplayPendingTraceId, setAdminReplayPendingTraceId] = useState<string | null>(null);
   const [adminReplayResult, setAdminReplayResult] = useState<EvaluationReplayResult | null>(null);
+  const [adminIndexActionPending, setAdminIndexActionPending] = useState<"" | "reload" | "prewarm" | "reload_prewarm">("");
+  const [adminIndexActionMessage, setAdminIndexActionMessage] = useState("");
   const [userForm, setUserForm] = useState<UserUpsertPayload>(emptyUserForm);
   const [resetPasswordTarget, setResetPasswordTarget] = useState<UserContext | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
@@ -564,6 +568,56 @@ function App() {
     }
   }
 
+  function formatIndexActionMessage(
+    mode: "reload" | "prewarm" | "reload_prewarm",
+    reloadResult?: AdminMetadataReloadResponse | null,
+    prewarmResult?: AdminVectorPrewarmResponse | null,
+  ) {
+    if (mode === "reload") {
+      return reloadResult?.reloaded
+        ? `元数据已重载${reloadResult.semantic_version ? `，语义版本 ${reloadResult.semantic_version}` : ""}。`
+        : "元数据重载请求已完成。";
+    }
+    if (mode === "prewarm") {
+      return prewarmResult?.accepted
+        ? `向量索引预热已触发，当前${prewarmResult.pending_rebuild ? "仍有待重建任务" : "状态已同步"}。`
+        : "向量索引预热请求已完成。";
+    }
+    return [
+      reloadResult?.reloaded
+        ? `元数据已重载${reloadResult.semantic_version ? `，语义版本 ${reloadResult.semantic_version}` : ""}`
+        : "元数据重载已完成",
+      prewarmResult?.accepted
+        ? `向量索引已预热${prewarmResult.pending_rebuild ? "，仍有待重建任务" : ""}`
+        : "向量索引预热请求已完成",
+    ].join("；");
+  }
+
+  async function handleAdminIndexAction(mode: "reload" | "prewarm" | "reload_prewarm") {
+    if (!token) {
+      return;
+    }
+    setAdminError("");
+    setAdminIndexActionMessage("");
+    setAdminIndexActionPending(mode);
+    try {
+      let reloadResult: AdminMetadataReloadResponse | null = null;
+      let prewarmResult: AdminVectorPrewarmResponse | null = null;
+      if (mode === "reload" || mode === "reload_prewarm") {
+        reloadResult = await api.adminReloadMetadata(token);
+      }
+      if (mode === "prewarm" || mode === "reload_prewarm") {
+        prewarmResult = await api.adminPrewarmVectorIndex(token);
+      }
+      await loadAdminData(token);
+      setAdminIndexActionMessage(formatIndexActionMessage(mode, reloadResult, prewarmResult));
+    } catch (error) {
+      setAdminError(errorMessage(error));
+    } finally {
+      setAdminIndexActionPending("");
+    }
+  }
+
   async function handleAdminUserSave() {
     const username = userForm.username.trim();
     if (!token || !username) {
@@ -871,6 +925,8 @@ function App() {
               evaluationSummary={adminEvalSummary}
               replayPendingTraceId={adminReplayPendingTraceId}
               replayResult={adminReplayResult}
+              indexActionPending={adminIndexActionPending}
+              indexActionMessage={adminIndexActionMessage}
               userForm={userForm}
               onUserFormChange={setUserForm}
               onSaveUser={() => void handleAdminUserSave()}
@@ -879,6 +935,9 @@ function App() {
               onResetPassword={(user) => void handleAdminResetPassword(user)}
               onDeleteUser={(user) => void handleAdminDeleteUser(user)}
               onReplayLog={(log) => void handleAdminReplayLog(log)}
+              onReloadMetadata={() => void handleAdminIndexAction("reload")}
+              onPrewarmVector={() => void handleAdminIndexAction("prewarm")}
+              onReloadAndPrewarm={() => void handleAdminIndexAction("reload_prewarm")}
               onRefresh={() => token && void loadAdminData(token)}
             />
           </main>
@@ -939,7 +998,7 @@ function App() {
                       <div className="welcome-card">
                         <div className="welcome-title">把业务问题直接说出来</div>
                         <div className="welcome-copy">
-                          系统会按会话上下文自动补足语义，生成 Query Plan、SQL、执行结果和 Trace。
+                          系统会按会话上下文自动补足语义，生成 SQL、执行结果和 Trace。
                         </div>
                       </div>
 
@@ -1213,6 +1272,8 @@ function AdminView(props: {
   evaluationSummary: EvaluationSummary | null;
   replayPendingTraceId: string | null;
   replayResult: EvaluationReplayResult | null;
+  indexActionPending: "" | "reload" | "prewarm" | "reload_prewarm";
+  indexActionMessage: string;
   userForm: UserUpsertPayload;
   onUserFormChange: (value: UserUpsertPayload) => void;
   onSaveUser: () => void;
@@ -1221,10 +1282,14 @@ function AdminView(props: {
   onResetPassword: (user: UserContext) => void;
   onDeleteUser: (user: UserContext) => void;
   onReplayLog: (log: RuntimeQueryLogRecord) => void;
+  onReloadMetadata: () => void;
+  onPrewarmVector: () => void;
+  onReloadAndPrewarm: () => void;
   onRefresh: () => void;
 }) {
   const vectorStatus = props.runtimeStatus?.vector_retrieval;
   const retrievalCorpusStatus = props.runtimeStatus?.retrieval_corpus;
+  const vectorSyncStatus = retrievalCorpusStatus?.vector_sync;
   const runtimeEntries = props.runtimeStatus
     ? [
         ["业务库", describeHealth(props.runtimeStatus.business_database)],
@@ -1302,15 +1367,51 @@ function AdminView(props: {
           </article>
 
           <article className="detail-card admin-card">
-            <div className="detail-title">向量预热</div>
+            <div className="panel-row">
+              <div className="detail-title">检索索引</div>
+              <div className="admin-inline-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={props.onReloadMetadata}
+                  disabled={Boolean(props.indexActionPending)}
+                >
+                  {props.indexActionPending === "reload" ? "重载中" : "重载元数据"}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={props.onPrewarmVector}
+                  disabled={Boolean(props.indexActionPending)}
+                >
+                  {props.indexActionPending === "prewarm" ? "预热中" : "重建向量索引"}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={props.onReloadAndPrewarm}
+                  disabled={Boolean(props.indexActionPending)}
+                >
+                  {props.indexActionPending === "reload_prewarm" ? "处理中" : "重载并重建"}
+                </button>
+              </div>
+            </div>
+            <div className="detail-copy">
+              样例、知识库和 join pattern 更新后，可在这里显式刷新检索语料并同步向量索引。
+            </div>
             <div className="meta-stack">
               <MetaRow label="当前状态" value={describeVectorWarmStatus(vectorStatus)} />
               <MetaRow label="Provider" value={vectorStatus?.provider || "-"} />
               <MetaRow label="模型" value={vectorStatus?.model || "-"} />
               <MetaRow label="已索引文档" value={String(vectorStatus?.indexed_document_count ?? 0)} />
               <MetaRow label="当前语料文档" value={String(retrievalCorpusStatus?.document_count ?? 0)} />
-              <MetaRow label="最后错误" value={vectorStatus?.last_index_error || "-"} />
+              <MetaRow label="待重建" value={describePendingRebuild(vectorSyncStatus?.pending_rebuild)} />
+              <MetaRow label="上次同步" value={formatDate(vectorSyncStatus?.vector_sync_last_updated_at) || "-"} />
+              <MetaRow label="本次重建文档" value={String(vectorSyncStatus?.rebuilt_document_count ?? 0)} />
+              <MetaRow label="本次复用文档" value={String(vectorSyncStatus?.reused_document_count ?? 0)} />
+              <MetaRow label="最后错误" value={vectorSyncStatus?.error || vectorStatus?.last_index_error || "-"} />
             </div>
+            {props.indexActionMessage ? <div className="detail-copy admin-status-message">{props.indexActionMessage}</div> : null}
           </article>
         </div>
 
@@ -1532,7 +1633,7 @@ function AdminView(props: {
               <div className="stats-row">
                 <div className="compact-stat">
                   <span>规划校验</span>
-                  <strong>{props.replayResult.response.plan_validation.valid ? "通过" : "失败"}</strong>
+                  <strong>{props.replayResult.response.context_validation.valid ? "通过" : "失败"}</strong>
                 </div>
                 <div className="compact-stat">
                   <span>SQL 校验</span>
@@ -1741,7 +1842,9 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
   const execution = props.latestResponse.execution;
   const retrieval = props.latestResponse.retrieval;
   const questionContext = props.latestResponse.question_context;
+  const contextSummary = props.latestResponse.context_summary;
   const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
+  const requestElapsedMs = getRequestElapsedMs(props.latestTrace) ?? execution?.elapsed_ms ?? null;
 
   return (
     <section className="tab-panel">
@@ -1783,7 +1886,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
         </div>
         <div className="compact-stat">
           <span>耗时</span>
-          <strong>{execution?.elapsed_ms ? `${execution.elapsed_ms} ms` : "-"}</strong>
+          <strong>{requestElapsedMs ? `${requestElapsedMs} ms` : "-"}</strong>
         </div>
       </div>
 
@@ -1810,11 +1913,11 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       </div>
 
       <div className="detail-card">
-        <div className="detail-title">分类与计划</div>
+        <div className="detail-title">分类与上下文</div>
         <div className="meta-stack">
           <MetaRow label="问题类型" value={props.latestResponse.classification.question_type || "-"} />
           <MetaRow label="业务域" value={props.latestResponse.classification.subject_domain || "-"} />
-          <MetaRow label="Plan Shell" value={describePlanShell(props.latestResponse.query_plan)} />
+          <MetaRow label="上下文摘要" value={describeContextSummary(contextSummary)} />
           <MetaRow label="原因码" value={props.latestResponse.classification.reason_code || "-"} />
         </div>
       </div>
@@ -1822,7 +1925,7 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
       <div className="detail-card">
         <div className="detail-title">检索摘要</div>
         <div className="meta-stack">
-          <MetaRow label="规划校验" value={props.latestResponse.plan_validation.valid ? "通过" : "未通过"} />
+          <MetaRow label="上下文校验" value={props.latestResponse.context_validation.valid ? "通过" : "未通过"} />
           <MetaRow label="业务域" value={(retrieval?.domains || []).join(", ") || "-"} />
           <MetaRow label="指标" value={(retrieval?.metrics || []).join(", ") || "-"} />
           <MetaRow label="知识来源" value={promptSummary.businessKnowledgeSource || "-"} />
@@ -1840,13 +1943,16 @@ function SqlPanel(props: {
   sessionState: SessionState | null;
 }) {
   const sql = props.latestResponse?.sql || props.latestSqlAudit?.sql_text || "";
-  const queryPlan = props.latestResponse?.query_plan || props.sessionState?.last_query_plan;
+  const contextSummary =
+    props.latestResponse?.context_summary ||
+    props.sessionState?.last_context_summary ||
+    null;
   const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
 
-  if (!sql && !queryPlan) {
+  if (!sql && !contextSummary) {
     return (
       <section className="tab-panel">
-        <div className="empty-card subtle-card">这里会展示 LLM 生成 SQL、校验信息和 plan shell。</div>
+        <div className="empty-card subtle-card">这里会展示 LLM 生成 SQL、校验信息和上下文摘要。</div>
       </section>
     );
   }
@@ -1887,8 +1993,8 @@ function SqlPanel(props: {
       </div>
 
       <div className="detail-card">
-        <div className="detail-title">Plan Shell</div>
-        <pre className="json-block">{JSON.stringify(queryPlan || {}, null, 2)}</pre>
+        <div className="detail-title">上下文摘要</div>
+        <pre className="json-block">{JSON.stringify(contextSummary || {}, null, 2)}</pre>
       </div>
     </section>
   );
@@ -2042,10 +2148,12 @@ function describeQuestionDecision(value: string | null | undefined) {
   return "-";
 }
 
-function describePlanShell(queryPlan: QueryPlan) {
-  const tables = queryPlan.tables.length ? `${queryPlan.tables.length} 表` : "等待检索选表";
-  const limit = queryPlan.limit ? `limit ${queryPlan.limit}` : "无行数限制";
-  return `${tables} · ${limit}`;
+function describeContextSummary(contextSummary?: ContextSummary | null) {
+  const tables = contextSummary?.tables || [];
+  const limit = contextSummary?.limit;
+  const tableText = tables.length ? `${tables.length} 表` : "等待检索选表";
+  const limitText = limit ? `limit ${limit}` : "无行数限制";
+  return `${tableText} · ${limitText}`;
 }
 
 function resolveDisplayDomain(input: {
@@ -2054,14 +2162,14 @@ function resolveDisplayDomain(input: {
   queryLog?: RuntimeQueryLogRecord | null;
 }) {
   return firstKnownDomain([
-    input.response?.query_plan?.subject_domain,
+    input.response?.context_summary?.subject_domain,
     input.response?.classification?.subject_domain,
     input.response?.question_context?.subject_domain,
     ...(input.response?.retrieval?.domains || []),
     input.sessionState?.subject_domain,
     input.sessionState?.topic,
     input.queryLog?.subject_domain,
-    inferDomainFromTables(input.response?.query_plan?.tables || input.sessionState?.tables || []),
+    inferDomainFromTables(input.response?.context_summary?.tables || input.sessionState?.tables || []),
   ]);
 }
 
@@ -2228,9 +2336,9 @@ function describeProgressStepNote(
     return "正在执行 SQL，并等待数据库返回结果。";
   }
   if (tone === "active" && stage === "sql_generation") {
-    return "正在根据 Query Plan 生成 SQL 语句。";
+    return "正在根据上下文生成 SQL 语句。";
   }
-  if (tone === "active" && stage === "planning") {
+  if (tone === "active" && stage === "question_analysis") {
     return "正在识别追问关系，并整理完整问题上下文。";
   }
   return getProgressStageMeta(stage).note;
@@ -2503,6 +2611,22 @@ function describeVectorWarmStatus(value: RuntimeStatus["vector_retrieval"] | nul
     return "预热失败";
   }
   return "等待初始化";
+}
+
+function describePendingRebuild(value: boolean | null | undefined) {
+  if (value == null) {
+    return "-";
+  }
+  return value ? "是" : "否";
+}
+
+function getRequestElapsedMs(trace: TraceRecord | null | undefined) {
+  if (!trace?.steps?.length) {
+    return null;
+  }
+  const chatTotalStep = trace.steps.find((step) => step.name === "chat_total");
+  const elapsedMs = chatTotalStep?.metadata?.elapsed_ms;
+  return typeof elapsedMs === "number" && Number.isFinite(elapsedMs) ? elapsedMs : null;
 }
 
 function parseAppDate(value?: string | null) {

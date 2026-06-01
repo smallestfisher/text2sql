@@ -50,25 +50,17 @@ export interface SortItem {
   order: string;
 }
 
-export interface QueryPlan {
-  question_type: string;
+export interface ContextSummary {
+  question_type?: string | null;
   subject_domain: string;
+  semantic_brief?: string | null;
   tables: string[];
-  entities: string[];
-  metrics: string[];
-  dimensions: string[];
-  filters: FilterItem[];
-  join_path: string[];
-  time_context: TimeContext;
-  version_context?: VersionContext | null;
-  inherit_context: boolean;
+  retrieval_domains: string[];
+  retrieval_metrics: string[];
+  limit?: number | null;
   need_clarification: boolean;
   clarification_question?: string | null;
-  reason_code?: string | null;
-  analysis_mode?: string | null;
-  sort: SortItem[];
-  limit: number;
-  reason?: string | null;
+  source: string;
 }
 
 export interface QuestionClassification {
@@ -185,7 +177,7 @@ export interface SessionState {
   version_context?: VersionContext | null;
   analysis_mode?: string | null;
   last_question_type?: string | null;
-  last_query_plan?: QueryPlan | null;
+  last_context_summary?: ContextSummary | null;
   last_sql?: string | null;
   last_result_shape?: string | null;
 }
@@ -196,9 +188,9 @@ export interface ChatResponse {
   retrieval?: RetrievalContext | null;
   trace?: TraceRecord | null;
   answer?: AnswerPayload | null;
-  query_plan: QueryPlan;
+  context_summary: ContextSummary;
   sql?: string | null;
-  plan_validation: ValidationResponse;
+  context_validation: ValidationResponse;
   sql_validation: ValidationResponse;
   execution?: ExecutionResponse | null;
   next_session_state: SessionState;
@@ -269,14 +261,15 @@ export interface RuntimeQueryLogRecord {
   question_type?: string | null;
   subject_domain?: string | null;
   answer_status?: string | null;
-  plan_valid?: boolean | null;
-  plan_risk_level?: string | null;
-  plan_risk_flags?: string[];
+  context_valid?: boolean | null;
+  context_risk_level?: string | null;
+  context_risk_flags?: string[];
   sql_valid?: boolean | null;
   sql_risk_level?: string | null;
   sql_risk_flags?: string[];
   executed?: boolean | null;
   row_count?: number | null;
+  total_elapsed_ms?: number | null;
   warnings: string[];
   prompt_context_summary?: Record<string, unknown>;
   created_at: string;
@@ -291,9 +284,9 @@ export interface RuntimeSqlAuditRecord {
   sql_audit_id: string;
   trace_id: string;
   sql_text?: string | null;
-  plan_valid: boolean;
-  plan_risk_level?: string | null;
-  plan_risk_flags?: string[];
+  context_valid: boolean;
+  context_risk_level?: string | null;
+  context_risk_flags?: string[];
   sql_valid: boolean;
   sql_risk_level?: string | null;
   sql_risk_flags?: string[];
@@ -361,7 +354,7 @@ export interface EvaluationReplayDiff {
   question_type_changed: boolean;
   subject_domain_changed: boolean;
   answer_status_changed: boolean;
-  plan_valid_changed: boolean;
+  context_valid_changed: boolean;
   sql_valid_changed: boolean;
   execution_status_changed: boolean;
   sql_changed: boolean;
@@ -392,6 +385,21 @@ export interface VectorRetrievalStatus {
   indexing: boolean;
   indexed_document_count: number;
   last_index_error?: string | null;
+  last_search_error?: string | null;
+  loaded_embedding_signature?: Record<string, unknown> | null;
+  configured_embedding_signature?: Record<string, unknown> | null;
+}
+
+export interface VectorSyncStatus {
+  persisted_document_count: number;
+  reused_document_count: number;
+  rebuilt_document_count: number;
+  deleted_document_count: number;
+  upserted_document_count: number;
+  vector_sync_last_updated_at?: string | null;
+  embedding_signature?: Record<string, unknown> | null;
+  error?: string | null;
+  pending_rebuild?: boolean;
 }
 
 export interface RetrievalCorpusStatus {
@@ -403,6 +411,18 @@ export interface RetrievalCorpusStatus {
   document_count_by_source: Record<string, number>;
   example_count: number;
   join_pattern_count: number;
+  vector_sync?: VectorSyncStatus | null;
+}
+
+export interface AdminMetadataReloadResponse {
+  semantic_version?: string | null;
+  reloaded: boolean;
+}
+
+export interface AdminVectorPrewarmResponse {
+  accepted: boolean;
+  vector_enabled: boolean;
+  pending_rebuild: boolean;
 }
 
 export interface RuntimeStatus {

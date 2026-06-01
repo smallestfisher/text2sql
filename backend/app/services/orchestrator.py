@@ -8,6 +8,7 @@ from backend.app.core.cancellation import CancellationToken
 from backend.app.core.exceptions import ClientCancelledError
 from backend.app.logging_config import clear_trace_id, set_trace_id
 from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.context_summary import ContextSummary
 from backend.app.models.progress import ProgressEvent
 from backend.app.models.session_state import PendingClarification, SessionState
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
@@ -17,7 +18,7 @@ from backend.app.services.conversation_persistence_service import ConversationPe
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.progress_service import ProgressService
 from backend.app.services.prompt_builder import PromptBuilder
-from backend.app.services.query_planner import QueryPlanner
+from backend.app.services.question_analysis_service import QuestionAnalysisService
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
@@ -33,7 +34,7 @@ SUPPORTED_SUBJECT_DOMAINS = {"inventory", "demand", "plan_actual", "sales_financ
 class ConversationOrchestrator:
     def __init__(
         self,
-        query_planner: QueryPlanner,
+        question_analysis_service: QuestionAnalysisService,
         session_state_service: SessionStateService,
         sql_validator: SqlValidator,
         sql_executor: SqlExecutor,
@@ -48,7 +49,7 @@ class ConversationOrchestrator:
         conversation_persistence_service: ConversationPersistenceService,
         domain_config: dict,
     ) -> None:
-        self.query_planner = query_planner
+        self.question_analysis_service = question_analysis_service
         self.session_state_service = session_state_service
         self.sql_validator = sql_validator
         self.sql_executor = sql_executor
@@ -76,11 +77,11 @@ class ConversationOrchestrator:
         session_state = request.session_state
         question_context = None
         classification = None
-        query_plan = None
+        sql_context = None
         retrieval = None
         sql = None
         execution = None
-        plan_validation: ValidationResponse | None = None
+        context_validation: ValidationResponse | None = None
         sql_validation: ValidationResponse | None = None
 
         try:
@@ -138,26 +139,26 @@ class ConversationOrchestrator:
             self._publish_progress(
                 trace.trace_id,
                 event_type="stage",
-                stage="planning",
+                stage="question_analysis",
                 status="running",
-                detail="building query plan",
+                detail="building question context",
             )
             stage_started_at = time.perf_counter()
-            planning_trace = self.query_planner.build_planning_trace(
+            analysis_trace = self.question_analysis_service.analyze_question(
                 question=request.question,
                 session_state=session_state,
                 cancellation_token=cancellation_token,
             )
-            self._log_timing(trace.trace_id, "planning", stage_started_at)
-            self._raise_if_cancelled(cancellation_token, stage="planning")
-            classification = planning_trace["classification"]
-            planning_warnings = planning_trace["warnings"]
-            effective_question = planning_trace.get("effective_question") or request.question
-            question_context = planning_trace["question_context"]
-            warnings.extend(planning_warnings)
+            self._log_timing(trace.trace_id, "question_analysis", stage_started_at)
+            self._raise_if_cancelled(cancellation_token, stage="question_analysis")
+            classification = analysis_trace["classification"]
+            analysis_warnings = analysis_trace["warnings"]
+            effective_question = analysis_trace.get("effective_question") or request.question
+            question_context = analysis_trace["question_context"]
+            warnings.extend(analysis_warnings)
 
             self._log_stage_io(
-                "planning",
+                "question_analysis",
                 inputs={
                     "question": request.question,
                     "effective_question": effective_question,
@@ -166,7 +167,7 @@ class ConversationOrchestrator:
                 outputs={
                     "question_context": self._question_context_summary(question_context),
                     "classification": self._classification_summary(classification),
-                    "warnings": planning_warnings,
+                    "warnings": analysis_warnings,
                 },
             )
 
@@ -179,43 +180,43 @@ class ConversationOrchestrator:
             )
 
             stage_started_at = time.perf_counter()
-            query_plan = self.query_planner.build_plan_shell(
+            sql_context = self.question_analysis_service.build_sql_context(
                 classification=classification,
                 session_state=session_state,
                 question_context=question_context,
             )
-            self._log_timing(trace.trace_id, "plan_shell", stage_started_at)
+            self._log_timing(trace.trace_id, "sql_context", stage_started_at)
             self._log_stage_io(
-                "plan_shell",
+                "sql_context",
                 inputs={
                     "classification": self._classification_summary(classification),
                 },
-                outputs={"query_plan": self._query_plan_summary(query_plan)},
+                outputs={"sql_context": self._sql_context_summary(sql_context)},
             )
             self.audit_service.append_step(
                 trace,
-                "plan",
+                "classification",
                 "completed",
                 classification.question_type,
                 metadata={
                     "classification": classification.model_dump(),
-                    "query_plan_summary": {
-                        "subject_domain": query_plan.subject_domain,
-                        "tables": query_plan.tables,
-                        "metrics": query_plan.metrics,
-                        "dimensions": query_plan.dimensions,
-                        "filter_fields": [item.field for item in query_plan.filters],
+                    "sql_context_summary": {
+                        "subject_domain": sql_context.subject_domain,
+                        "tables": sql_context.tables,
+                        "metrics": sql_context.metrics,
+                        "dimensions": sql_context.dimensions,
+                        "filter_fields": [item.field for item in sql_context.filters],
                     },
                 },
             )
             self._publish_progress(
                 trace.trace_id,
                 event_type="stage",
-                stage="planning",
+                stage="question_analysis",
                 status="completed",
                 detail=classification.question_type,
             )
-            self._sync_classification_with_query_plan(classification, query_plan)
+            self._sync_classification_with_sql_context(classification, sql_context)
             terminal_reason = self._pre_retrieval_terminal_skip_reason(classification)
             if terminal_reason is not None:
                 self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
@@ -227,12 +228,18 @@ class ConversationOrchestrator:
                     session_state=session_state,
                     question_context=question_context,
                     classification=classification,
-                    query_plan=query_plan,
+                    sql_context=sql_context,
                     warnings=warnings,
                     retrieval=None,
                     terminal_reason=terminal_reason,
                 )
-                self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                self.audit_service.append_step(
+                    trace,
+                    "chat_total",
+                    "completed",
+                    metadata={"elapsed_ms": total_elapsed_ms, "terminal": True},
+                )
                 return response
 
             self._publish_progress(
@@ -286,76 +293,76 @@ class ConversationOrchestrator:
             )
 
             stage_started_at = time.perf_counter()
-            classification, query_plan, question_context = self._apply_retrieval_domain_to_plan_shell(
+            classification, sql_context, question_context = self._apply_retrieval_domain_to_sql_context(
                 classification=classification,
-                query_plan=query_plan,
+                sql_context=sql_context,
                 question_context=question_context,
                 retrieval=retrieval,
             )
-            query_plan = self._apply_retrieval_tables_to_plan_shell(query_plan, retrieval)
-            classification, query_plan, question_context = self._apply_retrieval_support_to_clarification(
+            sql_context = self._apply_retrieval_tables_to_sql_context(sql_context, retrieval)
+            classification, sql_context, question_context = self._apply_retrieval_support_to_clarification(
                 classification=classification,
-                query_plan=query_plan,
+                sql_context=sql_context,
                 question_context=question_context,
                 retrieval=retrieval,
                 original_question=request.question,
             )
-            self._log_timing(trace.trace_id, "plan_shell_tables", stage_started_at)
-            self._raise_if_cancelled(cancellation_token, stage="plan shell table selection")
+            self._log_timing(trace.trace_id, "sql_context_tables", stage_started_at)
+            self._raise_if_cancelled(cancellation_token, stage="SQL context table selection")
             self._log_stage_io(
-                "plan_shell_tables",
+                "sql_context_tables",
                 inputs={"retrieval": self._retrieval_summary(retrieval)},
-                outputs={"query_plan": self._query_plan_summary(query_plan)},
+                outputs={"sql_context": self._sql_context_summary(sql_context)},
             )
             self.audit_service.append_step(
                 trace,
-                "plan_shell_tables",
+                "sql_context_tables",
                 "completed",
-                "query plan shell populated from retrieval tables",
-                metadata={"compiled_plan": query_plan.model_dump(mode="json")},
+                "SQL context populated from retrieval tables",
+                metadata={"sql_context": sql_context.model_dump(mode="json")},
             )
 
-            plan_errors: list[str] = []
-            plan_warnings: list[str] = []
+            context_errors: list[str] = []
+            context_warnings: list[str] = []
             self._log_stage_io(
-                "validate_plan",
-                inputs={"query_plan": self._query_plan_summary(query_plan)},
+                "validate_context",
+                inputs={"sql_context": self._sql_context_summary(sql_context)},
                 outputs={
-                    "valid": not plan_errors,
-                    "errors": plan_errors,
-                    "warnings": plan_warnings,
+                    "valid": not context_errors,
+                    "errors": context_errors,
+                    "warnings": context_warnings,
                     "risk_level": "low",
                     "risk_flags": [],
                 },
             )
             logger.info(
-                "plan validation skipped trace_id=%s valid=%s errors=%s warnings=%s",
+                "context validation skipped trace_id=%s valid=%s errors=%s warnings=%s",
                 trace.trace_id,
-                not plan_errors,
-                len(plan_errors),
-                len(plan_warnings),
+                not context_errors,
+                len(context_errors),
+                len(context_warnings),
             )
             self.audit_service.append_step(
                 trace,
-                "validate_plan",
+                "validate_context",
                 "skipped",
                 metadata={
-                    "error_count": len(plan_errors),
-                    "warning_count": len(plan_warnings),
-                    "errors": plan_errors,
-                    "warnings": plan_warnings,
-                    "reason": "query plan is a plan shell; SQL validation owns safety boundaries",
+                    "error_count": len(context_errors),
+                    "warning_count": len(context_warnings),
+                    "errors": context_errors,
+                    "warnings": context_warnings,
+                    "reason": "SQL context is evidence packaging; SQL validation owns safety boundaries",
                 },
             )
-            plan_validation = ValidationResponse(
+            context_validation = ValidationResponse(
                 valid=True,
                 errors=[],
                 warnings=warnings,
                 risk_level="low",
                 risk_flags=[],
             )
-            self._sync_classification_with_query_plan(classification, query_plan)
-            terminal_reason = self._terminal_skip_reason(classification, query_plan)
+            self._sync_classification_with_sql_context(classification, sql_context)
+            terminal_reason = self._terminal_skip_reason(classification, sql_context)
             if terminal_reason is not None:
                 self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
@@ -366,19 +373,25 @@ class ConversationOrchestrator:
                     session_state=session_state,
                     question_context=question_context,
                     classification=classification,
-                    query_plan=query_plan,
+                    sql_context=sql_context,
                     warnings=warnings,
                     retrieval=retrieval,
                     terminal_reason=terminal_reason,
-                    plan_validation=plan_validation,
+                    context_validation=context_validation,
                 )
-                self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                self.audit_service.append_step(
+                    trace,
+                    "chat_total",
+                    "completed",
+                    metadata={"elapsed_ms": total_elapsed_ms, "terminal": True},
+                )
                 return response
 
             llm_sql = None
             sql_hint_metadata = {"mode": "not_started", "used": False}
             sql_prompt = None
-            if not plan_errors:
+            if not context_errors:
                 self._publish_progress(
                     trace.trace_id,
                     event_type="stage",
@@ -388,7 +401,7 @@ class ConversationOrchestrator:
                 )
                 stage_started_at = time.perf_counter()
                 sql_prompt = self.prompt_builder.build_sql_prompt(
-                    query_plan,
+                    sql_context,
                     retrieval=retrieval,
                     question=effective_question,
                 )
@@ -398,7 +411,7 @@ class ConversationOrchestrator:
                     inputs={
                         "question": effective_question,
                         "original_question": request.question,
-                        "query_plan": self._query_plan_summary(query_plan),
+                        "sql_context": self._sql_context_summary(sql_context),
                         "retrieval": self._retrieval_summary(retrieval),
                     },
                     outputs={
@@ -450,7 +463,7 @@ class ConversationOrchestrator:
                 "generate_sql",
                 "completed" if sql else "skipped",
                 metadata={
-                    "used_sources": query_plan.tables,
+                    "used_sources": sql_context.tables,
                     "sql_visible": bool(sql),
                 },
             )
@@ -475,13 +488,14 @@ class ConversationOrchestrator:
                 trace.trace_id,
                 bool(sql),
                 (sql[:800] if sql else None),
-                query_plan.tables,
+                sql_context.tables,
             )
             stage_started_at = time.perf_counter()
             sql_result = (
                 self.sql_validator.validate_detailed(
                     sql,
                     self.domain_config,
+                    sql_context=sql_context,
                     required_filter_fields=required_filter_fields,
                 )
                 if sql is not None
@@ -507,7 +521,7 @@ class ConversationOrchestrator:
                 errors=sql_errors,
                 sql=sql,
                 llm_sql=llm_sql,
-                plan_errors=[],
+                context_errors=[],
                 sql_prompt=sql_prompt,
             )
             if validation_repair_allowed:
@@ -537,6 +551,7 @@ class ConversationOrchestrator:
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
                         self.domain_config,
+                        sql_context=sql_context,
                         required_filter_fields=required_filter_fields,
                     )
                     self._log_timing(trace.trace_id, "validate_repaired_sql", stage_started_at)
@@ -645,6 +660,7 @@ class ConversationOrchestrator:
                     repaired_sql_result = self.sql_validator.validate_detailed(
                         repaired_sql,
                         self.domain_config,
+                        sql_context=sql_context,
                         required_filter_fields=required_filter_fields,
                     )
                     self._log_timing(trace.trace_id, "validate_execution_repaired_sql", stage_started_at)
@@ -719,11 +735,11 @@ class ConversationOrchestrator:
             stage_started_at = time.perf_counter()
             answer = self.answer_builder.build(
                 classification=classification,
-                query_plan=query_plan,
                 execution=execution,
-                plan_validation=plan_validation,
+                context_validation=context_validation,
                 sql_validation=sql_validation,
                 user_context=request.user_context,
+                metrics=list(getattr(sql_context, "metrics", []) or []),
             )
             self._log_timing(trace.trace_id, "answer_building", stage_started_at)
             self._raise_if_cancelled(cancellation_token, stage="answer building")
@@ -732,7 +748,7 @@ class ConversationOrchestrator:
                 inputs={
                     "classification": self._classification_summary(classification),
                     "execution": self._execution_summary(execution),
-                    "plan_valid": plan_validation.valid if plan_validation else None,
+                    "context_valid": context_validation.valid if context_validation else None,
                     "sql_valid": sql_validation.valid if sql_validation else None,
                 },
                 outputs={
@@ -749,8 +765,9 @@ class ConversationOrchestrator:
             )
 
             stage_started_at = time.perf_counter()
+            state_update = self.session_state_service.update_from_sql_context(sql_context)
             next_session_state = self.session_state_service.build_next_state(
-                query_plan=query_plan,
+                update=state_update,
                 previous_state=session_state,
                 question=request.question,
                 effective_question=effective_question,
@@ -768,12 +785,17 @@ class ConversationOrchestrator:
             response = ChatResponse(
                 question_context=question_context,
                 classification=classification,
+                context_summary=self._context_summary(
+                    classification=classification,
+                    sql_context=sql_context,
+                    retrieval=retrieval,
+                    question_context=question_context,
+                ),
                 retrieval=retrieval,
                 trace=trace,
                 answer=answer,
-                query_plan=query_plan,
                 sql=sql,
-                plan_validation=plan_validation,
+                context_validation=context_validation,
                 sql_validation=sql_validation,
                 execution=execution,
                 next_session_state=next_session_state,
@@ -787,12 +809,18 @@ class ConversationOrchestrator:
                 warnings=warnings + sql_warnings,
             )
             self._log_timing(trace.trace_id, "persist_success", stage_started_at)
-            self._log_timing(trace.trace_id, "chat_total", chat_started_at)
+            total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at)
+            self.audit_service.append_step(
+                trace,
+                "chat_total",
+                "completed",
+                metadata={"elapsed_ms": total_elapsed_ms},
+            )
             logger.info(
-                "chat completed trace_id=%s answer_status=%s plan_valid=%s sql_valid=%s",
+                "chat completed trace_id=%s answer_status=%s context_valid=%s sql_valid=%s",
                 trace.trace_id,
                 answer.status if answer else None,
-                plan_validation.valid,
+                context_validation.valid,
                 sql_validation.valid,
             )
             self._publish_progress(
@@ -814,7 +842,7 @@ class ConversationOrchestrator:
                 classification=classification,
                 retrieval=retrieval,
                 question_context=question_context,
-                plan_validation=plan_validation,
+                context_validation=context_validation,
                 sql_validation=sql_validation,
                 execution=execution,
                 sql=sql,
@@ -837,7 +865,7 @@ class ConversationOrchestrator:
                 classification=classification,
                 retrieval=retrieval,
                 question_context=question_context,
-                plan_validation=plan_validation,
+                context_validation=context_validation,
                 sql_validation=sql_validation,
                 execution=execution,
                 sql=sql,
@@ -875,7 +903,8 @@ class ConversationOrchestrator:
             )
         )
 
-    def _log_timing(self, trace_id: str, stage: str, started_at: float, **metadata: object) -> None:
+    def _log_timing(self, trace_id: str, stage: str, started_at: float, **metadata: object) -> int:
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         metadata_parts = " ".join(
             f"{key}={self._preview_text(str(value), max_length=120)}"
             for key, value in metadata.items()
@@ -886,9 +915,10 @@ class ConversationOrchestrator:
             "timing trace_id=%s stage=%s elapsed_ms=%s%s",
             trace_id,
             stage,
-            int((time.perf_counter() - started_at) * 1000),
+            elapsed_ms,
             suffix,
         )
+        return elapsed_ms
 
     def _log_stage_io(
         self,
@@ -956,7 +986,7 @@ class ConversationOrchestrator:
         errors: list[str],
         sql: str | None,
         llm_sql: str | None,
-        plan_errors: list[str],
+        context_errors: list[str],
         sql_prompt: dict | None,
     ) -> tuple[bool, str]:
         if not errors:
@@ -965,8 +995,8 @@ class ConversationOrchestrator:
             return False, "sql_missing"
         if not llm_sql:
             return False, "sql_not_from_llm"
-        if plan_errors:
-            return False, "plan_has_errors"
+        if context_errors:
+            return False, "context_has_errors"
         if sql_prompt is None:
             return False, "sql_prompt_missing"
         non_repairable = [error for error in errors if not self._validation_error_is_repairable(error)]
@@ -1057,22 +1087,59 @@ class ConversationOrchestrator:
         }
 
     @staticmethod
-    def _query_plan_summary(query_plan) -> dict | None:
-        if query_plan is None:
+    def _sql_context_summary(sql_context) -> dict | None:
+        if sql_context is None:
             return None
         return {
-            "semantic_brief": query_plan.semantic_brief,
-            "question_type": query_plan.question_type,
-            "subject_domain": query_plan.subject_domain,
-            "tables": query_plan.tables,
-            "metrics": query_plan.metrics,
-            "dimensions": query_plan.dimensions,
-            "filter_fields": [item.field for item in query_plan.filters],
-            "join_path": query_plan.join_path,
-            "time_grain": query_plan.time_context.grain,
-            "limit": query_plan.limit,
-            "need_clarification": query_plan.need_clarification,
+            "semantic_brief": sql_context.semantic_brief,
+            "question_type": sql_context.question_type,
+            "subject_domain": sql_context.subject_domain,
+            "tables": sql_context.tables,
+            "metrics": sql_context.metrics,
+            "dimensions": sql_context.dimensions,
+            "filter_fields": [item.field for item in sql_context.filters],
+            "join_path": sql_context.join_path,
+            "time_grain": sql_context.time_context.grain,
+            "limit": sql_context.limit,
+            "need_clarification": sql_context.need_clarification,
         }
+
+    def _context_summary(
+        self,
+        *,
+        classification,
+        sql_context,
+        retrieval,
+        question_context,
+    ) -> ContextSummary:
+        semantic_brief = (
+            getattr(sql_context, "semantic_brief", None)
+            or getattr(question_context, "semantic_brief", None)
+            or getattr(question_context, "effective_question", None)
+        )
+        return ContextSummary(
+            question_type=getattr(classification, "question_type", None) or getattr(sql_context, "question_type", None),
+            subject_domain=(
+                getattr(sql_context, "subject_domain", None)
+                or getattr(classification, "subject_domain", None)
+                or getattr(question_context, "subject_domain", None)
+                or "unknown"
+            ),
+            semantic_brief=semantic_brief,
+            tables=list(getattr(sql_context, "tables", []) or []),
+            retrieval_domains=list(getattr(retrieval, "domains", []) or []),
+            retrieval_metrics=list(getattr(retrieval, "metrics", []) or []),
+            limit=getattr(sql_context, "limit", None),
+            need_clarification=bool(
+                getattr(sql_context, "need_clarification", False)
+                or getattr(classification, "need_clarification", False)
+            ),
+            clarification_question=(
+                getattr(sql_context, "clarification_question", None)
+                or getattr(classification, "clarification_question", None)
+                or getattr(question_context, "clarification_question", None)
+            ),
+        )
 
     @staticmethod
     def _question_context_summary(question_context) -> dict | None:
@@ -1125,30 +1192,30 @@ class ConversationOrchestrator:
             "warning_count": len(execution.warnings),
         }
 
-    def _sync_classification_with_query_plan(self, classification, query_plan) -> None:
+    def _sync_classification_with_sql_context(self, classification, sql_context) -> None:
         if classification.question_type == "invalid":
             return
-        if not query_plan.need_clarification:
+        if not sql_context.need_clarification:
             return
-        query_plan.question_type = "clarification_needed"
+        sql_context.question_type = "clarification_needed"
         classification.question_type = "clarification_needed"
         classification.need_clarification = True
         classification.inherit_context = False
-        classification.reason = query_plan.reason or classification.reason
-        classification.reason_code = query_plan.reason_code or classification.reason_code
+        classification.reason = sql_context.reason or classification.reason
+        classification.reason_code = sql_context.reason_code or classification.reason_code
         classification.clarification_question = (
-            query_plan.clarification_question
+            sql_context.clarification_question
             or classification.clarification_question
-            or query_plan.reason
+            or sql_context.reason
             or "请补充查询目标、时间范围或统计口径。"
         )
 
-    def _apply_retrieval_tables_to_plan_shell(self, query_plan, retrieval):
+    def _apply_retrieval_tables_to_sql_context(self, sql_context, retrieval):
         if retrieval is None:
-            return query_plan
-        tables = list(query_plan.tables)
+            return sql_context
+        tables = list(sql_context.tables)
         for hit in retrieval.hits:
-            if not self._hit_matches_domain(hit, query_plan.subject_domain):
+            if not self._hit_matches_domain(hit, sql_context.subject_domain):
                 continue
             metadata_tables = hit.metadata.get("tables", [])
             if isinstance(metadata_tables, list):
@@ -1158,20 +1225,20 @@ class ConversationOrchestrator:
             table = hit.metadata.get("table")
             if isinstance(table, str) and table and table not in tables:
                 tables.append(table)
-        if tables == query_plan.tables:
-            return query_plan
-        return query_plan.model_copy(deep=True, update={"tables": tables[:8]})
+        if tables == sql_context.tables:
+            return sql_context
+        return sql_context.model_copy(deep=True, update={"tables": tables[:8]})
 
-    def _apply_retrieval_domain_to_plan_shell(self, *, classification, query_plan, question_context, retrieval):
+    def _apply_retrieval_domain_to_sql_context(self, *, classification, sql_context, question_context, retrieval):
         resolved_domain = self._first_known_domain(
-            query_plan.subject_domain,
+            sql_context.subject_domain,
             classification.subject_domain,
             getattr(question_context, "subject_domain", None) if question_context is not None else None,
         )
         if resolved_domain is None and retrieval is not None:
             resolved_domain = self._single_retrieval_domain(retrieval)
         if resolved_domain is None:
-            return classification, query_plan, question_context
+            return classification, sql_context, question_context
 
         logger.info(
             "domain resolved subject_domain=%s retrieval_domains=%s",
@@ -1180,14 +1247,14 @@ class ConversationOrchestrator:
         )
         if classification.subject_domain == "unknown":
             classification = classification.model_copy(update={"subject_domain": resolved_domain})
-        if query_plan.subject_domain == "unknown":
-            query_plan = query_plan.model_copy(update={
+        if sql_context.subject_domain == "unknown":
+            sql_context = sql_context.model_copy(update={
                 "subject_domain": resolved_domain,
-                "limit": self.query_planner.semantic_runtime.default_limit(resolved_domain),
+                "limit": self.question_analysis_service.semantic_runtime.default_limit(resolved_domain),
             })
         if question_context is not None and getattr(question_context, "subject_domain", "unknown") == "unknown":
             question_context = question_context.model_copy(update={"subject_domain": resolved_domain})
-        return classification, query_plan, question_context
+        return classification, sql_context, question_context
 
     def _first_known_domain(self, *values: str | None) -> str | None:
         for value in values:
@@ -1220,7 +1287,7 @@ class ConversationOrchestrator:
             if isinstance(metadata_table, str):
                 table_names.append(metadata_table)
             for table_name in table_names:
-                for domain in self.query_planner.semantic_runtime.table_domains(table_name):
+                for domain in self.question_analysis_service.semantic_runtime.table_domains(table_name):
                     if domain != "unknown" and domain not in table_domains:
                         table_domains.append(domain)
         return self._single_primary_domain(table_domains)
@@ -1258,19 +1325,19 @@ class ConversationOrchestrator:
         self,
         *,
         classification,
-        query_plan,
+        sql_context,
         question_context,
         retrieval,
         original_question: str,
     ):
-        if not getattr(classification, "need_clarification", False) and not getattr(query_plan, "need_clarification", False):
-            return classification, query_plan, question_context
+        if not getattr(classification, "need_clarification", False) and not getattr(sql_context, "need_clarification", False):
+            return classification, sql_context, question_context
         if not self._retrieval_has_answer_support(retrieval):
-            return classification, query_plan, question_context
+            return classification, sql_context, question_context
 
         logger.info(
             "retrieval support resolved clarification trace_domain=%s hits=%s",
-            getattr(query_plan, "subject_domain", None),
+            getattr(sql_context, "subject_domain", None),
             len(getattr(retrieval, "hits", []) or []),
         )
         resolved_question_type = "follow_up" if getattr(question_context, "context_relation", "new") == "follow_up" else "new"
@@ -1281,7 +1348,7 @@ class ConversationOrchestrator:
             "reason_code": "retrieval_supported_answerable",
             "reason": getattr(question_context, "semantic_brief", None) or getattr(classification, "reason", None),
         })
-        query_plan = query_plan.model_copy(update={
+        sql_context = sql_context.model_copy(update={
             "question_type": resolved_question_type,
             "need_clarification": False,
             "clarification_question": None,
@@ -1294,7 +1361,7 @@ class ConversationOrchestrator:
                 "clarification_question": None,
                 "reason": "retrieval supplied semantic support after question-context clarification suggestion",
             })
-        return classification, query_plan, question_context
+        return classification, sql_context, question_context
 
     def _retrieval_has_answer_support(self, retrieval) -> bool:
         if retrieval is None:
@@ -1312,10 +1379,10 @@ class ConversationOrchestrator:
             return "terminal gate: invalid question, skip retrieval and SQL generation"
         return None
 
-    def _terminal_skip_reason(self, classification, query_plan) -> str | None:
+    def _terminal_skip_reason(self, classification, sql_context) -> str | None:
         if classification.question_type == "invalid":
             return "terminal gate: invalid question, skip retrieval and SQL generation"
-        if classification.need_clarification or query_plan.need_clarification:
+        if classification.need_clarification or sql_context.need_clarification:
             return "terminal gate: clarification required, skip SQL generation"
         return None
 
@@ -1327,11 +1394,11 @@ class ConversationOrchestrator:
         session_state: SessionState | None,
         question_context,
         classification,
-        query_plan,
+        sql_context,
         warnings: list[str],
         retrieval,
         terminal_reason: str,
-        plan_validation: ValidationResponse | None = None,
+        context_validation: ValidationResponse | None = None,
     ) -> ChatResponse:
         sql_validation = ValidationResponse(
             valid=True,
@@ -1340,8 +1407,8 @@ class ConversationOrchestrator:
             risk_level="low",
             risk_flags=[],
         )
-        if plan_validation is None:
-            plan_validation = ValidationResponse(
+        if context_validation is None:
+            context_validation = ValidationResponse(
                 valid=True,
                 errors=[],
                 warnings=warnings + [terminal_reason],
@@ -1350,11 +1417,11 @@ class ConversationOrchestrator:
             )
         answer = self.answer_builder.build(
             classification=classification,
-            query_plan=query_plan,
             execution=None,
-            plan_validation=plan_validation,
+            context_validation=context_validation,
             sql_validation=sql_validation,
             user_context=request.user_context,
+            metrics=list(getattr(sql_context, "metrics", []) or []),
         )
         next_session_state = self._terminal_session_state(
             session_state=session_state,
@@ -1367,12 +1434,17 @@ class ConversationOrchestrator:
         response = ChatResponse(
             question_context=question_context,
             classification=classification,
+            context_summary=self._context_summary(
+                classification=classification,
+                sql_context=sql_context,
+                retrieval=retrieval,
+                question_context=question_context,
+            ),
             retrieval=retrieval,
             trace=trace,
             answer=answer,
-            query_plan=query_plan,
             sql=None,
-            plan_validation=plan_validation,
+            context_validation=context_validation,
             sql_validation=sql_validation,
             execution=None,
             next_session_state=next_session_state,
@@ -1465,7 +1537,7 @@ class ConversationOrchestrator:
         classification,
         retrieval,
         question_context,
-        plan_validation: ValidationResponse | None,
+        context_validation: ValidationResponse | None,
         sql_validation: ValidationResponse | None,
         execution,
         sql: str | None,
@@ -1478,7 +1550,7 @@ class ConversationOrchestrator:
             classification=classification,
             retrieval=retrieval,
             question_context=question_context,
-            plan_validation=plan_validation,
+            context_validation=context_validation,
             sql_validation=sql_validation,
             execution=execution,
             sql=sql,

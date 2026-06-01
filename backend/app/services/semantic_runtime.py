@@ -4,10 +4,10 @@ from collections import deque
 import calendar
 import re
 
-from backend.app.models.query_plan import FilterItem
-from backend.app.models.query_plan import QueryPlan
-from backend.app.models.query_plan import SortItem
-from backend.app.models.query_plan import VersionContext
+from backend.app.models.semantic_types import FilterItem
+from backend.app.models.semantic_types import SortItem
+from backend.app.models.semantic_types import VersionContext
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.metadata_registry import MetadataRegistry
 
 
@@ -59,18 +59,18 @@ class SemanticRuntime:
             return default_value
         return min(limit, default_value)
 
-    def sanitize_query_plan(
+    def sanitize_sql_context(
         self,
-        query_plan: QueryPlan,
+        sql_context: SqlGenerationContext,
         default_limit: int = 200,
-    ) -> QueryPlan:
-        compiled = query_plan.model_copy(deep=True)
+    ) -> SqlGenerationContext:
+        compiled = sql_context.model_copy(deep=True)
         compiled.tables = [
             table
             for table in self._unique_strings(compiled.tables)
             if self.is_known_table(table)
         ]
-        allowed_fields = self.allowed_fields_for_plan(compiled)
+        allowed_fields = self.allowed_fields_for_context(compiled)
         compiled.dimensions = self._sanitize_dimensions(compiled.dimensions, allowed_fields)
         compiled.filters = self._sanitize_filters(compiled.filters, allowed_fields)
         compiled.sort = self._sanitize_sort(compiled.sort, allowed_fields)
@@ -355,15 +355,15 @@ class SemanticRuntime:
             and version_context.value.startswith("LATEST_N:")
         )
 
-    def allowed_fields_for_plan(self, query_plan: QueryPlan) -> set[str]:
+    def allowed_fields_for_context(self, context) -> set[str]:
         allowed_fields: set[str] = set()
-        for table_name in query_plan.tables:
+        for table_name in context.tables:
             allowed_fields.update(self.table_fields(table_name))
-        allowed_fields.update(query_plan.dimensions)
-        allowed_fields.update(item.field for item in query_plan.filters)
-        allowed_fields.update(item.field for item in query_plan.sort)
-        if query_plan.version_context and query_plan.version_context.field:
-            allowed_fields.add(query_plan.version_context.field)
+        allowed_fields.update(context.dimensions)
+        allowed_fields.update(item.field for item in context.filters)
+        allowed_fields.update(item.field for item in context.sort)
+        if context.version_context and context.version_context.field:
+            allowed_fields.add(context.version_context.field)
         return {item for item in allowed_fields if item}
 
     def resolve_join_path(self, tables: list[str]) -> list[str]:
