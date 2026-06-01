@@ -222,6 +222,13 @@ class ConversationOrchestrator:
                 self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
                 self._raise_if_cancelled(cancellation_token, stage="terminal response")
+                total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                self.audit_service.append_step(
+                    trace,
+                    "chat_total",
+                    "completed",
+                    metadata={"elapsed_ms": total_elapsed_ms, "terminal": True},
+                )
                 response = self._finalize_terminal_response(
                     trace=trace,
                     request=request,
@@ -232,13 +239,6 @@ class ConversationOrchestrator:
                     warnings=warnings,
                     retrieval=None,
                     terminal_reason=terminal_reason,
-                )
-                total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
-                self.audit_service.append_step(
-                    trace,
-                    "chat_total",
-                    "completed",
-                    metadata={"elapsed_ms": total_elapsed_ms, "terminal": True},
                 )
                 return response
 
@@ -367,6 +367,13 @@ class ConversationOrchestrator:
                 self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
                 self._raise_if_cancelled(cancellation_token, stage="terminal response")
+                total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
+                self.audit_service.append_step(
+                    trace,
+                    "chat_total",
+                    "completed",
+                    metadata={"elapsed_ms": total_elapsed_ms, "terminal": True},
+                )
                 response = self._finalize_terminal_response(
                     trace=trace,
                     request=request,
@@ -378,13 +385,6 @@ class ConversationOrchestrator:
                     retrieval=retrieval,
                     terminal_reason=terminal_reason,
                     context_validation=context_validation,
-                )
-                total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at, terminal=True)
-                self.audit_service.append_step(
-                    trace,
-                    "chat_total",
-                    "completed",
-                    metadata={"elapsed_ms": total_elapsed_ms, "terminal": True},
                 )
                 return response
 
@@ -781,6 +781,13 @@ class ConversationOrchestrator:
                 inputs={"previous": self._session_state_summary(session_state)},
                 outputs={"next": self._session_state_summary(next_session_state)},
             )
+            total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at)
+            self.audit_service.append_step(
+                trace,
+                "chat_total",
+                "completed",
+                metadata={"elapsed_ms": total_elapsed_ms},
+            )
 
             response = ChatResponse(
                 question_context=question_context,
@@ -809,13 +816,6 @@ class ConversationOrchestrator:
                 warnings=warnings + sql_warnings,
             )
             self._log_timing(trace.trace_id, "persist_success", stage_started_at)
-            total_elapsed_ms = self._log_timing(trace.trace_id, "chat_total", chat_started_at)
-            self.audit_service.append_step(
-                trace,
-                "chat_total",
-                "completed",
-                metadata={"elapsed_ms": total_elapsed_ms},
-            )
             logger.info(
                 "chat completed trace_id=%s answer_status=%s context_valid=%s sql_valid=%s",
                 trace.trace_id,

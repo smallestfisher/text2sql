@@ -1111,7 +1111,16 @@ function App() {
                 </div>
 
                 <div className="inspector-body">
-                  {activeTab === "result" && <ResultPanel latestResponse={inspectorResponse} workspaceError={workspaceError} token={token} latestTrace={inspectorTrace} currentUser={currentUser} />}
+                  {activeTab === "result" && (
+                    <ResultPanel
+                      latestResponse={inspectorResponse}
+                      workspaceError={workspaceError}
+                      token={token}
+                      latestTrace={inspectorTrace}
+                      latestQueryLog={inspectorQueryLogs[0] || null}
+                      currentUser={currentUser}
+                    />
+                  )}
                   {activeTab === "sql" && (
                     <SqlPanel
                       latestResponse={inspectorResponse}
@@ -1818,7 +1827,14 @@ function ConversationResultCard(props: {
 }
 
 
-function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceError: string; token: string | null; latestTrace: TraceRecord | null; currentUser: UserContext | null }) {
+function ResultPanel(props: {
+  latestResponse: ChatResponse | null;
+  workspaceError: string;
+  token: string | null;
+  latestTrace: TraceRecord | null;
+  latestQueryLog: RuntimeQueryLogRecord | null;
+  currentUser: UserContext | null;
+}) {
   if (props.workspaceError && !props.latestResponse) {
     return (
       <section className="tab-panel">
@@ -1844,7 +1860,11 @@ function ResultPanel(props: { latestResponse: ChatResponse | null; workspaceErro
   const questionContext = props.latestResponse.question_context;
   const contextSummary = props.latestResponse.context_summary;
   const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
-  const requestElapsedMs = getRequestElapsedMs(props.latestTrace) ?? execution?.elapsed_ms ?? null;
+  const requestElapsedMs =
+    getRequestElapsedMs(props.latestTrace) ??
+    props.latestQueryLog?.total_elapsed_ms ??
+    execution?.elapsed_ms ??
+    null;
 
   return (
     <section className="tab-panel">
