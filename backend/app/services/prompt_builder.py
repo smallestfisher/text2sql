@@ -136,9 +136,11 @@ class PromptBuilder:
         question: str | None = None,
     ) -> dict:
         selected_sources = self._selected_sources_for_sql(context, retrieval)
+        selected_join_patterns = self._selected_join_patterns(context, selected_sources, retrieval)
+        selected_sources = self._expand_sources_with_join_patterns(selected_sources, selected_join_patterns)
         prompt_context = context.model_copy(update={"tables": selected_sources})
         time_resolution = self._time_resolution(prompt_context)
-        retrieved_examples = self._select_retrieved_examples(context, retrieval)
+        retrieved_examples = self._select_retrieved_examples(context, retrieval, selected_sources=selected_sources)
         source_schemas = {
             table_name: self._compact_table_schema(
                 table_name,
@@ -176,7 +178,7 @@ class PromptBuilder:
             "retrieved_example_ids": [item["id"] for item in retrieved_examples],
             "subject_domain": context.subject_domain,
             "business_knowledge_entry_ids": self._selected_business_knowledge_ids(context, selected_sources, retrieval),
-            "join_pattern_ids": self._selected_join_pattern_ids(retrieval),
+            "join_pattern_ids": self._selected_join_pattern_ids(selected_join_patterns),
         }
         evidence_context = {
             "time_resolution": time_resolution,
@@ -191,7 +193,7 @@ class PromptBuilder:
             "retrieval_context": {
                 "business_knowledge": business_knowledge,
                 "examples": retrieved_examples,
-                "join_patterns": self._selected_join_patterns(retrieval),
+                "join_patterns": selected_join_patterns,
             },
             "oracle_sql_rules": {
                 "name": self.sql_dialect.name,
@@ -226,6 +228,26 @@ class PromptBuilder:
         if selected:
             return selected[:8]
         return list(self._tables_metadata.keys())[:8]
+
+    def _expand_sources_with_join_patterns(
+        self,
+        selected_sources: list[str],
+        selected_join_patterns: list[dict],
+    ) -> list[str]:
+        expanded = list(selected_sources)
+        selected_set = set(selected_sources)
+        for pattern in selected_join_patterns:
+            pattern_tables = pattern.get("tables", [])
+            if not isinstance(pattern_tables, list):
+                continue
+            if selected_set and not selected_set.intersection(str(item) for item in pattern_tables if item):
+                continue
+            for table_name in pattern_tables:
+                if not isinstance(table_name, str) or table_name not in self._tables_metadata:
+                    continue
+                if table_name not in expanded:
+                    expanded.append(table_name)
+        return expanded[:8]
 
     def _tables_from_retrieval_hit(self, hit: RetrievalHit) -> list[str]:
         tables: list[str] = []
@@ -456,10 +478,27 @@ class PromptBuilder:
             *context.metrics,
             *context.dimensions,
             *(item.field for item in context.filters),
+            *self._semantic_terms(context.semantic_brief),
+            *self._semantic_terms(context.reason or ""),
         }
         if context.version_context and context.version_context.field:
             terms.add(context.version_context.field)
         return {str(term).lower() for term in terms if term}
+
+    def _semantic_terms(self, text: str | None) -> set[str]:
+        if not text:
+            return set()
+        ascii_terms = {
+            item.lower()
+            for item in re.findall(r"[A-Za-z0-9_]+", text)
+            if len(item) > 1
+        }
+        chinese_terms = {
+            item
+            for item in re.findall(r"[\u4e00-\u9fa5]{2,}", text)
+            if len(item) >= 2
+        }
+        return ascii_terms.union(chinese_terms)
 
     def _select_business_knowledge_entries(
         self,
@@ -519,6 +558,17 @@ class PromptBuilder:
                 score += 4
         entry_keywords = {str(item).lower() for item in entry.get("keywords", []) if item}
         score += sum(1 for term in terms if term in entry_keywords)
+        entry_text = " ".join(
+            str(item)
+            for item in [
+                entry.get("id", ""),
+                " ".join(str(value) for value in entry.get("domains", []) if value),
+                " ".join(str(value) for value in entry.get("tables", []) if value),
+                " ".join(str(value) for value in entry.get("keywords", []) if value),
+                " ".join(str(value) for value in entry.get("notes", []) if value),
+            ]
+        ).lower()
+        score += 0.5 * sum(1 for term in terms if term and term in entry_text)
         entry_id = str(entry.get("id", ""))
         if entry_id and knowledge_hit_scores and entry_id in knowledge_hit_scores:
             score += 6 + knowledge_hit_scores[entry_id]
@@ -571,13 +621,15 @@ class PromptBuilder:
         self,
         context: SqlGenerationContext,
         retrieval: RetrievalContext | None,
+        *,
+        selected_sources: list[str] | None = None,
     ) -> list[dict]:
         if retrieval is None:
             return []
 
         examples = self._load_examples()
-        selected: list[dict] = []
-        for hit in retrieval.hits:
+        selected: list[tuple[float, int, dict]] = []
+        for index, hit in enumerate(retrieval.hits):
             if hit.source_type != "example":
                 continue
             example = examples.get(hit.source_id)
@@ -601,10 +653,31 @@ class PromptBuilder:
                 payload["sql"] = example.sql
             else:
                 payload["sql_omitted_reason"] = "example SQL failed Oracle read-only prompt safety checks"
-            selected.append(payload)
-            if len(selected) >= 2:
-                break
-        return selected
+            selected.append((self._score_retrieved_example(context, selected_sources, example, hit), -index, payload))
+        selected.sort(reverse=True)
+        return [payload for _score, _negative_index, payload in selected[:2]]
+
+    def _score_retrieved_example(
+        self,
+        context: SqlGenerationContext,
+        selected_sources: list[str] | None,
+        example: ExampleRecord,
+        hit: RetrievalHit,
+    ) -> float:
+        score = hit.score
+        if example.subject_domain == context.subject_domain:
+            score += 5
+        selected_tables = set(selected_sources or []).union(context.tables)
+        table_overlap = selected_tables.intersection(example.tables)
+        score += 4 * len(table_overlap)
+        score += 2 * len(set(context.metrics).intersection(example.metrics))
+        score += 1.5 * len(set(context.dimensions).intersection(example.dimensions))
+        context_filter_fields = {item.field for item in context.filters}
+        example_filter_fields = {item.field for item in example.filters}
+        score += 1.5 * len(context_filter_fields.intersection(example_filter_fields))
+        if any(feature.startswith(("metrics:", "filters:", "version:", "time_", "metric:")) for feature in hit.matched_features):
+            score += 1
+        return score
 
     def _example_sql_is_prompt_safe(self, example: ExampleRecord) -> bool:
         errors, _warnings = self.sql_ast_validator.validate(example.sql)
@@ -627,28 +700,87 @@ class PromptBuilder:
         }
         return self._compact_mapping(payload)
 
-    def _selected_join_patterns(self, retrieval: RetrievalContext | None) -> list[dict]:
-        if retrieval is None:
-            return []
-        selected: list[dict] = []
-        for hit in retrieval.hits:
-            if hit.source_type != "join_pattern":
-                continue
-            selected.append(
-                {
-                    "id": hit.source_id,
-                    "summary": hit.summary,
-                    "matched_features": hit.matched_features,
-                    "domains": hit.metadata.get("domains", []),
-                    "tables": hit.metadata.get("tables", []),
-                    "join_path": hit.metadata.get("join_path", []),
-                    "notes": hit.metadata.get("notes", []),
-                }
-            )
-        return selected[:2]
+    def _selected_join_patterns(
+        self,
+        context: SqlGenerationContext,
+        selected_sources: list[str] | None,
+        retrieval: RetrievalContext | None,
+    ) -> list[dict]:
+        candidates: dict[str, tuple[float, int, dict]] = {}
+        if retrieval is not None:
+            for index, hit in enumerate(retrieval.hits):
+                if hit.source_type != "join_pattern":
+                    continue
+                payload = self._join_pattern_payload_from_hit(hit)
+                score = hit.score + self._score_join_pattern_payload(context, selected_sources, payload)
+                candidates[payload["id"]] = (score, -index, payload)
 
-    def _selected_join_pattern_ids(self, retrieval: RetrievalContext | None) -> list[str]:
-        return [item["id"] for item in self._selected_join_patterns(retrieval)]
+        for index, pattern in enumerate(self.metadata_registry.join_patterns):
+            payload = self._join_pattern_payload_from_record(pattern)
+            score = self._score_join_pattern_payload(context, selected_sources, payload)
+            if score <= 0:
+                continue
+            existing = candidates.get(payload["id"])
+            ranked = (score, -1000 - index, payload)
+            if existing is None or ranked[0] > existing[0]:
+                candidates[payload["id"]] = ranked
+
+        ranked_patterns = sorted(candidates.values(), reverse=True)
+        return [payload for _score, _negative_index, payload in ranked_patterns[:2]]
+
+    def _join_pattern_payload_from_hit(self, hit: RetrievalHit) -> dict:
+        return {
+            "id": hit.source_id,
+            "summary": hit.summary,
+            "matched_features": hit.matched_features,
+            "domains": hit.metadata.get("domains", []),
+            "tables": hit.metadata.get("tables", []),
+            "join_path": hit.metadata.get("join_path", []),
+            "notes": hit.metadata.get("notes", []),
+        }
+
+    def _join_pattern_payload_from_record(self, pattern: dict) -> dict:
+        pattern_id = str(pattern.get("id", "join_pattern"))
+        notes = pattern.get("notes", [])
+        return {
+            "id": pattern_id,
+            "summary": str(notes[0]) if isinstance(notes, list) and notes else pattern_id,
+            "matched_features": ["metadata:table_overlap"],
+            "domains": pattern.get("domains", []),
+            "tables": pattern.get("tables", []),
+            "join_path": pattern.get("join_path", []),
+            "notes": notes,
+        }
+
+    def _score_join_pattern_payload(
+        self,
+        context: SqlGenerationContext,
+        selected_sources: list[str] | None,
+        payload: dict,
+    ) -> float:
+        pattern_tables = {str(item) for item in payload.get("tables", []) if item}
+        source_overlap = pattern_tables.intersection(selected_sources or [])
+        context_overlap = pattern_tables.intersection(context.tables)
+        pattern_text = " ".join(
+            str(item)
+            for item in [
+                payload.get("id", ""),
+                payload.get("summary", ""),
+                " ".join(str(value) for value in payload.get("join_path", []) if value),
+                " ".join(str(value) for value in payload.get("notes", []) if value),
+            ]
+        ).lower()
+        semantic_hits = sum(1 for term in self._semantic_terms(context.semantic_brief) if term and term in pattern_text)
+        evidence_score = (4 * len(source_overlap)) + (3 * len(context_overlap)) + (0.5 * semantic_hits)
+        if evidence_score <= 0:
+            return 0.0
+        domains = {str(item).lower() for item in payload.get("domains", []) if item}
+        domain_bonus = 3 if context.subject_domain and context.subject_domain.lower() in domains else 0
+        score = evidence_score + domain_bonus
+        return score
+
+    def _selected_join_pattern_ids(self, selected_join_patterns: list[dict]) -> list[str]:
+        return [str(item["id"]) for item in selected_join_patterns if item.get("id")]
 
     def _retrieved_example_matches_context(
         self,

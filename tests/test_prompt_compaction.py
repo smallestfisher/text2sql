@@ -433,6 +433,60 @@ class PromptCompactionTests(unittest.TestCase):
         production_actuals_schema = "\n".join(prompt["available_tables"]["production_actuals"]["columns"])
         self.assertIn("FACTORY", production_actuals_schema)
         self.assertIn("act_type", production_actuals_schema)
+        self.assertIn("plan_actual_approved_vs_actual_join", prompt["context_summary"]["join_pattern_ids"])
+
+    def test_sql_prompt_expands_join_companion_tables_from_join_patterns(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="plan_actual",
+            tables=["monthly_plan_approved"],
+            semantic_brief="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+        )
+
+        self.assertIn("monthly_plan_approved", prompt["available_tables"])
+        self.assertIn("production_actuals", prompt["available_tables"])
+        self.assertIn("plan_actual_approved_vs_actual_join", prompt["context_summary"]["join_pattern_ids"])
+
+    def test_sql_prompt_reranks_retrieved_examples_by_table_evidence(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="plan_actual",
+            tables=["monthly_plan_approved", "production_actuals"],
+            semantic_brief="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="plan_actual_mdl_input_panel_top10_001",
+                    score=4.0,
+                    summary="MDL actual input top10",
+                    matched_features=["keyword:4.000"],
+                ),
+                RetrievalHit(
+                    source_type="example",
+                    source_id="plan_actual_array_approved_vs_actual_input_gap_rate_001",
+                    score=1.0,
+                    summary="approved vs actual gap rate",
+                    matched_features=["keyword:1.000", "metrics:input_gap_qty,input_achievement_rate"],
+                ),
+            ]
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+        )
+
+        examples = prompt["retrieval_context"]["examples"]
+        self.assertGreaterEqual(len(examples), 2)
+        self.assertEqual(examples[0]["id"], "plan_actual_array_approved_vs_actual_input_gap_rate_001")
 
     def test_sql_prompt_compacts_business_knowledge_and_examples(self) -> None:
         sql_context_value = SqlGenerationContext(
