@@ -820,6 +820,8 @@ FETCH FIRST 200 ROWS ONLY
         sql_text = "\n".join(prompt["instructions"]["constraints"])
 
         self.assertIn("available_tables", sql_text)
+        self.assertIn("除法表达式必须用 NULLIF 或 CASE WHEN 防止除零", sql_text)
+        self.assertIn("多表聚合对比时，优先先分别聚合到明确粒度", sql_text)
         self.assertNotIn("tables_metadata", sql_text)
         self.assertNotIn("sql_context.", sql_text)
 

@@ -1401,6 +1401,11 @@ class PromptBuilder:
             [
                 "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
                 "Oracle 日期函数优先使用 TO_DATE、TO_CHAR、ADD_MONTHS、TRUNC、SYSDATE。",
+                "复杂 SQL 优先使用清晰 CTE 分步骤表达，避免无意义嵌套子查询。",
+                "多表聚合对比时，优先先分别聚合到明确粒度，再 join 聚合结果。",
+                "除法表达式必须用 NULLIF 或 CASE WHEN 防止除零。",
+                "输出列使用稳定英文别名，ORDER BY 优先使用输出别名或明确表达式，不要使用位置序号。",
+                "WHERE 条件尽量写在最早可过滤的位置，减少 join 后再过滤。",
             ]
         )
         return constraints

@@ -45,6 +45,56 @@ class SqlSafetyValidationTests(unittest.TestCase):
 
         self.assertEqual([], result.errors)
 
+    def test_quality_warning_for_unprotected_division(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            """
+            SELECT factory, SUM(actual_qty) / SUM(target_qty) AS achievement_rate
+            FROM production_actuals
+            GROUP BY factory
+            FETCH FIRST 20 ROWS ONLY
+            """,
+            self.domain_config,
+        )
+
+        self.assertEqual([], result.errors)
+        self.assertTrue(
+            any("division expression should guard zero denominators" in item for item in result.warnings)
+        )
+        self.assertIn("quality_risk", result.risk_flags)
+
+    def test_quality_warning_for_multi_source_aggregate_without_cte(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            """
+            SELECT a.factory_code, SUM(a.target_IN_glass_qty) AS approved_qty, SUM(b.GLS_qty) AS actual_qty
+            FROM monthly_plan_approved a
+            JOIN production_actuals b
+              ON a.factory_code = b.FACTORY
+            GROUP BY a.factory_code
+            FETCH FIRST 20 ROWS ONLY
+            """,
+            self.domain_config,
+        )
+
+        self.assertEqual([], result.errors)
+        self.assertTrue(
+            any("multi-source aggregate query should use CTEs" in item for item in result.warnings)
+        )
+
+    def test_quality_warning_for_positional_order_by(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            """
+            SELECT factory, SUM(GLS_qty) AS actual_qty
+            FROM production_actuals
+            GROUP BY factory
+            ORDER BY 2 DESC
+            FETCH FIRST 20 ROWS ONLY
+            """,
+            self.domain_config,
+        )
+
+        self.assertEqual([], result.errors)
+        self.assertTrue(any("avoid positional ORDER BY" in item for item in result.warnings))
+
 
 if __name__ == "__main__":
     unittest.main()

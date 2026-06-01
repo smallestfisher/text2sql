@@ -8,6 +8,7 @@ from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_dialect import SqlDialect
+from backend.app.services.sql_quality_validator import SqlQualityValidator
 
 
 @dataclass
@@ -42,12 +43,14 @@ class SqlValidator:
         semantic_runtime: SemanticRuntime | None = None,
         max_limit: int = 200,
         high_risk_limit: int = 1000,
+        quality_validator: SqlQualityValidator | None = None,
     ) -> None:
         self.sql_dialect = SqlDialect.from_name("oracle")
         self.ast_validator = ast_validator or SqlAstValidator()
         self.semantic_runtime = semantic_runtime
         self.max_limit = max_limit
         self.high_risk_limit = max(high_risk_limit, max_limit)
+        self.quality_validator = quality_validator or SqlQualityValidator()
 
     def validate(
         self,
@@ -222,6 +225,7 @@ class SqlValidator:
                     warnings.append(warning_message)
 
         warnings.extend(self._build_risk_warnings(inspection, used_sources))
+        warnings.extend(self.quality_validator.validate(sql, inspection, used_sources))
 
         if not inspection.has_limit:
             warnings.append(f"sql does not include {self.sql_dialect.result_limit_clause_name}")
@@ -600,6 +604,8 @@ class SqlValidator:
                 flags.append("semantic_risk")
             if "subquery" in lowered or "complexity" in lowered or "many function calls" in lowered:
                 flags.append("complexity_risk")
+            if "sql quality" in lowered:
+                flags.append("quality_risk")
             if "permission filters" in lowered:
                 flags.append("permission_risk")
             if "sources outside sql context" in lowered or "unsupported fields" in lowered:
