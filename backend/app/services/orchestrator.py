@@ -7,7 +7,7 @@ import time
 from backend.app.core.cancellation import CancellationToken
 from backend.app.core.exceptions import ClientCancelledError
 from backend.app.logging_config import clear_trace_id, set_trace_id
-from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
 from backend.app.models.context_summary import ContextSummary
 from backend.app.models.progress import ProgressEvent
 from backend.app.models.session_state import PendingClarification, SessionState
@@ -66,7 +66,7 @@ class ConversationOrchestrator:
 
     def chat(
         self,
-        request: PlanRequest,
+        request: ChatRequest,
         trace_id: str | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ChatResponse:
@@ -336,7 +336,7 @@ class ConversationOrchestrator:
                 },
             )
             logger.info(
-                "context validation skipped trace_id=%s valid=%s errors=%s warnings=%s",
+                "context validation completed trace_id=%s valid=%s errors=%s warnings=%s",
                 trace.trace_id,
                 not context_errors,
                 len(context_errors),
@@ -345,13 +345,13 @@ class ConversationOrchestrator:
             self.audit_service.append_step(
                 trace,
                 "validate_context",
-                "skipped",
+                "completed",
                 metadata={
                     "error_count": len(context_errors),
                     "warning_count": len(context_warnings),
                     "errors": context_errors,
                     "warnings": context_warnings,
-                    "reason": "SQL context is evidence packaging; SQL validation owns safety boundaries",
+                    "reason": "SQL context packaged from retrieved evidence; SQL validator owns executable SQL safety boundaries",
                 },
             )
             context_validation = ValidationResponse(
@@ -1390,7 +1390,7 @@ class ConversationOrchestrator:
         self,
         *,
         trace,
-        request: PlanRequest,
+        request: ChatRequest,
         session_state: SessionState | None,
         question_context,
         classification,
@@ -1489,7 +1489,7 @@ class ConversationOrchestrator:
         *,
         session_state: SessionState | None,
         session_id: str | None,
-        request: PlanRequest,
+        request: ChatRequest,
         question_context,
         classification,
     ) -> SessionState:
@@ -1516,7 +1516,7 @@ class ConversationOrchestrator:
         self,
         *,
         trace,
-        request: PlanRequest,
+        request: ChatRequest,
         response: ChatResponse,
         warnings: list[str],
     ) -> None:
@@ -1531,7 +1531,7 @@ class ConversationOrchestrator:
         self,
         *,
         trace,
-        request: PlanRequest,
+        request: ChatRequest,
         warnings: list[str],
         answer_status: str,
         classification,

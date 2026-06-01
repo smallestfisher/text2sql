@@ -17,7 +17,7 @@ from backend.app.models.admin import (
     RuntimeRetrievalLogRecord,
     RuntimeSqlAuditRecord,
 )
-from backend.app.models.api import ChatResponse, PlanRequest
+from backend.app.models.api import ChatResponse, ChatRequest
 from backend.app.models.auth import UserContext
 from backend.app.models.feedback import (
     FeedbackCollectionResponse,
@@ -57,7 +57,7 @@ async def _watch_client_disconnect(
 
 @router.post("/query/stream")
 async def chat_query_stream(
-    request: PlanRequest,
+    request: ChatRequest,
     http_request: Request,
     container: AppContainer = Depends(get_container),
 ) -> StreamingResponse:
@@ -149,7 +149,7 @@ async def chat_query_stream(
 
 @router.post("/query", response_model=ChatResponse)
 def chat_query(
-    request: PlanRequest,
+    request: ChatRequest,
     http_request: Request,
     container: AppContainer = Depends(get_container),
 ) -> ChatResponse:

@@ -117,7 +117,7 @@ class SqlValidator:
             if unexpected_sources:
                 warnings.append(f"sql references sources outside sql context: {', '.join(unexpected_sources)}")
 
-            missing_plan_filters = [
+            missing_context_filters = [
                 filter_item.field
                 for filter_item in sql_context.filters
                 if filter_item.field
@@ -128,9 +128,9 @@ class SqlValidator:
                     filter_scope,
                 )
             ]
-            if missing_plan_filters:
+            if missing_context_filters:
                 warnings.append(
-                    "sql does not cover all sql context filters: " + ", ".join(sorted(set(missing_plan_filters)))
+                    "sql does not cover all sql context filters: " + ", ".join(sorted(set(missing_context_filters)))
                 )
 
             expected_dimension_fields = set(sql_context.dimensions)
@@ -609,7 +609,7 @@ class SqlValidator:
             if "permission filters" in lowered:
                 flags.append("permission_risk")
             if "sources outside sql context" in lowered or "unsupported fields" in lowered:
-                flags.append("plan_mismatch_risk")
+                flags.append("context_mismatch_risk")
         deduped: list[str] = []
         for flag in flags:
             if flag not in deduped:
@@ -617,7 +617,7 @@ class SqlValidator:
         return deduped
 
     def _risk_level_for_flags(self, risk_flags: list[str]) -> str:
-        if any(flag in risk_flags for flag in ["permission_risk", "plan_mismatch_risk", "scan_risk", "join_risk"]):
+        if any(flag in risk_flags for flag in ["permission_risk", "context_mismatch_risk", "scan_risk", "join_risk"]):
             return "high"
         if risk_flags:
             return "medium"

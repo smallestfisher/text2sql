@@ -199,11 +199,6 @@ class SemanticRuntime:
         _ = subject_domain
         return field_name
 
-    def resolve_tables_for_plan(self, domain_name: str, metrics: list[str]) -> list[str]:
-        _ = domain_name
-        _ = metrics
-        return []
-
     def time_filter_fields(self, domain_name: str) -> list[str]:
         _ = domain_name
         return []
@@ -503,11 +498,11 @@ class SemanticRuntime:
                     "format": value_format,
                 }
 
-        legacy_mappings = [
+        configured_time_columns = [
             ("date_col", "day"),
             ("month_col", "month"),
         ]
-        for key, grain in legacy_mappings:
+        for key, grain in configured_time_columns:
             field_name = str(payload.get(key, "")).strip()
             if field_name and field_name in fields and field_name not in normalized:
                 normalized[field_name] = {

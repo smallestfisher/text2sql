@@ -623,7 +623,7 @@ FETCH FIRST 200 ROWS ONLY
                     "id": "old_complete_example",
                     "question": "最新 OMS 库存",
                     "normalized_question": "最新 oms 库存",
-                    "intent": "legacy complete shape",
+                    "intent": "complete shape",
                     "question_type": "new",
                     "subject_domain": "inventory",
                     "tables": ["oms_inventory"],

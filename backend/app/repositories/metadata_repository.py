@@ -17,9 +17,6 @@ class FileMetadataRepository:
         self.paths = dict(self.metadata_registry.paths)
         self.paths["tables_metadata"] = TABLES_METADATA_PATH
         self.paths["join_patterns"] = JOIN_PATTERNS_PATH
-        # Backward-compatible alias for older callers that still access
-        # metadata_repository.documents directly.
-        self.documents = self.paths
 
     def read(self, name: str):
         return self.metadata_registry.read(name)

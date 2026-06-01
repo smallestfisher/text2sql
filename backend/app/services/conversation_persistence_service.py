@@ -5,7 +5,7 @@ import uuid
 
 from sqlalchemy import text
 
-from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
 from backend.app.models.trace import TraceRecord
 from backend.app.repositories.db_repository_utils import json_dumps
 from backend.app.services.database_connector import DatabaseConnector
@@ -19,7 +19,7 @@ class ConversationPersistenceService:
         self,
         *,
         trace: TraceRecord,
-        request: PlanRequest,
+        request: ChatRequest,
         response: ChatResponse,
         warnings: list[str],
     ) -> None:
@@ -49,7 +49,7 @@ class ConversationPersistenceService:
         self,
         *,
         trace: TraceRecord,
-        request: PlanRequest,
+        request: ChatRequest,
         warnings: list[str],
         answer_status: str,
         classification=None,
@@ -87,7 +87,7 @@ class ConversationPersistenceService:
                     execution=execution,
                 )
 
-    def _persist_session_exchange(self, connection, *, request: PlanRequest, response: ChatResponse, trace: TraceRecord) -> None:
+    def _persist_session_exchange(self, connection, *, request: ChatRequest, response: ChatResponse, trace: TraceRecord) -> None:
         session_id = request.session_id
         if session_id is None:
             return
@@ -204,7 +204,7 @@ class ConversationPersistenceService:
         connection,
         *,
         trace: TraceRecord,
-        request: PlanRequest,
+        request: ChatRequest,
         warnings: list[str],
         response: ChatResponse | None,
         answer_status: str | None = None,

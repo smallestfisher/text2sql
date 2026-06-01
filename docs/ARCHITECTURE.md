@@ -15,7 +15,7 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
 用户问题
   -> 读取会话状态
   -> QuestionContext 生成完整问题和语义摘要
-  -> 轻量分类与内部 plan shell
+  -> 基于 QuestionContext 生成 SQL 输入上下文
   -> Retrieval 检索表结构、业务知识、样例和 join pattern
   -> ContextSummary 汇总进入 SQL 生成的证据
   -> SQL Prompt 组装真实表字段、业务规则和 few-shot

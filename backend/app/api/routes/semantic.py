@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Request
 
 from backend.app.api.dependencies import get_container
 from backend.app.core.container import AppContainer
-from backend.app.models.api import PlanRequest
+from backend.app.models.api import ChatRequest
 
 
 router = APIRouter(prefix="/api/semantic", tags=["semantic"])
@@ -17,7 +17,7 @@ def domain_summary(container: AppContainer = Depends(get_container)) -> dict:
 
 @router.post("/retrieve-preview")
 def retrieve_preview(
-    request: PlanRequest,
+    request: ChatRequest,
     http_request: Request,
     container: AppContainer = Depends(get_container),
 ) -> dict:

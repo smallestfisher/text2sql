@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from backend.app.core.cancellation import CancellationToken
@@ -9,9 +8,6 @@ from backend.app.models.question_context import QuestionContext
 from backend.app.models.session_state import SessionState
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
-
-
-logger = logging.getLogger(__name__)
 
 
 class QuestionContextService:
@@ -27,28 +23,18 @@ class QuestionContextService:
         parser_signals: dict[str, Any] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> QuestionContext:
-        fallback = self._fallback_context(
-            question=question,
-            session_state=session_state,
-            parser_signals=parser_signals or {},
-            reason="llm_unavailable",
-        )
         if not getattr(self.llm_client, "enabled", False) or not hasattr(self.llm_client, "generate_question_context"):
-            return fallback
+            raise LLMServiceError("question context generation requires an enabled LLM client")
 
         prompt_payload = self.prompt_builder.build_question_context_prompt(
             question=question,
             session_state=session_state,
             parser_signals=parser_signals or {},
         )
-        try:
-            payload = self.llm_client.generate_question_context(
-                prompt_payload,
-                cancellation_token=cancellation_token,
-            )
-        except LLMServiceError as exc:
-            logger.warning("question context generation failed; using fallback context: %s", exc)
-            return fallback.model_copy(update={"reason": str(exc)}, deep=True)
+        payload = self.llm_client.generate_question_context(
+            prompt_payload,
+            cancellation_token=cancellation_token,
+        )
         return self._coerce_payload(
             payload,
             question=question,
@@ -65,20 +51,15 @@ class QuestionContextService:
         parser_signals: dict[str, Any],
     ) -> QuestionContext:
         if not isinstance(payload, dict):
-            return self._fallback_context(
-                question=question,
-                session_state=session_state,
-                parser_signals=parser_signals,
-                reason="question context payload is not an object",
-            )
+            raise LLMServiceError("question context payload is not an object")
 
         decision = str(payload.get("decision") or "answerable").strip()
         if decision not in {"answerable", "clarification_needed", "invalid"}:
-            decision = "answerable"
+            raise LLMServiceError(f"unsupported question context decision: {decision}")
 
         context_relation = str(payload.get("context_relation") or "new").strip()
         if context_relation not in {"new", "follow_up", "ambiguous"}:
-            context_relation = "new"
+            raise LLMServiceError(f"unsupported question context relation: {context_relation}")
 
         effective_question = str(
             payload.get("effective_question")
@@ -103,27 +84,6 @@ class QuestionContextService:
             source="llm",
             raw_payload=payload,
             subject_domain=str(payload.get("subject_domain") or parser_signals.get("subject_domain") or "unknown"),
-        )
-
-    def _fallback_context(
-        self,
-        *,
-        question: str,
-        session_state: SessionState | None,
-        parser_signals: dict[str, Any],
-        reason: str,
-    ) -> QuestionContext:
-        conversation_summary = self.prompt_builder.conversation_summary(session_state) if session_state is not None else ""
-        return QuestionContext(
-            original_question=question,
-            effective_question=question,
-            context_relation="new",
-            decision="answerable",
-            conversation_summary=conversation_summary,
-            semantic_brief=question,
-            reason=reason,
-            source="fallback",
-            subject_domain=str(parser_signals.get("subject_domain") or "unknown"),
         )
 
     def _optional_string(self, value: Any) -> str | None:

@@ -75,7 +75,6 @@ class ChatResponseRestoreService:
         payload.pop("sql_context", None)
         if payload.get("context_summary") is None:
             raise ValueError("response snapshot missing context_summary")
-        self._normalize_legacy_answer_payload(payload)
         return ChatResponse(**payload)
 
     def _restore_from_artifacts(
@@ -261,22 +260,6 @@ class ChatResponseRestoreService:
             error_category=self._warning_value(query_log.warnings, "execution_error_category"),
             truncated=bool(status == "truncated"),
         )
-
-    def _normalize_legacy_answer_payload(self, payload: dict) -> None:
-        answer = payload.get("answer")
-        if not isinstance(answer, dict):
-            return
-        execution = payload.get("execution")
-        executed = isinstance(execution, dict) and bool(execution.get("executed"))
-        normalized_answer = dict(answer)
-        normalized_status = normalize_answer_status(normalized_answer.get("status"), executed=executed)
-        if normalized_answer.get("status") == normalized_status:
-            return
-        normalized_answer["status"] = normalized_status
-        normalized_answer["summary"] = normalized_answer.get("summary") or (
-            "历史响应已恢复。" if normalized_status == "ok" else "历史响应未记录完整答案状态。"
-        )
-        payload["answer"] = normalized_answer
 
     def _assistant_summary(self, messages: list[ChatMessage], trace_id: str) -> str | None:
         for message in reversed(messages):

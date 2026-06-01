@@ -13,7 +13,7 @@ from .session_state import SessionState
 from .trace import TraceRecord
 
 
-class PlanRequest(BaseModel):
+class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
     session_state: SessionState | None = None

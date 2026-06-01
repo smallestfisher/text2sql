@@ -7,7 +7,7 @@ import threading
 import uuid
 
 from backend.app.config import EVAL_CASES_PATH
-from backend.app.models.api import PlanRequest
+from backend.app.models.api import ChatRequest
 from backend.app.models.conversation import ChatMessage
 from backend.app.models.example_library import ExampleTemplateRecord
 from backend.app.models.auth import UserContext
@@ -312,7 +312,7 @@ class EvaluationService:
         session_state = None
         for seed_question in session_questions:
             seed_response = self.orchestrator.chat(
-                PlanRequest(
+                ChatRequest(
                     question=seed_question,
                     session_state=session_state,
                     user_context=user_context,
@@ -320,7 +320,7 @@ class EvaluationService:
             )
             session_state = seed_response.next_session_state
         return self.orchestrator.chat(
-            PlanRequest(
+            ChatRequest(
                 question=question,
                 session_state=session_state,
                 user_context=user_context,

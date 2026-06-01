@@ -14,7 +14,7 @@ from backend.app.api import dependencies
 from backend.app.api.routes.chat import chat_query_stream
 from backend.app.core.exceptions import ClientCancelledError
 from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecord
-from backend.app.models.api import ChatResponse, PlanRequest, ValidationResponse
+from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.conversation import ChatMessage, ChatSession
 
@@ -242,7 +242,7 @@ class StreamingRouteTests(unittest.TestCase):
             def __init__(self, progress_service: ProgressService) -> None:
                 self.progress_service = progress_service
 
-            def chat(self, request: PlanRequest, trace_id: str, cancellation_token=None):
+            def chat(self, request: ChatRequest, trace_id: str, cancellation_token=None):
                 self.progress_service.complete(trace_id)
                 raise RuntimeError("boom")
 
@@ -254,7 +254,7 @@ class StreamingRouteTests(unittest.TestCase):
 
         async def run_case() -> str:
             response = await chat_query_stream(
-                request=PlanRequest(question="test question"),
+                request=ChatRequest(question="test question"),
                 http_request=SimpleNamespace(headers={}),
                 container=FakeContainer(),
             )
@@ -297,7 +297,7 @@ class StreamingRouteTests(unittest.TestCase):
                 self.progress_service = progress_service
                 self.cancelled = False
 
-            def chat(self, request: PlanRequest, trace_id: str, cancellation_token=None):
+            def chat(self, request: ChatRequest, trace_id: str, cancellation_token=None):
                 if cancellation_token is None or not cancellation_token._event.wait(timeout=2):
                     self.progress_service.complete(trace_id)
                     raise AssertionError("expected cancellation token to be triggered")
@@ -314,7 +314,7 @@ class StreamingRouteTests(unittest.TestCase):
         async def run_case() -> tuple[str, bool]:
             container = FakeContainer()
             response = await chat_query_stream(
-                request=PlanRequest(question="test question"),
+                request=ChatRequest(question="test question"),
                 http_request=FakeRequest(),
                 container=container,
             )
