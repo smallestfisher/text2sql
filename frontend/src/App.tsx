@@ -1948,6 +1948,10 @@ function SqlPanel(props: {
     props.sessionState?.last_context_summary ||
     null;
   const promptSummary = normalizePromptSummary(getPromptContextSummaryFromTrace(props.latestTrace));
+  const selectedSources = promptSummary.selectedSources.length
+    ? promptSummary.selectedSources
+    : contextSummary?.tables || [];
+  const tableSchemasCount = promptSummary.tableSchemasCount ?? (selectedSources.length ? selectedSources.length : null);
 
   if (!sql && !contextSummary) {
     return (
@@ -1984,8 +1988,8 @@ function SqlPanel(props: {
       <div className="detail-card">
         <div className="detail-title">SQL 输入上下文</div>
         <div className="meta-stack">
-          <MetaRow label="可用表" value={promptSummary.selectedSources.join(", ") || "-"} />
-          <MetaRow label="表结构数" value={formatOptionalNumber(promptSummary.tableSchemasCount)} />
+          <MetaRow label="可用表" value={selectedSources.join(", ") || "-"} />
+          <MetaRow label="表结构数" value={formatOptionalNumber(tableSchemasCount)} />
           <MetaRow label="业务知识" value={formatPromptKnowledge(promptSummary)} />
           <MetaRow label="样例" value={formatPromptExamples(promptSummary)} />
           <MetaRow label="时间解析" value={formatOptionalNumber(promptSummary.timeResolutionCount)} />
@@ -2081,9 +2085,19 @@ function getPromptContextSummaryFromTrace(trace: TraceRecord | null | undefined)
   if (!trace?.steps?.length) {
     return null;
   }
+  const buildPromptStep = trace.steps.find((step) => step.name === "build_sql_prompt");
+  if (isRecord(buildPromptStep?.metadata?.context_summary)) {
+    return buildPromptStep.metadata.context_summary;
+  }
+  if (isRecord(buildPromptStep?.metadata?.prompt_context_summary)) {
+    return buildPromptStep.metadata.prompt_context_summary;
+  }
   const generateSqlStep = trace.steps.find((step) => step.name === "generate_sql" || step.name === "sql_generation");
-  return isRecord(generateSqlStep?.metadata?.prompt_context_summary)
-    ? generateSqlStep.metadata.prompt_context_summary
+  if (isRecord(generateSqlStep?.metadata?.prompt_context_summary)) {
+    return generateSqlStep.metadata.prompt_context_summary;
+  }
+  return isRecord(generateSqlStep?.metadata?.context_summary)
+    ? generateSqlStep.metadata.context_summary
     : null;
 }
 
