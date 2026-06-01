@@ -390,6 +390,21 @@ LIMIT 50
             "SELECT biz_month, SUM(input_qty) AS total_input\nFROM production_actuals\nGROUP BY biz_month\nLIMIT 50;",
         )
 
+    def test_response_content_accepts_event_stream_text(self) -> None:
+        if llm_sqlglot is None:
+            with self.assertRaisesRegex(RuntimeError, "sqlglot is required"):
+                LLMClient()
+            return
+        event_stream = "\n".join(
+            [
+                'data: {"choices":[{"delta":{"content":"SELECT 1"}}]}',
+                'data: {"choices":[{"delta":{"content":" FROM dual"}}]}',
+                "data: [DONE]",
+            ]
+        )
+
+        self.assertEqual(self.client._response_content(event_stream), "SELECT 1 FROM dual")
+
 
 class MetadataRegistryFailFastTests(unittest.TestCase):
     def test_invalid_examples_template_json_raises(self) -> None:

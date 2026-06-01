@@ -334,8 +334,9 @@ class LLMClient:
                 messages=messages,
                 temperature=0.1,
                 timeout=self.timeout_seconds,
+                stream=False,
             )
-            content = response.choices[0].message.content or ""
+            content = self._response_content(response)
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             self._record_metric(task_name, "response_chars", len(content))
             self._record_metric(task_name, "elapsed_ms", elapsed_ms)
@@ -362,6 +363,45 @@ class LLMClient:
                 exc,
             )
             raise
+
+    def _response_content(self, response) -> str:
+        choices = getattr(response, "choices", None)
+        if choices:
+            message = getattr(choices[0], "message", None)
+            return getattr(message, "content", None) or ""
+        if isinstance(response, str):
+            content = self._content_from_event_stream_text(response)
+            if content:
+                return content
+        raise TypeError(f"unsupported llm response type: {type(response).__name__}")
+
+    def _content_from_event_stream_text(self, text: str) -> str:
+        chunks: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line.removeprefix("data:").strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            choices = event.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0]
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                chunks.append(delta["content"])
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                chunks.append(message["content"])
+        return "".join(chunks)
 
     def _extract_json(self, content: str) -> dict:
         content = content.strip()
