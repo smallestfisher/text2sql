@@ -405,6 +405,28 @@ LIMIT 50
 
         self.assertEqual(self.client._response_content(event_stream), "SELECT 1 FROM dual")
 
+    def test_response_content_collects_stream_chunks(self) -> None:
+        if llm_sqlglot is None:
+            with self.assertRaisesRegex(RuntimeError, "sqlglot is required"):
+                LLMClient()
+            return
+        stream = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(delta=SimpleNamespace(content="SELECT 1"), message=None)
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(delta=SimpleNamespace(content=" FROM dual"), message=None)
+                    ]
+                ),
+            ]
+        )
+
+        self.assertEqual(self.client._response_content(stream), "SELECT 1 FROM dual")
+
 
 class MetadataRegistryFailFastTests(unittest.TestCase):
     def test_invalid_examples_template_json_raises(self) -> None:

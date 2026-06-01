@@ -334,7 +334,7 @@ class LLMClient:
                 messages=messages,
                 temperature=0.1,
                 timeout=self.timeout_seconds,
-                stream=False,
+                stream=True,
             )
             content = self._response_content(response)
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
@@ -373,7 +373,37 @@ class LLMClient:
             content = self._content_from_event_stream_text(response)
             if content:
                 return content
+            if response.strip():
+                return response.strip()
+        content = self._content_from_stream_response(response)
+        if content is not None:
+            return content
         raise TypeError(f"unsupported llm response type: {type(response).__name__}")
+
+    def _content_from_stream_response(self, response) -> str | None:
+        if isinstance(response, (str, bytes, dict)):
+            return None
+        try:
+            iterator = iter(response)
+        except TypeError:
+            return None
+
+        chunks: list[str] = []
+        for event in iterator:
+            choices = getattr(event, "choices", None)
+            if not choices:
+                continue
+            choice = choices[0]
+            delta = getattr(choice, "delta", None)
+            delta_content = getattr(delta, "content", None)
+            if isinstance(delta_content, str):
+                chunks.append(delta_content)
+                continue
+            message = getattr(choice, "message", None)
+            message_content = getattr(message, "content", None)
+            if isinstance(message_content, str):
+                chunks.append(message_content)
+        return "".join(chunks)
 
     def _content_from_event_stream_text(self, text: str) -> str:
         chunks: list[str] = []
