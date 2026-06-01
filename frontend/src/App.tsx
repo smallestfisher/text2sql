@@ -1906,7 +1906,7 @@ function ResultPanel(props: {
         </div>
         <div className="compact-stat">
           <span>耗时</span>
-          <strong>{requestElapsedMs ? `${requestElapsedMs} ms` : "-"}</strong>
+          <strong>{formatElapsedSeconds(requestElapsedMs)}</strong>
         </div>
       </div>
 
@@ -2661,6 +2661,20 @@ function getRequestElapsedMs(trace: TraceRecord | null | undefined) {
   const chatTotalStep = trace.steps.find((step) => step.name === "chat_total");
   const elapsedMs = chatTotalStep?.metadata?.elapsed_ms;
   return typeof elapsedMs === "number" && Number.isFinite(elapsedMs) ? elapsedMs : null;
+}
+
+function formatElapsedSeconds(elapsedMs: number | null | undefined) {
+  if (elapsedMs == null || !Number.isFinite(elapsedMs)) {
+    return "-";
+  }
+  const seconds = elapsedMs / 1000;
+  if (seconds < 10) {
+    return `${seconds.toFixed(2)} 秒`;
+  }
+  if (seconds < 100) {
+    return `${seconds.toFixed(1)} 秒`;
+  }
+  return `${Math.round(seconds)} 秒`;
 }
 
 function parseAppDate(value?: string | null) {
