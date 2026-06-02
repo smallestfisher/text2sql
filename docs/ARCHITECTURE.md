@@ -18,7 +18,7 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
   -> 基于 QuestionContext 生成 SQL 输入上下文
   -> Retrieval 检索表结构、业务知识、样例和 join pattern
   -> ContextSummary 汇总进入 SQL 生成的证据
-  -> SQL Prompt 组装真实表字段、业务规则和 few-shot
+  -> SQL Prompt 组装真实表字段、业务知识和 few-shot
   -> LLM 生成 Oracle SQL
   -> SQL Validator 校验并按需 repair
   -> Oracle 执行
@@ -101,7 +101,15 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 
 ## SQL Prompt
 
-SQL prompt 由 `PromptBuilder` 生成，包含：
+SQL prompt 由 `PromptBuilder` facade 生成。当前实现把 prompt supply chain 拆成通用模块：
+
+- `QuestionContextPromptBuilder`：组装问题上下文 prompt，只处理自然语言问题完整性、追问改写和澄清判断。
+- `SqlGenerationPromptBuilder`：组装最终 SQL generation payload。
+- `SqlPromptContextAssembler`：组装 SQL prompt 需要的证据上下文，包括选中表、业务知识、few-shot、join pattern、上下文预算和 trace summary。
+
+这些模块只负责加载、排序、裁剪、渲染和组装证据，不按业务域拆分，也不在代码中写入业务口径、公式、默认过滤或场景化表字段选择规则。
+
+SQL prompt 包含：
 
 - 当前问题和 `semantic_brief`。
 - `context_summary` 和 `evidence_context`。

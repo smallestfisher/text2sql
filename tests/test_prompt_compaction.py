@@ -174,6 +174,69 @@ class PromptCompactionTests(unittest.TestCase):
 
         self.assertEqual(prompt["semantic_brief"], sql_context_value.semantic_brief)
 
+    def test_question_context_prompt_facade_delegates_without_payload_change(self) -> None:
+        session_state = SessionState(
+            session_id="sess_prompt_split",
+            subject_domain="plan_actual",
+            recent_turns=[
+                QueryTurnRecord(
+                    question="2026年Array工厂Oxide类产品，每个月分别投入多少物量",
+                    semantic_brief="查询actual_input_qty；业务域是计划实际；按biz_month展示。",
+                )
+            ],
+        )
+
+        kwargs = {
+            "question": "XPS呢",
+            "session_state": session_state,
+            "parser_signals": {"subject_domain": "plan_actual"},
+        }
+
+        self.assertEqual(
+            self.prompt_builder.build_question_context_prompt(**kwargs),
+            self.prompt_builder.question_context_prompt_builder.build(**kwargs),
+        )
+
+    def test_sql_prompt_facade_delegates_without_payload_change(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            metrics=["inventory_qty"],
+            tables=["oms_inventory"],
+            filters=[FilterItem(field="biz_month", op="latest_n", value={"count": 1, "source_table": "oms_inventory"})],
+            analysis_mode="distribution",
+        )
+
+        context = sql_context(sql_context_value)
+
+        self.assertEqual(
+            self.prompt_builder.build_sql_prompt(context, question="最新 OMS 库存库龄分布"),
+            self.prompt_builder.sql_generation_prompt_builder.build(context, question="最新 OMS 库存库龄分布"),
+        )
+
+    def test_sql_prompt_context_assembler_feeds_sql_prompt_payload(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            metrics=["inventory_qty"],
+            tables=["oms_inventory"],
+            filters=[FilterItem(field="biz_month", op="latest_n", value={"count": 1, "source_table": "oms_inventory"})],
+            analysis_mode="distribution",
+        )
+
+        context = sql_context(sql_context_value)
+        bundle = self.prompt_builder.sql_prompt_context_assembler.assemble(context)
+        prompt = self.prompt_builder.build_sql_prompt(context, question="最新 OMS 库存库龄分布")
+
+        self.assertEqual(prompt["available_tables"], bundle.source_schemas)
+        self.assertEqual(prompt["context_budget"], bundle.context_budget)
+        self.assertEqual(prompt["context_summary"], bundle.context_summary)
+        self.assertEqual(prompt["evidence_context"], bundle.evidence_context)
+        self.assertEqual(prompt["instructions"]["sql_preferences"], bundle.sql_preferences)
+        self.assertEqual(prompt["retrieval_context"]["business_knowledge"], bundle.business_knowledge)
+        self.assertEqual(prompt["retrieval_context"]["examples"], bundle.retrieved_examples)
+        self.assertEqual(prompt["retrieval_context"]["join_patterns"], bundle.selected_join_patterns)
+
     def test_prompt_assets_keep_only_sql_generation_assets(self) -> None:
         assets = self.prompt_builder._prompt_assets()
 

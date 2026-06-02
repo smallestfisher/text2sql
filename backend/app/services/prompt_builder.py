@@ -9,6 +9,11 @@ from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.models.session_state import SessionState
+from backend.app.services.prompts import (
+    QuestionContextPromptBuilder,
+    SqlGenerationPromptBuilder,
+    SqlPromptContextAssembler,
+)
 from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_dialect import SqlDialect
@@ -32,6 +37,12 @@ class PromptBuilder:
             if semantic_runtime is not None
             else None
         )
+        self.question_context_prompt_builder = QuestionContextPromptBuilder(self)
+        self.sql_prompt_context_assembler = SqlPromptContextAssembler(self)
+        self.sql_generation_prompt_builder = SqlGenerationPromptBuilder(
+            self,
+            context_assembler=self.sql_prompt_context_assembler,
+        )
 
     def build_question_context_prompt(
         self,
@@ -40,77 +51,14 @@ class PromptBuilder:
         session_state: SessionState | None,
         parser_signals: dict[str, Any] | None = None,
     ) -> dict:
-        parser_signals = parser_signals or {}
-        subject_domain = str(parser_signals.get("subject_domain") or (session_state.subject_domain if session_state else "unknown"))
-        focus_tables = self._question_context_focus_tables(subject_domain, parser_signals, session_state)
-        conversation_summary = self._conversation_summary(session_state) if session_state is not None else ""
-        recent_turns = [
-            self._turn_text(item)
-            for item in (session_state.recent_turns[-4:] if session_state is not None else [])
-        ]
-        business_knowledge_excerpt = self._question_context_business_knowledge(
-            subject_domain=subject_domain,
+        return self.question_context_prompt_builder.build(
             question=question,
-            conversation_summary=conversation_summary,
-            recent_turns=recent_turns,
-        )[:1200]
-        table_fields = self._context_table_fields(focus_tables)
-        return {
-            "task": "question_context_generation",
-            "question": question,
-            "conversation_summary": conversation_summary,
-            "last_turn": self._last_turn_payload(session_state),
-            "recent_turns": recent_turns,
-            "context_hints": self._compact_mapping(
-                {
-                    "parser_observations": self._compact_mapping(parser_signals),
-                    "pending_clarification": self._pending_clarification_payload(session_state),
-                    "business_knowledge_excerpt": business_knowledge_excerpt,
-                    "focus_tables": focus_tables,
-                    "table_fields": table_fields,
-                }
-            ),
-            "instructions": {
-                "return_format": "json",
-                "fields": [
-                    "decision",
-                    "context_relation",
-                    "subject_domain",
-                    "effective_question",
-                    "semantic_brief",
-                    "clarification_question",
-                    "reason",
-                ],
-                "decision_values": ["answerable", "clarification_needed", "invalid"],
-                "context_relation_values": ["new", "follow_up", "ambiguous"],
-                "constraints": [
-                    "只做问题上下文整理，不生成 SQL。",
-                    "如果当前问题是追问，effective_question 必须改写成不依赖上下文也能理解的完整自然语言问题。",
-                    "首问只要本身是一个完整的自然语言业务查询句，就必须返回 decision=answerable、context_relation=new，并把原问题作为 effective_question；不要在 question_context 阶段追问字段、表、SQL 实现、可选维度、可选过滤条件、额外时间范围或业务口径细节。",
-                    "当 context_relation=new 时，effective_question 必须忠实保留当前用户原话的查询对象、指标、时间、版本、数量和条件；不得用历史上下文替换、覆盖或改写当前问题的明确信息。",
-                    "完整业务查询句的判断只看用户是否表达了要查什么；即使后续 SQL 生成可能还需要选择字段、表、指标公式、默认口径或是否追加过滤条件，也应先进入下一步，不能在本阶段 clarification_needed。",
-                    "如果用户是在纠正或澄清自己上一句话，并且纠正后的句子已经能独立表达查询目标，也必须返回 answerable；不要继续追问可选条件。",
-                    "如果用户问“哪一个”“最多的是谁”“Top/排名”等，返回对象就是查询输出，不要把这个输出对象误当成必须由用户补充的过滤条件。",
-                    "只有用户这句话缺少核心意图、是无法解析的省略追问且上下文也无法补全，或明显不是业务查询时，才返回 clarification_needed 或 invalid。",
-                    "如果 context_hints.pending_clarification 存在，当前用户问题应优先视为对上一轮澄清问题的回答；必须结合 pending_clarification、conversation_summary 和用户回答生成完整 effective_question。",
-                    "当用户对 pending_clarification 给出确认、否认或补充信息时，不要把“是的”“不是”“对”等确认词当成独立业务问题。",
-                    "只能继承 conversation_summary 和 recent_turns 中明确出现的信息；不确定指代时返回 clarification_needed。",
-                    "如果用户表达替换、删除或新增条件，必须在 effective_question 中自然语言表达出来。",
-                    "短追问优先基于最近一轮用户问题补全；除非用户明确要求回到更早主题，不要跳回更早轮次的查询意图。",
-                    "不要因为“分布”“情况”“统计”就自行补充用户没有明确提出的维度。",
-                    "如果用户提到“最新”但没有给出具体时间，应在 semantic_brief 中保留最新口径，不要编造具体日期。",
-                    "只判断用户这句话和可用会话上下文是否足以形成完整自然语言问题；不要判断业务知识、字段、表、计算方法或 SQL 是否足够。",
-                    "semantic_brief 用自然语言说明用户真正要查什么，供后续检索和 SQL 生成使用。",
-                    "只输出指定 JSON 字段，不要输出结构化业务规划字段。",
-                    "不要输出 markdown。",
-                ],
-            },
-        }
+            session_state=session_state,
+            parser_signals=parser_signals,
+        )
 
     def conversation_summary(self, session_state: SessionState | None) -> str:
-        if session_state is None:
-            return ""
-        return self._conversation_summary(session_state)
+        return self.question_context_prompt_builder.conversation_summary(session_state)
 
     def _pending_clarification_payload(self, session_state: SessionState | None) -> dict | None:
         if session_state is None or session_state.pending_clarification is None:
@@ -135,81 +83,11 @@ class PromptBuilder:
         retrieval: RetrievalContext | None = None,
         question: str | None = None,
     ) -> dict:
-        selected_sources = self._selected_sources_for_sql(context, retrieval)
-        selected_join_patterns = self._selected_join_patterns(context, selected_sources, retrieval)
-        selected_sources = self._expand_sources_with_join_patterns(selected_sources, selected_join_patterns)
-        prompt_context = context.model_copy(update={"tables": selected_sources})
-        time_resolution = self._time_resolution(prompt_context)
-        retrieved_examples = self._select_retrieved_examples(context, retrieval, selected_sources=selected_sources)
-        source_schemas = {
-            table_name: self._compact_table_schema(
-                table_name,
-                self._tables_metadata.get(table_name, {}),
-            )
-            for table_name in selected_sources
-            if table_name in self._tables_metadata
-        }
-        sql_preferences = self._prompt_asset_strings("sql_generation", "base_preferences")
-        if any(item.op == "latest_n" for item in context.filters) and not any("latest_n" in item for item in sql_preferences):
-            sql_preferences = [
-                *sql_preferences,
-                "当过滤条件使用 latest_n 时，必须保留最新排序语义，并结合真实排序字段生成 SQL，例如使用 MAX(真实排序字段) 或等价排序表达式。",
-            ]
-        business_knowledge = self._business_knowledge_for_context(context, selected_sources, retrieval)
-        business_knowledge_source = self._business_knowledge_source_for_context(context, selected_sources, retrieval)
-        context_budget = {
-            "business_knowledge_max_chars": self.BUSINESS_KNOWLEDGE_MAX_CHARS,
-            "business_knowledge_mode": "ranked_relevant_chunks",
-            "table_schemas_mode": "retrieval_selected_tables_full_columns",
-        }
-        context_summary = {
-            "selected_sources": selected_sources,
-            "table_schemas_count": len(source_schemas),
-            "table_schema_columns_count": {
-                table_name: len(schema.get("columns", []))
-                for table_name, schema in source_schemas.items()
-                if isinstance(schema, dict)
-            },
-            "business_knowledge_chars": len(business_knowledge),
-            "business_knowledge_source": business_knowledge_source,
-            "time_resolution_count": len(time_resolution),
-            "few_shot_used": bool(retrieved_examples),
-            "retrieved_example_count": len(retrieved_examples),
-            "retrieved_example_ids": [item["id"] for item in retrieved_examples],
-            "subject_domain": context.subject_domain,
-            "business_knowledge_entry_ids": self._selected_business_knowledge_ids(context, selected_sources, retrieval),
-            "join_pattern_ids": self._selected_join_pattern_ids(selected_join_patterns),
-        }
-        evidence_context = {
-            "time_resolution": time_resolution,
-            "allowed_sources": selected_sources,
-            "limit": context.limit,
-            "context_source": "retrieval_evidence",
-        }
-        return {
-            "task": "oracle_text2sql",
-            "question": question,
-            "semantic_brief": context.semantic_brief,
-            "retrieval_context": {
-                "business_knowledge": business_knowledge,
-                "examples": retrieved_examples,
-                "join_patterns": selected_join_patterns,
-            },
-            "oracle_sql_rules": {
-                "name": self.sql_dialect.name,
-                "label": self.sql_dialect.label,
-                "result_limit_clause": self.sql_dialect.result_limit_clause_name,
-            },
-            "available_tables": source_schemas,
-            "context_budget": context_budget,
-            "context_summary": context_summary,
-            "instructions": {
-                "return_format": "sql_only",
-                "constraints": self._sql_generation_constraints(),
-                "sql_preferences": sql_preferences,
-            },
-            "evidence_context": evidence_context,
-        }
+        return self.sql_generation_prompt_builder.build(
+            context,
+            retrieval=retrieval,
+            question=question,
+        )
 
     def _selected_sources_for_sql(
         self,
@@ -1365,7 +1243,13 @@ class PromptBuilder:
         return compacted
 
     def _prompt_assets(self) -> dict:
-        return {}
+        if self.semantic_runtime is None:
+            return {}
+        domain_config = getattr(self.semantic_runtime, "domain_config", None)
+        if not isinstance(domain_config, dict):
+            return {}
+        assets = domain_config.get("prompt_assets", {})
+        return assets if isinstance(assets, dict) else {}
 
     def _prompt_asset_strings(self, section: str, key: str) -> list[str]:
         values = self._prompt_asset_value(section, key)

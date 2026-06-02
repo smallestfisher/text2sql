@@ -96,7 +96,7 @@
 
 - `semantic/business_knowledge.json`
 - `semantic/tables.json`
-- `PromptBuilder.build_question_context_prompt`
+- `QuestionContextPromptBuilder`，或其 `PromptBuilder.build_question_context_prompt` facade 入口
 - `QuestionContextService` 输出兜底和字段校验
 
 ### Retrieval
@@ -125,7 +125,7 @@
 - `examples/nl2sql_examples.template.json`
 - `semantic/join_patterns.json`
 - `RetrievalService`
-- `PromptBuilder`
+- `SqlPromptContextAssembler` 的证据组装，或 `PromptBuilder` 共享 helper 的排序和压缩逻辑
 
 向量状态看 `GET /api/admin/runtime/status` 里的 `vector_retrieval` 和 `retrieval_corpus`。如果启用了向量检索但索引未就绪，请执行 `POST /api/admin/runtime/vector/prewarm`。
 
@@ -156,7 +156,7 @@
 - 业务知识中的公式、默认口径和禁忌。
 - 高质量 few-shot 样例。
 - join pattern。
-- `PromptBuilder` 的上下文选择和压缩。
+- `SqlPromptContextAssembler` 的证据组装和 `PromptBuilder` 共享 helper 的压缩逻辑。
 
 ### SQL Validator / Repair
 
