@@ -456,6 +456,74 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
 
         self.assertEqual(state.subject_domain, "inventory")
 
+    def test_retrieval_conversation_summary_is_gated_by_context_relation(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        summary = "上一轮查询 OMS 库存库龄分布。"
+
+        new_question_context = type(
+            "QuestionContextStub",
+            (),
+            {"context_relation": "new", "conversation_summary": summary},
+        )()
+        follow_up_question_context = type(
+            "QuestionContextStub",
+            (),
+            {"context_relation": "follow_up", "conversation_summary": summary},
+        )()
+        ambiguous_question_context = type(
+            "QuestionContextStub",
+            (),
+            {"context_relation": "ambiguous", "conversation_summary": summary},
+        )()
+
+        self.assertIsNone(orchestrator._retrieval_conversation_summary(new_question_context))
+        self.assertEqual(orchestrator._retrieval_conversation_summary(follow_up_question_context), summary)
+        self.assertEqual(orchestrator._retrieval_conversation_summary(ambiguous_question_context), summary)
+
+    def test_empty_clarification_stops_before_retrieval(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        classification = QuestionClassification(
+            question_type="clarification_needed",
+            subject_domain="unknown",
+            need_clarification=True,
+            clarification_question="请明确上一个问题的具体内容。",
+        )
+        question_context = type(
+            "QuestionContextStub",
+            (),
+            {
+                "decision": "clarification_needed",
+                "context_relation": "follow_up",
+                "effective_question": "",
+                "semantic_brief": "",
+            },
+        )()
+
+        reason = orchestrator._pre_retrieval_terminal_skip_reason(classification, question_context)
+
+        self.assertEqual(reason, "terminal gate: clarification required, skip retrieval and SQL generation")
+
+    def test_clarification_with_semantic_brief_can_reach_retrieval_support(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        classification = QuestionClassification(
+            question_type="clarification_needed",
+            subject_domain="unknown",
+            need_clarification=True,
+            clarification_question="请确认版本字段的判定口径。",
+        )
+        question_context = type(
+            "QuestionContextStub",
+            (),
+            {
+                "decision": "clarification_needed",
+                "context_relation": "ambiguous",
+                "effective_question": "",
+                "semantic_brief": "查询最新5版P版需求中202603需求量最高的FGCODE。",
+            },
+        )()
+
+        self.assertIsNone(orchestrator._pre_retrieval_terminal_skip_reason(classification, question_context))
+
     def test_retrieval_support_reopens_complete_question_context_clarification(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
         classification = QuestionClassification(

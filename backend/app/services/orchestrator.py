@@ -217,7 +217,7 @@ class ConversationOrchestrator:
                 detail=classification.question_type,
             )
             self._sync_classification_with_sql_context(classification, sql_context)
-            terminal_reason = self._pre_retrieval_terminal_skip_reason(classification)
+            terminal_reason = self._pre_retrieval_terminal_skip_reason(classification, question_context)
             if terminal_reason is not None:
                 self._log_timing(trace.trace_id, "terminal_gate", chat_started_at, reason=terminal_reason)
                 self.audit_service.append_step(trace, "terminal_gate", "completed", terminal_reason)
@@ -253,7 +253,7 @@ class ConversationOrchestrator:
             retrieval = self.retrieval_service.retrieve_text(
                 question=effective_question,
                 semantic_brief=getattr(question_context, "semantic_brief", None),
-                conversation_summary=getattr(question_context, "conversation_summary", None),
+                conversation_summary=self._retrieval_conversation_summary(question_context),
             )
             self._log_timing(
                 trace.trace_id,
@@ -1155,6 +1155,16 @@ class ConversationOrchestrator:
         }
 
     @staticmethod
+    def _retrieval_conversation_summary(question_context) -> str | None:
+        if question_context is None:
+            return None
+        context_relation = getattr(question_context, "context_relation", "new") or "new"
+        if context_relation not in {"follow_up", "ambiguous"}:
+            return None
+        summary = getattr(question_context, "conversation_summary", None)
+        return summary or None
+
+    @staticmethod
     def _retrieval_summary(retrieval) -> dict | None:
         if retrieval is None:
             return None
@@ -1374,10 +1384,20 @@ class ConversationOrchestrator:
                 return True
         return False
 
-    def _pre_retrieval_terminal_skip_reason(self, classification) -> str | None:
+    def _pre_retrieval_terminal_skip_reason(self, classification, question_context=None) -> str | None:
         if classification.question_type == "invalid":
             return "terminal gate: invalid question, skip retrieval and SQL generation"
+        if getattr(classification, "need_clarification", False) and not self._clarification_has_retrieval_context(question_context):
+            return "terminal gate: clarification required, skip retrieval and SQL generation"
         return None
+
+    @staticmethod
+    def _clarification_has_retrieval_context(question_context) -> bool:
+        if question_context is None:
+            return False
+        effective_question = str(getattr(question_context, "effective_question", None) or "").strip()
+        semantic_brief = str(getattr(question_context, "semantic_brief", None) or "").strip()
+        return bool(effective_question or semantic_brief)
 
     def _terminal_skip_reason(self, classification, sql_context) -> str | None:
         if classification.question_type == "invalid":

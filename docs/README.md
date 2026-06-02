@@ -7,6 +7,7 @@
 - [ARCHITECTURE.md](ARCHITECTURE.md)：当前架构、主链路、核心对象、SQL 治理和 runtime 落库。
 - [DEBUG_PLAYBOOK.md](DEBUG_PLAYBOOK.md)：真实问题答错时的分层排查路径。
 - [CONTENT_GUIDELINES.md](CONTENT_GUIDELINES.md)：样例和业务知识库编写规范。
+- [TODO.md](TODO.md)：尚未实现但已经形成方向约束的工程待办。
 - [../backend/README.md](../backend/README.md)：后端运行、配置、API 和目录结构。
 - [../frontend/README.md](../frontend/README.md)：前端工作台结构和数据入口。
 
@@ -17,3 +18,4 @@
 - 后端运行和 API 放在 `backend/README.md`。
 - 排查流程集中放在 `DEBUG_PLAYBOOK.md`。
 - 样例和业务知识写法集中放在 `CONTENT_GUIDELINES.md`。
+- 未来方向、非目标和约束型待办集中放在 `TODO.md`。
