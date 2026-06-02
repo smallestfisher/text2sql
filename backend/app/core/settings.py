@@ -56,7 +56,6 @@ class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "dev")
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     enable_docs: bool = _env_bool("ENABLE_DOCS", default=True)
-    enable_chitchat_mode: bool = _env_bool("ENABLE_CHITCHAT_MODE", default=False)
     business_database_url: str | None = _raw_business_database_url()
     runtime_database_url: str | None = os.getenv("RUNTIME_DATABASE_URL")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")

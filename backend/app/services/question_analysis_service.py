@@ -27,9 +27,7 @@ class QuestionAnalysisService:
         prompt_builder: PromptBuilder,
         semantic_runtime: SemanticRuntime | None = None,
         question_context_service: QuestionContextService | None = None,
-        enable_chitchat_mode: bool = False,
     ) -> None:
-        _ = enable_chitchat_mode
         self.domain_config = domain_config
         self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
         self.question_context_service = question_context_service or QuestionContextService(llm_client, prompt_builder)

@@ -90,7 +90,7 @@
 - 追问没有补全成完整问题。
 - `semantic_brief` 描述了上一轮对象。
 - 信息足够却返回 `clarification_needed`。
-- 非业务问题没有被识别为 `invalid` 或 `chat`。
+- 非业务问题没有被识别为 `invalid`。
 
 优先修：
 

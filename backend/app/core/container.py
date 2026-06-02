@@ -127,7 +127,6 @@ class AppContainer:
             llm_client=self.llm_client,
             prompt_builder=self.prompt_builder,
             question_context_service=self.question_context_service,
-            enable_chitchat_mode=self.settings.enable_chitchat_mode,
         )
         self.session_state_service = SessionStateService()
         self.execution_cache_service = ExecutionCacheService(
@@ -184,9 +183,7 @@ class AppContainer:
             vector_provider,
             self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
         )
-        self.answer_builder = AnswerBuilder(
-            enable_chitchat_mode=self.settings.enable_chitchat_mode,
-        )
+        self.answer_builder = AnswerBuilder()
         self.metadata_repository = FileMetadataRepository(self.metadata_registry)
         self.session_service = SessionService(self.session_repository)
         self.audit_service = AuditService(self.audit_repository)

@@ -11,7 +11,6 @@ import uuid
 from backend.app.core.exceptions import PermissionDeniedError
 from backend.app.models.auth import (
     ADMIN_ROLE,
-    CHITCHAT_ROLE,
     AdminPasswordResetRequest,
     AuthUserRecord,
     BootstrapAdminRequest,
@@ -29,7 +28,6 @@ from backend.app.models.auth import (
 BUILTIN_ROLE_DESCRIPTIONS = {
     ADMIN_ROLE: "管理员，可访问管理中心并管理用户、角色与运行时数据。",
     VIEWER_ROLE: "基础查询用户，可使用标准 Text2SQL 数据查询能力。",
-    CHITCHAT_ROLE: "允许用户在 ENABLE_CHITCHAT_MODE=true 时收到闲聊回复。",
 }
 
 

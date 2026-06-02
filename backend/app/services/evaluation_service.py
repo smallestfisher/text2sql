@@ -349,7 +349,7 @@ class EvaluationService:
     def _evaluate_case(self, case: EvaluationCase, response) -> list[str]:
         failures: list[str] = []
         answer_status = response.answer.status if response.answer else None
-        terminal_non_sql_statuses = {"clarification_needed", "invalid", "chat"}
+        terminal_non_sql_statuses = {"clarification_needed", "invalid"}
         actual_metrics = self._response_metrics(response)
         actual_dimensions = self._response_dimensions(response)
         actual_filter_fields = self._extract_filter_fields(response)

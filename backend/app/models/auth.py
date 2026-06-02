@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 
 ADMIN_ROLE = "admin"
 VIEWER_ROLE = "viewer"
-CHITCHAT_ROLE = "chitchat"
 
 
 class UserContext(BaseModel):

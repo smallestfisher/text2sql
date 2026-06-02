@@ -141,7 +141,7 @@ SQL repair 只处理 validator 或执行错误反馈出来的问题。业务正�
 
 ## 执行与响应
 
-SQL 通过校验后由 `SqlExecutor` 在 Oracle 上执行，受超时、最大行数和只读连接约束。`AnswerBuilder` 把执行结果映射成前端状态，例如 `ok`、`empty_result`、`clarification_needed`、`invalid`、`error`、`chat`。
+SQL 通过校验后由 `SqlExecutor` 在 Oracle 上执行，受超时、最大行数和只读连接约束。`AnswerBuilder` 把执行结果映射成前端状态，例如 `ok`、`empty_result`、`clarification_needed`、`invalid` 和 `error`。
 
 `ChatResponse` 返回：
 

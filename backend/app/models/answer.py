@@ -5,8 +5,8 @@ from typing import Literal, cast
 from pydantic import BaseModel
 
 
-AnswerStatus = Literal["ok", "clarification_needed", "invalid", "error", "chat"]
-_KNOWN_ANSWER_STATUSES = {"ok", "clarification_needed", "invalid", "error", "chat"}
+AnswerStatus = Literal["ok", "clarification_needed", "invalid", "error"]
+_KNOWN_ANSWER_STATUSES = {"ok", "clarification_needed", "invalid", "error"}
 
 
 def normalize_answer_status(status: str | None, *, executed: bool = False) -> AnswerStatus:

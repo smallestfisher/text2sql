@@ -738,7 +738,6 @@ class ConversationOrchestrator:
                 execution=execution,
                 context_validation=context_validation,
                 sql_validation=sql_validation,
-                user_context=request.user_context,
                 metrics=list(getattr(sql_context, "metrics", []) or []),
             )
             self._log_timing(trace.trace_id, "answer_building", stage_started_at)
@@ -1440,7 +1439,6 @@ class ConversationOrchestrator:
             execution=None,
             context_validation=context_validation,
             sql_validation=sql_validation,
-            user_context=request.user_context,
             metrics=list(getattr(sql_context, "metrics", []) or []),
         )
         next_session_state = self._terminal_session_state(

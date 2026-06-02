@@ -107,7 +107,6 @@ type PendingProgressStep = {
 type AuthMode = "login" | "bootstrap";
 type InspectorTab = "result" | "sql" | "trace" | "state";
 type ViewMode = "workspace" | "admin";
-const CHITCHAT_ROLE = "chitchat";
 
 const emptyUserForm: UserUpsertPayload = {
   username: "",
@@ -655,24 +654,6 @@ function App() {
     }
   }
 
-  async function handleAdminToggleChitchat(user: UserContext) {
-    if (!token) {
-      return;
-    }
-    const nextRoles = toggleRole(user.roles, CHITCHAT_ROLE, !user.roles.includes(CHITCHAT_ROLE));
-    try {
-      const updatedUser = await api.adminUpsertUser(token, user.user_id, {
-        username: user.username || user.user_id,
-        roles: nextRoles,
-        is_active: user.is_active,
-      });
-      setCurrentUser((current) => (current?.user_id === updatedUser.user_id ? updatedUser : current));
-      await loadAdminData(token);
-    } catch (error) {
-      setAdminError(errorMessage(error));
-    }
-  }
-
   async function handleAdminResetPassword(user: UserContext) {
     setResetPasswordTarget(user);
     setResetPasswordValue("");
@@ -931,7 +912,6 @@ function App() {
               onUserFormChange={setUserForm}
               onSaveUser={() => void handleAdminUserSave()}
               onToggleUser={(user) => void handleAdminToggleUser(user)}
-              onToggleChitchat={(user) => void handleAdminToggleChitchat(user)}
               onResetPassword={(user) => void handleAdminResetPassword(user)}
               onDeleteUser={(user) => void handleAdminDeleteUser(user)}
               onReplayLog={(log) => void handleAdminReplayLog(log)}
@@ -1287,7 +1267,6 @@ function AdminView(props: {
   onUserFormChange: (value: UserUpsertPayload) => void;
   onSaveUser: () => void;
   onToggleUser: (user: UserContext) => void;
-  onToggleChitchat: (user: UserContext) => void;
   onResetPassword: (user: UserContext) => void;
   onDeleteUser: (user: UserContext) => void;
   onReplayLog: (log: RuntimeQueryLogRecord) => void;
@@ -1426,7 +1405,7 @@ function AdminView(props: {
 
         <article className="detail-card admin-card admin-card-full" id="admin-users">
           <div className="detail-title">用户管理</div>
-          <div className="detail-copy">系统会根据用户名自动生成内部 `user_id`。`chitchat` 权限用于控制闲聊回复，只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会生效。</div>
+          <div className="detail-copy">系统会根据用户名自动生成内部 `user_id`。角色使用英文名称，多个角色用逗号分隔。</div>
 
           <div className="admin-form-grid">
             <label className="field">
@@ -1459,19 +1438,6 @@ function AdminView(props: {
           </div>
 
           <div className="admin-toggle-row">
-            <label className="toggle-chip">
-              <input
-                type="checkbox"
-                checked={props.userForm.roles.includes(CHITCHAT_ROLE)}
-                onChange={(event) =>
-                  props.onUserFormChange({
-                    ...props.userForm,
-                    roles: toggleRole(props.userForm.roles, CHITCHAT_ROLE, event.target.checked),
-                  })
-                }
-              />
-              <span>闲聊权限</span>
-            </label>
             <button className="primary-button" type="button" onClick={props.onSaveUser}>
               保存用户
             </button>
@@ -1495,9 +1461,6 @@ function AdminView(props: {
                     ))}
                   </div>
                   <div className="admin-user-actions">
-                    <button className="secondary-button" type="button" onClick={() => props.onToggleChitchat(user)}>
-                      {user.roles.includes(CHITCHAT_ROLE) ? "移除闲聊权限" : "授予闲聊权限"}
-                    </button>
                     <button className="secondary-button" type="button" onClick={() => props.onToggleUser(user)}>
                       {user.is_active ? "禁用" : "启用"}
                     </button>
@@ -2387,7 +2350,7 @@ function describeProgressCurrentNote(event: ProgressEvent) {
 
 function isTerminalNonSqlStatus(status: string | null | undefined) {
   const normalized = (status || "").toLowerCase();
-  return ["clarification_needed", "invalid", "chat"].includes(normalized);
+  return ["clarification_needed", "invalid"].includes(normalized);
 }
 
 function classifyProgressTone(event: ProgressEvent) {
@@ -2552,9 +2515,6 @@ function describeResponseStatus(status: string) {
   }
   if (["clarification_needed"].includes(normalized)) {
     return "需澄清";
-  }
-  if (["chat"].includes(normalized)) {
-    return "闲聊";
   }
   if (["skipped"].includes(normalized)) {
     return "已跳过";
@@ -2730,18 +2690,6 @@ function buildUserId(username: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized ? `user-${normalized}` : `user-${Date.now()}`;
-}
-
-function toggleRole(roles: string[], roleName: string, enabled: boolean) {
-  const nextRoles = roles.map((item) => item.trim()).filter(Boolean);
-  const hasTargetRole = nextRoles.includes(roleName);
-  if (enabled && !hasTargetRole) {
-    return [...nextRoles, roleName];
-  }
-  if (!enabled && hasTargetRole) {
-    return nextRoles.filter((item) => item !== roleName);
-  }
-  return nextRoles;
 }
 
 export default App;

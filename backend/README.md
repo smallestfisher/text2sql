@@ -52,7 +52,6 @@ AUTH_TOKEN_SECRET="change-me"
 - `LOG_LEVEL=DEBUG`：输出主链路 `stage_io` 摘要。
 - `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索。
 - `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时预热向量索引。
-- `ENABLE_CHITCHAT_MODE=false`：控制闲聊能力。
 - `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
 - `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
 - `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。
