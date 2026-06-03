@@ -16,7 +16,10 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
   -> 读取会话状态
   -> QuestionContext 生成完整问题和语义摘要
   -> 基于 QuestionContext 生成 SQL 输入上下文
+  -> Terminal Gate 处理 invalid / clarification_needed
   -> Retrieval 检索表结构、业务知识、样例和 join pattern
+  -> 基于 retrieval 命中补齐 SQL 上下文表和澄清状态
+  -> Terminal Gate 再次处理 retrieval 后仍需终止的问题
   -> ContextSummary 汇总进入 SQL 生成的证据
   -> SQL Prompt 组装真实表字段、业务知识和 few-shot
   -> LLM 生成 Oracle SQL
@@ -71,7 +74,7 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 
 每次查询都会生成 `trace_id`。Trace 记录阶段状态和关键元数据；query log、retrieval log 和 SQL audit 用同一个 `trace_id` 关联。
 
-主要阶段：
+主要 Trace step：
 
 - `load_session`
 - `question_context`
@@ -79,12 +82,16 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 - `retrieve`
 - `sql_context_tables`
 - `validate_context`
+- `terminal_gate`，仅 invalid 或 clarification 场景出现
 - `build_sql_prompt`
 - `generate_sql`
 - `validate_sql`
 - `execute`
 - `chat_total`
 - `response_snapshot`
+- `cancelled` / `failed`，仅异常或客户端取消场景出现
+
+SSE 进度事件使用更偏用户流程的阶段名，常见包括 `accepted`、`load_session`、`question_analysis`、`retrieval`、`sql_generation`、`sql_validation`、`execution`、`answer_building`、`completed` 和 `failed`。
 
 持久化发生在响应快照之后，会把 trace、query log、retrieval log、SQL audit、消息和会话状态写入 runtime MySQL；失败和取消也会尽量保留可用的运行证据。
 
@@ -92,6 +99,17 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 
 `SessionState` 保存追问和工作台恢复需要的上下文：
 
+- `subject_domain`
+- `entities`
+- `tables`
+- `metrics`
+- `dimensions`
+- `filters`
+- `sort`
+- `limit`
+- `time_context`
+- `version_context`
+- `analysis_mode`
 - `conversation_summary`
 - `recent_turns`
 - `last_effective_question`
@@ -149,7 +167,7 @@ SQL repair 只处理 validator 或执行错误反馈出来的问题。业务正�
 
 ## 执行与响应
 
-SQL 通过校验后由 `SqlExecutor` 在 Oracle 上执行，受超时、最大行数和只读连接约束。`AnswerBuilder` 把执行结果映射成前端状态，例如 `ok`、`empty_result`、`clarification_needed`、`invalid` 和 `error`。
+SQL 通过校验后由 `SqlExecutor` 在 Oracle 上执行，受超时、最大行数和只读连接约束。`AnswerBuilder` 把执行结果映射成前端响应状态。当前 `answer.status` 只包含 `ok`、`clarification_needed`、`invalid` 和 `error`。空结果、截断、超时和数据库错误属于 `execution.status`，前端会结合两者显示用户友好的状态文案。
 
 `ChatResponse` 返回：
 
@@ -181,7 +199,7 @@ SQL 通过校验后由 `SqlExecutor` 在 Oracle 上执行，受超时、最大�
 
 ## 运行与管理
 
-- 启动时会检查业务库、runtime 库、runtime schema、metadata、`sqlglot`、LLM 和向量检索配置。
+- 启动时会检查业务库、runtime 库、runtime schema、metadata、`sqlglot` 和向量检索配置；LLM health 与调用 metrics 通过 runtime status 暴露。
 - `POST /api/admin/metadata/reload` 会重新装配容器、加载语义资产并刷新检索语料。
 - `POST /api/admin/runtime/vector/prewarm` 会同步构建向量索引。
 - `POST /api/admin/runtime/query-logs/{trace_id}/replay` 用当前链路重放真实问题。

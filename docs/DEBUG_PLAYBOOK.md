@@ -16,13 +16,14 @@
 1. 在工作台或 `POST /api/chat/query/stream` 复现问题。
 2. 记录 `session_id` 和 `trace_id`。
 3. 打开 `GET /api/chat/sessions/{session_id}/workspace`。
-4. 先看 `question_context.decision`、`question_context.effective_question`、`retrieval.hit_count_by_source`、`sql_validation.valid`、`sql_validation.warnings`、`sql_validation.risk_flags`、`execution.status`、`answer.status`。
+4. 先看 `question_context.decision`、`question_context.effective_question`、是否出现 `terminal_gate`、`retrieval.hit_count_by_source`、`sql_validation.valid`、`sql_validation.warnings`、`sql_validation.risk_flags`、`execution.status`、`answer.status`。
 5. 再看 `GET /api/chat/traces/{trace_id}`、`GET /api/chat/traces/{trace_id}/retrieval`、`GET /api/chat/traces/{trace_id}/sql-audit`。
 6. 修复后执行 `POST /api/admin/runtime/query-logs/{trace_id}/replay`。
 
 最短分流：
 
 - 没理解用户问题或追问：看 QuestionContext。
+- 直接返回无效或需澄清：看 `terminal_gate`、QuestionContext 和 `pending_clarification`。
 - 关键表、知识或样例没进上下文：看 Retrieval。
 - SQL 结构、字段、时间、口径错：看 SQL Prompt 和语义资产。
 - SQL 被拦或没拦住：看 SQL Validator。
@@ -216,12 +217,15 @@ Repair 是通用纠错，不负责弥补业务知识缺失。业务理解错时�
 
 - `answer.status`
 - `answer.summary`
+- `execution.status`
 - `workspace.latest_response`
 - `workspace.latest_trace`
 - `workspace.trace_artifacts`
 - `sql_audit`
 
 这类问题通常是响应构造、消息保存或工作台恢复问题，不是 SQL 生成问题。
+
+当前 `answer.status` 只表示 `ok`、`clarification_needed`、`invalid` 或 `error`；`empty_result`、`truncated`、`timeout` 等执行细节看 `execution.status`。
 
 ## LLM Cache
 

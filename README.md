@@ -9,7 +9,8 @@ Text2SQL 是一个面向中文业务问题的 Oracle 查询工作台。用户用
 - 业务 SQL 生成、repair、AST 解析和校验都按 Oracle 规则运行。
 - SQL 安全错误会阻断执行；质量警告和风险标签会写入 trace、query log 和 SQL audit，用于排查和治理。
 - `semantic/`、`examples/`、`eval/` 是语义资产、检索语料、管理台编辑和评测的共同来源。
-- 后端启动时会检查数据库、runtime schema、metadata、`sqlglot`、LLM 和向量检索配置；关键依赖失败会阻断启动。
+- 后端启动时会检查数据库、runtime schema、metadata、`sqlglot` 和向量检索配置；关键启动依赖失败会阻断启动，LLM 状态可在 runtime status 中查看。
+- 非业务输入会作为 `invalid` 终止响应处理，不进入检索、SQL 生成或执行链路。
 - 准确率修复优先沉淀到表结构说明、业务知识、样例、join pattern、retrieval、prompt 和 validator。
 
 ## Docker 启动
@@ -106,7 +107,6 @@ AUTH_TOKEN_SECRET="change-me"
 
 - `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索。
 - `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时预热向量索引。
-- `ENABLE_CHITCHAT_MODE=false`：控制闲聊能力。
 - `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
 - `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
 - `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。

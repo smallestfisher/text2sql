@@ -11,7 +11,7 @@
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
 - 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、角色、反馈和 replay
 - 管理中心可以重载元数据、重建向量索引，并在最近查询日志上直接 replay
-- 管理员可以在用户管理区域授予或移除 `chitchat` 角色；该角色只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会实际生效
+- 管理员可以在用户管理区域维护账号、启停状态和角色；当前内置有效角色是 `admin` 与 `viewer`
 - 后端管理接口支持 runtime trace 物化 eval case / example；物化 example 后，新样例会参与后端 retrieval 和 SQL prompt，受影响向量会重建并持久化
 - 当前前端管理中心主要暴露状态、日志、replay、索引刷新和用户/角色管理
 
@@ -21,6 +21,7 @@
 
 - 工作台优先调用 `POST /api/chat/query/stream`
 - SSE 事件类型包括 `accepted`、`stage`、`completed`、`failed`
+- 常见阶段包括 `question_analysis`、`retrieval`、`sql_generation`、`sql_validation`、`execution`、`answer_building`
 - 进度卡显示当前阶段、状态和 `trace_id`
 - 如果流式请求没有返回业务响应，前端会按 `failed` 事件或请求错误展示失败状态
 

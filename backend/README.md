@@ -68,7 +68,9 @@ AUTH_TOKEN_SECRET="change-me"
 - runtime schema 初始化、补列和补索引。
 - metadata 文件可读性和 JSON 结构。
 - `sqlglot` 与 Oracle AST 校验器可用性。
-- LLM 和向量检索配置满足开启条件。
+- 向量检索配置满足开启条件，且预热开启时向量语料能完成同步。
+
+LLM client 会随容器初始化，`GET /api/admin/runtime/status` 会返回 LLM health 和 metrics；`OPENAI_API_KEY` 未配置时，应用可以启动，但 QuestionContext 和 SQL 生成会在调用时失败。
 
 任一关键依赖失败都会阻断启动。
 
@@ -92,14 +94,27 @@ docker exec -i text2sql-mysql mysql -uadmin -padmin123 manager < sql/runtime_sto
 1. 读取 session state。
 2. 生成 `QuestionContext`，得到 `effective_question` 和 `semantic_brief`。
 3. 构建轻量 `classification` 和 `SqlGenerationContext` 输入载体。
-4. `RetrievalService` 检索表结构、业务知识、样例、join pattern 和向量命中。
-5. 根据 retrieval 命中补齐 SQL 上下文表，并做上下文记录。
-6. `PromptBuilder` 组装 Oracle SQL prompt。
-7. `LLMClient` 生成 SQL，必要时按 validator 或执行错误 repair。
-8. `SqlValidator` 校验只读、单语句、真实表字段、Oracle 边界和结果限制，并产出 warning、risk level、risk flags。
-9. `SqlExecutor` 执行 Oracle 查询。
-10. `AnswerBuilder` 构造响应。
-11. 保存 response snapshot、trace、query log、retrieval log、SQL audit、消息和下一轮 session state。
+4. `terminal_gate` 处理明显 `invalid` 或需要澄清的问题。
+5. `RetrievalService` 检索表结构、业务知识、样例、join pattern 和向量命中。
+6. 根据 retrieval 命中补齐 SQL 上下文表，并做上下文记录。
+7. `terminal_gate` 再次处理 retrieval 后仍需终止的问题。
+8. `PromptBuilder` 组装 Oracle SQL prompt。
+9. `LLMClient` 生成 SQL，必要时按 validator 或执行错误 repair。
+10. `SqlValidator` 校验只读、单语句、真实表字段、Oracle 边界和结果限制，并产出 warning、risk level、risk flags。
+11. `SqlExecutor` 执行 Oracle 查询。
+12. `AnswerBuilder` 构造响应。
+13. 保存 response snapshot、trace、query log、retrieval log、SQL audit、消息和下一轮 session state。
+
+如果 `QuestionContext` 或 retrieval 后的 SQL 上下文判定为 `invalid` / `clarification_needed`，链路会通过 `terminal_gate` 提前结束，并保存可用 trace、消息和 session state，不进入 SQL 生成和执行。
+
+## 认证与权限
+
+首次部署通过 `POST /api/auth/bootstrap-admin` 创建第一个管理员。之后前端使用 `POST /api/auth/login` 获取 bearer token。
+
+- `admin`：可以访问 `/api/admin/*`，管理用户、角色、metadata、runtime log、replay 和 eval。
+- `viewer`：基础查询用户，可使用标准工作台查询和查看自己会话内的 trace / SQL audit / 导出结果。
+
+自定义角色可以保存到 runtime 库，但当前后端权限判断只内置使用 `admin` 和 `viewer`。
 
 ## SQL 治理
 
