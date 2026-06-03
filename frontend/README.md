@@ -10,9 +10,19 @@
 - 中间：消息流、欢迎态快捷问题卡片、输入框
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`
 - 管理员额外可切到管理中心，查看 runtime 状态、日志、用户、角色、反馈和 replay
-- 管理员通过 runtime trace 物化 example 后，新样例会参与后端 retrieval 和 SQL prompt；受影响向量会重建并持久化，通常不需要重启服务
+- 管理中心可以重载元数据、重建向量索引，并在最近查询日志上直接 replay
+- 管理员可以在用户管理区域授予或移除 `chitchat` 角色；该角色只有在后端开启 `ENABLE_CHITCHAT_MODE=true` 时才会实际生效
+- 后端管理接口支持 runtime trace 物化 eval case / example；物化 example 后，新样例会参与后端 retrieval 和 SQL prompt，受影响向量会重建并持久化
+- 当前前端管理中心主要暴露状态、日志、replay、索引刷新和用户/角色管理
 
 ## 当前交互规则
+
+### 流式提问进度
+
+- 工作台优先调用 `POST /api/chat/query/stream`
+- SSE 事件类型包括 `accepted`、`stage`、`completed`、`failed`
+- 进度卡显示当前阶段、状态和 `trace_id`
+- 如果流式请求没有返回业务响应，前端会按 `failed` 事件或请求错误展示失败状态
 
 ### 欢迎态快捷问题
 
@@ -40,7 +50,9 @@
 ### 详情面板与下载
 
 - 普通登录用户也可以打开详情面板
-- `SQL` 面板展示本轮生成 SQL 和 QueryPlan 载体
+- `SQL` 面板展示本轮生成 SQL、SQL 输入上下文和上下文摘要
+- `SQL` 面板显示 SQL 校验 warning 数，warning 详情可在 trace / SQL audit 中查看
+- `结果` 面板显示本轮总耗时，优先读取 trace 的 `chat_total.elapsed_ms`，再回退到 query log 或执行耗时
 - 结果下载只受会话/Trace 归属校验控制，不再做额外权限裁剪
 
 ### 移动端
@@ -109,6 +121,7 @@ npm run build
 - `GET /api/chat/sessions`
 - `DELETE /api/chat/sessions/{session_id}`
 - `GET /api/chat/sessions/{session_id}/workspace`
+- `GET /api/chat/query-logs`
 - `POST /api/chat/query`
 - `POST /api/chat/query/stream`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
@@ -118,13 +131,15 @@ npm run build
 - `GET /api/admin/runtime/query-logs`
 - `POST /api/admin/runtime/query-logs/{trace_id}/replay`
 - `GET /api/admin/metadata/overview`
+- `POST /api/admin/metadata/reload`
+- `POST /api/admin/runtime/vector/prewarm`
 - `GET /api/admin/feedbacks/summary`
 - `GET /api/admin/eval/summary`
 - `GET /api/admin/users`
+- `PUT /api/admin/users/{user_id}`
 - `POST /api/admin/users/{user_id}/reset-password`
 - `DELETE /api/admin/users/{user_id}`
 - `GET /api/admin/roles`
-- `PUT /api/admin/users/{user_id}`
 
 ## 当前用户侧不再强调的内容
 

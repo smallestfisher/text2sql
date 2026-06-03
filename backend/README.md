@@ -55,7 +55,9 @@ AUTH_TOKEN_SECRET="change-me"
 - `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
 - `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
 - `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。
-- `SQL_TIMEOUT_SECONDS`、`EXECUTION_MAX_ROWS`：SQL 执行超时和最大返回行数。
+- `DEFAULT_SQL_LIMIT` / `HIGH_RISK_SQL_LIMIT`：默认 SQL 结果限制和高风险结果限制阈值。
+- `SQL_TIMEOUT_SECONDS` / `EXECUTION_MAX_ROWS`：SQL 执行超时和单次最大返回行数。
+- `EXECUTION_CACHE_TTL_SECONDS` / `EXECUTION_CACHE_MAX_ENTRIES`：相同 SQL 的短期执行结果缓存。
 
 ## 启动检查
 
@@ -89,14 +91,27 @@ docker exec -i text2sql-mysql mysql -uadmin -padmin123 manager < sql/runtime_sto
 
 1. 读取 session state。
 2. 生成 `QuestionContext`，得到 `effective_question` 和 `semantic_brief`。
-3. 构建轻量 `classification` 和 `QueryPlan` 响应载体。
+3. 构建轻量 `classification` 和 `SqlGenerationContext` 输入载体。
 4. `RetrievalService` 检索表结构、业务知识、样例、join pattern 和向量命中。
-5. `PromptBuilder` 组装 Oracle SQL prompt。
-6. `LLMClient` 生成 SQL，必要时按 validator 或执行错误 repair。
-7. `SqlValidator` 校验只读、单语句、真实表字段、Oracle 边界和结果限制。
-8. `SqlExecutor` 执行 Oracle 查询。
-9. `AnswerBuilder` 构造响应。
-10. 保存 trace、query log、retrieval log、SQL audit、消息和下一轮 session state。
+5. 根据 retrieval 命中补齐 SQL 上下文表，并做上下文记录。
+6. `PromptBuilder` 组装 Oracle SQL prompt。
+7. `LLMClient` 生成 SQL，必要时按 validator 或执行错误 repair。
+8. `SqlValidator` 校验只读、单语句、真实表字段、Oracle 边界和结果限制，并产出 warning、risk level、risk flags。
+9. `SqlExecutor` 执行 Oracle 查询。
+10. `AnswerBuilder` 构造响应。
+11. 保存 response snapshot、trace、query log、retrieval log、SQL audit、消息和下一轮 session state。
+
+## SQL 治理
+
+`SqlValidator` 的 errors 是执行前硬阻断，warnings 是治理信号，不会单独阻断执行。当前 warnings 和 risk flags 会进入 `sql_validation`、trace、runtime query log 和 SQL audit。
+
+质量警告覆盖这些常见问题：
+
+- 比率或除法没有用 `NULLIF` 或 `CASE WHEN` 保护零分母。
+- 多表聚合没有用 CTE 或派生表显式锁定聚合粒度。
+- `ORDER BY 1` 这类位置排序没有使用显式输出别名或表达式。
+
+管理员可以用 `GET /api/admin/runtime/query-logs` 的 `sql_risk_level`、`subject_domain`、`risk_flag` 查询参数筛选日志，也可以用 `GET /api/admin/runtime/query-logs/risk-summary` 看最近查询的风险分布。
 
 ## API 分组
 
@@ -125,28 +140,26 @@ Chat / Workspace：
 - `GET /api/chat/history/{session_id}`
 - `GET /api/chat/state/{session_id}`
 - `GET /api/chat/snapshots/{session_id}`
+- `GET /api/chat/query-logs`
 - `GET /api/chat/traces/{trace_id}`
 - `GET /api/chat/traces/{trace_id}/retrieval`
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/export`
 - `POST /api/chat/feedback`
+- `GET /api/chat/feedbacks`
+- `GET /api/chat/feedbacks/summary`
 
 Semantic：
 
 - `GET /api/semantic/summary`
 - `POST /api/semantic/retrieve-preview`
 
-单步调试：
-
-- `POST /api/query/classify`
-- `POST /api/query/plan`
-- `POST /api/query/sql`
-- `POST /api/query/execute`
-
 Admin Runtime：
 
 - `GET /api/admin/runtime/status`
 - `GET /api/admin/runtime/sessions`
+- `GET /api/admin/runtime/sessions/{session_id}/history`
+- `GET /api/admin/runtime/sessions/{session_id}/snapshots`
 - `GET /api/admin/runtime/query-logs`
 - `GET /api/admin/runtime/query-logs/risk-summary`
 - `GET /api/admin/runtime/query-logs/{trace_id}`
@@ -158,26 +171,34 @@ Admin Runtime：
 - `POST /api/admin/runtime/vector/prewarm`
 - `POST /api/admin/runtime/retention/purge`
 
-Admin Metadata / Examples / Eval / Users：
+Admin Metadata / Examples / Trace / Feedback / Eval / Users / Roles：
 
 - `GET /api/admin/metadata/overview`
 - `GET /api/admin/metadata/documents`
+- `GET /api/admin/metadata/documents/{name}`
 - `PUT /api/admin/metadata/documents/{name}`
 - `POST /api/admin/metadata/reload`
 - `GET /api/admin/examples`
 - `POST /api/admin/examples`
 - `PUT /api/admin/examples/{example_id}`
 - `POST /api/admin/examples/bulk`
+- `GET /api/admin/traces`
+- `GET /api/admin/traces/{trace_id}`
+- `GET /api/admin/feedbacks`
+- `GET /api/admin/feedbacks/summary`
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/cases`
+- `POST /api/admin/eval/cases/{case_id}/replay`
 - `POST /api/admin/eval/run`
 - `GET /api/admin/eval/runs`
 - `GET /api/admin/eval/summary`
 - `GET /api/admin/users`
+- `GET /api/admin/users/{user_id}`
 - `PUT /api/admin/users/{user_id}`
 - `POST /api/admin/users/{user_id}/reset-password`
 - `DELETE /api/admin/users/{user_id}`
 - `GET /api/admin/roles`
+- `PUT /api/admin/roles/{role_name}`
 
 ## Replay / Eval
 

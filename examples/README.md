@@ -31,3 +31,5 @@
 ```
 
 后端会在加载时自动派生 `question_type`、`tables`、`filters`、`join_path` 等运行字段。样例 SQL 进入 prompt 前会做安全检查；非 Oracle 方言或非单条 `SELECT` / `WITH ... SELECT` 查询不会作为 few-shot SQL 暴露给模型。
+
+样例 SQL 还应避免触发质量警告：比率计算保护零分母，多表聚合先用 CTE 或派生表锁定粒度，排序使用明确字段或别名而不是 `ORDER BY 1`。

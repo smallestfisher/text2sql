@@ -8,6 +8,7 @@
 - 先判断错在哪一层：QuestionContext、Retrieval、SQL Prompt、SQL Validator、Execution、Workspace。
 - 准确率修复优先沉淀到 `semantic/tables.json`、`semantic/business_knowledge.json`、`examples/nl2sql_examples.template.json`、`semantic/join_patterns.json`、retrieval、prompt 或 validator。
 - `context_summary`、`SqlGenerationContext` 和 `evidence_context` 是 SQL 生成的主要可观测输入；业务约束应来自语义资产、检索证据和 few-shot。
+- SQL validator errors 是硬阻断；warnings 和 risk flags 是治理信号，会进入 trace、query log 和 SQL audit，但不会单独阻断执行。
 - 修完后 replay 原 trace；高价值问题再物化成 eval case 或 example。
 
 ## 5 分钟排查
@@ -15,7 +16,7 @@
 1. 在工作台或 `POST /api/chat/query/stream` 复现问题。
 2. 记录 `session_id` 和 `trace_id`。
 3. 打开 `GET /api/chat/sessions/{session_id}/workspace`。
-4. 先看 `question_context.decision`、`question_context.effective_question`、`retrieval.hit_count_by_source`、`sql_validation.valid`、`execution.status`、`answer.status`。
+4. 先看 `question_context.decision`、`question_context.effective_question`、`retrieval.hit_count_by_source`、`sql_validation.valid`、`sql_validation.warnings`、`sql_validation.risk_flags`、`execution.status`、`answer.status`。
 5. 再看 `GET /api/chat/traces/{trace_id}`、`GET /api/chat/traces/{trace_id}/retrieval`、`GET /api/chat/traces/{trace_id}/sql-audit`。
 6. 修复后执行 `POST /api/admin/runtime/query-logs/{trace_id}/replay`。
 
@@ -171,17 +172,25 @@
 
 - 合理 SQL 被误拦。
 - 不安全 SQL 没被拦。
+- SQL 能执行但出现质量警告，例如未保护零分母、多表聚合未显式分层、`ORDER BY 1`。
 - repair 后 SQL 变差。
 - validator 的表字段认知和 metadata 不一致。
 
 优先修：
 
 - `SqlValidator`
+- `SqlQualityValidator`
 - `SqlAstValidator`
 - `semantic/tables.json`
 - SQL 生成约束
 
 Repair 是通用纠错，不负责弥补业务知识缺失。业务理解错时应修语义资产、检索或 prompt。
+
+风险日志入口：
+
+- `GET /api/admin/runtime/query-logs?sql_risk_level=medium`
+- `GET /api/admin/runtime/query-logs?risk_flag=quality_risk`
+- `GET /api/admin/runtime/query-logs/risk-summary`
 
 ### Execution
 
@@ -222,6 +231,8 @@ Repair 是通用纠错，不负责弥补业务知识缺失。业务理解错时�
 - `LLM_CACHE_MAX_ENTRIES`，默认 `256`
 
 排查复现抖动时，可以临时把 `LLM_CACHE_TTL_SECONDS=0` 或重启服务。Admin runtime status 的 `llm.metrics` 可查看 `requests`、`provider_calls`、`cache_hits`、`prompt_chars` 和 `response_chars`。
+
+如果 provider 返回 event-stream 文本或 SDK stream 对象，`LLMClient` 会收集 delta 内容；非流式响应不可解析时会自动用 `stream=true` 重试一次。排查 LLM 兼容性时重点看 `provider_calls`、`failures` 和后端 `llm.complete` timing 日志。
 
 ## Replay / Materialize / Eval
 

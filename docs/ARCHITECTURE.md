@@ -20,10 +20,10 @@ Text2SQL 把中文业务问题转换成 Oracle SQL，执行后把结果、SQL、
   -> ContextSummary 汇总进入 SQL 生成的证据
   -> SQL Prompt 组装真实表字段、业务知识和 few-shot
   -> LLM 生成 Oracle SQL
-  -> SQL Validator 校验并按需 repair
+  -> SQL Validator 校验、标记质量风险并按需 repair
   -> Oracle 执行
   -> AnswerBuilder 生成用户响应
-  -> MySQL 落库 trace、query log、SQL audit、消息和会话状态
+  -> MySQL 落库 response snapshot、trace、query log、SQL audit、消息和会话状态
   -> Workspace 聚合给前端恢复
 ```
 
@@ -78,12 +78,15 @@ trace 和 runtime log 会记录命中来源、分数、通道和 matched feature
 - `classification`
 - `retrieve`
 - `sql_context_tables`
+- `validate_context`
 - `build_sql_prompt`
 - `generate_sql`
 - `validate_sql`
-- `execute_sql`
-- `answer`
-- `persist`
+- `execute`
+- `chat_total`
+- `response_snapshot`
+
+持久化发生在响应快照之后，会把 trace、query log、retrieval log、SQL audit、消息和会话状态写入 runtime MySQL；失败和取消也会尽量保留可用的运行证据。
 
 ### SessionState
 
@@ -126,6 +129,8 @@ SQL prompt 包含：
 - 禁止 `SELECT *`。
 - 只返回 SQL，不返回 markdown 或解释。
 
+`LLMClient` 默认先走非流式 chat completion；如果 provider 返回 SDK stream 对象、event-stream 文本，或非流式响应不可解析，会收集流式 delta 内容。LLM 请求次数、cache hit、prompt/response 字符数和耗时可在 admin runtime status 的 `llm.metrics` 中查看。
+
 ## SQL 治理
 
 `SqlValidator` 是执行前的硬边界，负责检查：
@@ -136,6 +141,9 @@ SQL prompt 包含：
 - 表和字段必须存在于语义资产中。
 - Oracle 语法边界和结果限制。
 - 宽表扫描、超大结果等风险标记。
+- SQL 质量警告，例如未保护零分母的除法、多表聚合不显式分层、位置排序。
+
+errors 是执行前硬阻断；warnings 不会单独阻断执行，但会进入 `sql_validation`、trace、query log 和 SQL audit，并汇总为 `risk_level` 与 `risk_flags`。例如质量警告会产生 `quality_risk`，可通过 runtime query log 的 `risk_flag` 查询参数和 `risk-summary` 接口追踪。
 
 SQL repair 只处理 validator 或执行错误反馈出来的问题。业务正确性主要依赖语义资产、检索命中、prompt 质量和样例质量。
 
