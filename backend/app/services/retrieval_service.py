@@ -88,7 +88,7 @@ class RetrievalService:
         hits.extend(self._retrieve_text_document_hits(query_tokens))
         hits.extend(self._retrieve_text_vector_hits(" ".join(retrieval_terms)))
         hits = self._rerank_hits(hits)
-        top_hits = hits[:5]
+        top_hits = self._select_top_hits(hits, limit=5)
         return RetrievalContext(
             domains=self._domains_from_hits(top_hits),
             metrics=self._metrics_from_hits(top_hits),
@@ -642,6 +642,45 @@ class RetrievalService:
             selected.append(hit)
 
         return selected
+
+    def _select_top_hits(self, hits: list[RetrievalHit], *, limit: int) -> list[RetrievalHit]:
+        if limit <= 0 or len(hits) <= limit:
+            return hits[:limit]
+
+        top_hits = hits[:limit]
+        available_types = self._unique([hit.source_type for hit in hits])
+        covered_types = {hit.source_type for hit in top_hits}
+        missing_types = [source_type for source_type in available_types if source_type not in covered_types]
+        if not missing_types:
+            return top_hits
+
+        selected_keys: set[tuple[str, str]] = set()
+        selected: list[RetrievalHit] = []
+        for source_type in available_types[:limit]:
+            best_hit = next((hit for hit in hits if hit.source_type == source_type), None)
+            if best_hit is None:
+                continue
+            key = (best_hit.source_type, best_hit.source_id)
+            selected.append(best_hit)
+            selected_keys.add(key)
+
+        for hit in hits:
+            if len(selected) >= limit:
+                break
+            key = (hit.source_type, hit.source_id)
+            if key in selected_keys:
+                continue
+            selected.append(hit)
+            selected_keys.add(key)
+
+        original_rank = {
+            (hit.source_type, hit.source_id): index
+            for index, hit in enumerate(hits)
+        }
+        return sorted(
+            selected[:limit],
+            key=lambda hit: original_rank.get((hit.source_type, hit.source_id), len(hits)),
+        )
 
     def _tokenize(self, text: str) -> set[str]:
         ascii_tokens = {

@@ -19,6 +19,7 @@ from backend.app.models.classification import QuestionClassification
 from backend.app.models.conversation import ChatMessage, ChatSession
 
 from backend.app.models.context_summary import ContextSummary
+from backend.app.models.retrieval import RetrievalHit
 from backend.app.models.session_state import SessionState
 from backend.app.models.trace import TraceRecord
 from backend.app.services.domain_config_loader import DomainConfigLoader
@@ -111,6 +112,27 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         self.assertIn("MONTH7", text)
         self.assertIn("PM_VERSION", sql_features["referenced_fields"])
         self.assertIn("union_all_unpivot", sql_features["sql_patterns"])
+
+    def test_top_hits_preserve_available_evidence_source_types(self) -> None:
+        service = RetrievalService.__new__(RetrievalService)
+        ranked_hits = service._rerank_hits(
+            [
+                RetrievalHit(source_type="example", source_id="example_1", score=10.0, summary="example 1"),
+                RetrievalHit(source_type="example", source_id="example_2", score=9.0, summary="example 2"),
+                RetrievalHit(source_type="table_schema", source_id="table_1", score=8.0, summary="table 1"),
+                RetrievalHit(source_type="table_schema", source_id="table_2", score=7.0, summary="table 2"),
+                RetrievalHit(source_type="knowledge", source_id="knowledge_1", score=6.0, summary="knowledge 1"),
+                RetrievalHit(source_type="join_pattern", source_id="join_1", score=1.0, summary="join 1"),
+            ]
+        )
+
+        top_hits = service._select_top_hits(ranked_hits, limit=5)
+
+        self.assertEqual(len(top_hits), 5)
+        self.assertIn("join_pattern", {hit.source_type for hit in top_hits})
+        self.assertIn("knowledge", {hit.source_type for hit in top_hits})
+        self.assertIn("table_schema", {hit.source_type for hit in top_hits})
+        self.assertIn("example", {hit.source_type for hit in top_hits})
 
     def test_retrieval_service_raises_when_vector_client_is_missing(self) -> None:
         domain_config = DomainConfigLoader().load()

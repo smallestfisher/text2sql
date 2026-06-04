@@ -292,6 +292,13 @@ class ConversationOrchestrator:
                 detail=f"{len(retrieval.hits)} hits",
             )
 
+            classification, sql_context, question_context = self._apply_empty_retrieval_to_clarification(
+                classification=classification,
+                sql_context=sql_context,
+                question_context=question_context,
+                retrieval=retrieval,
+            )
+
             stage_started_at = time.perf_counter()
             classification, sql_context, question_context = self._apply_retrieval_domain_to_sql_context(
                 classification=classification,
@@ -1369,6 +1376,42 @@ class ConversationOrchestrator:
                 "effective_question": getattr(question_context, "effective_question", None) or original_question,
                 "clarification_question": None,
                 "reason": "retrieval supplied semantic support after question-context clarification suggestion",
+            })
+        return classification, sql_context, question_context
+
+    def _apply_empty_retrieval_to_clarification(
+        self,
+        *,
+        classification,
+        sql_context,
+        question_context,
+        retrieval,
+    ):
+        if retrieval is None or getattr(retrieval, "hits", None):
+            return classification, sql_context, question_context
+
+        clarification_question = "没有检索到可支撑本次查询的业务知识、样例或表结构，请补充查询对象、指标、时间范围或业务域。"
+        reason = "retrieval returned no supporting evidence"
+        classification = classification.model_copy(update={
+            "question_type": "clarification_needed",
+            "need_clarification": True,
+            "inherit_context": False,
+            "clarification_question": clarification_question,
+            "reason": reason,
+            "reason_code": "retrieval_empty",
+        })
+        sql_context = sql_context.model_copy(update={
+            "question_type": "clarification_needed",
+            "need_clarification": True,
+            "clarification_question": clarification_question,
+            "reason": reason,
+            "reason_code": "retrieval_empty",
+        })
+        if question_context is not None:
+            question_context = question_context.model_copy(update={
+                "decision": "clarification_needed",
+                "clarification_question": clarification_question,
+                "reason": reason,
             })
         return classification, sql_context, question_context
 

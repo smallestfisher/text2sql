@@ -524,6 +524,56 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
 
         self.assertIsNone(orchestrator._pre_retrieval_terminal_skip_reason(classification, question_context))
 
+    def test_empty_retrieval_turns_answerable_question_into_clarification(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        classification = QuestionClassification(
+            question_type="new",
+            subject_domain="unknown",
+            need_clarification=False,
+        )
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="unknown",
+            semantic_brief="查询一个没有任何语义资产支持的问题。",
+        )
+        question_context = type(
+            "QuestionContextStub",
+            (),
+            {
+                "decision": "answerable",
+                "context_relation": "new",
+                "effective_question": "查询一个没有任何语义资产支持的问题",
+                "semantic_brief": "查询一个没有任何语义资产支持的问题。",
+                "model_copy": lambda self, update=None, deep=False: type(
+                    "QuestionContextStub",
+                    (),
+                    {
+                        **self.__dict__,
+                        **(update or {}),
+                        "model_copy": self.model_copy,
+                    },
+                )(),
+            },
+        )()
+        retrieval = RetrievalContext(
+            retrieval_terms=["查询一个没有任何语义资产支持的问题"],
+            hits=[],
+        )
+
+        resolved_classification, resolved_context, resolved_question_context = orchestrator._apply_empty_retrieval_to_clarification(
+            classification=classification,
+            sql_context=sql_context_value,
+            question_context=question_context,
+            retrieval=retrieval,
+        )
+
+        self.assertTrue(resolved_classification.need_clarification)
+        self.assertTrue(resolved_context.need_clarification)
+        self.assertEqual(resolved_classification.question_type, "clarification_needed")
+        self.assertEqual(resolved_context.question_type, "clarification_needed")
+        self.assertEqual(resolved_question_context.decision, "clarification_needed")
+        self.assertIn("没有检索到", resolved_classification.clarification_question)
+
     def test_retrieval_support_reopens_complete_question_context_clarification(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
         classification = QuestionClassification(
