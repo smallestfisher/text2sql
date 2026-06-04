@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import TYPE_CHECKING
 
 from backend.app.models.retrieval import RetrievalContext
@@ -62,14 +63,44 @@ class SqlPromptContextAssembler:
             "business_knowledge_mode": "ranked_relevant_chunks",
             "table_schemas_mode": "retrieval_selected_tables_full_columns",
         }
+        evidence_context = {
+            "time_resolution": time_resolution,
+            "allowed_sources": selected_sources,
+            "limit": context.limit,
+            "context_source": "retrieval_evidence",
+        }
+        table_schema_columns_count = {
+            table_name: len(schema.get("columns", []))
+            for table_name, schema in source_schemas.items()
+            if isinstance(schema, dict)
+        }
+        prompt_diagnostics = {
+            "available_table_count": len(source_schemas),
+            "available_table_column_count": sum(table_schema_columns_count.values()),
+            "retrieved_example_count": len(retrieved_examples),
+            "retrieved_example_chars": len(json.dumps(retrieved_examples, ensure_ascii=False)),
+            "join_pattern_count": len(selected_join_patterns),
+            "evidence_context_key_count": len(evidence_context),
+            "prompt_payload_chars": len(
+                json.dumps(
+                    {
+                        "available_tables": source_schemas,
+                        "retrieval_context": {
+                            "business_knowledge": business_knowledge,
+                            "examples": retrieved_examples,
+                            "join_patterns": selected_join_patterns,
+                        },
+                        "context_budget": context_budget,
+                        "evidence_context": evidence_context,
+                    },
+                    ensure_ascii=False,
+                )
+            ),
+        }
         context_summary = {
             "selected_sources": selected_sources,
             "table_schemas_count": len(source_schemas),
-            "table_schema_columns_count": {
-                table_name: len(schema.get("columns", []))
-                for table_name, schema in source_schemas.items()
-                if isinstance(schema, dict)
-            },
+            "table_schema_columns_count": table_schema_columns_count,
             "business_knowledge_chars": len(business_knowledge),
             "business_knowledge_source": business_knowledge_source,
             "time_resolution_count": len(time_resolution),
@@ -79,12 +110,7 @@ class SqlPromptContextAssembler:
             "subject_domain": context.subject_domain,
             "business_knowledge_entry_ids": builder._selected_business_knowledge_ids(context, selected_sources, retrieval),
             "join_pattern_ids": builder._selected_join_pattern_ids(selected_join_patterns),
-        }
-        evidence_context = {
-            "time_resolution": time_resolution,
-            "allowed_sources": selected_sources,
-            "limit": context.limit,
-            "context_source": "retrieval_evidence",
+            "prompt_diagnostics": prompt_diagnostics,
         }
         return SqlPromptContextBundle(
             selected_sources=selected_sources,

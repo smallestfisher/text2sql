@@ -23,6 +23,22 @@ class QuestionContextService:
         parser_signals: dict[str, Any] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> QuestionContext:
+        question_context, _prompt_metadata = self.build_with_prompt_metadata(
+            question=question,
+            session_state=session_state,
+            parser_signals=parser_signals,
+            cancellation_token=cancellation_token,
+        )
+        return question_context
+
+    def build_with_prompt_metadata(
+        self,
+        *,
+        question: str,
+        session_state: SessionState | None = None,
+        parser_signals: dict[str, Any] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> tuple[QuestionContext, dict[str, Any]]:
         if not getattr(self.llm_client, "enabled", False) or not hasattr(self.llm_client, "generate_question_context"):
             raise LLMServiceError("question context generation requires an enabled LLM client")
 
@@ -35,12 +51,15 @@ class QuestionContextService:
             prompt_payload,
             cancellation_token=cancellation_token,
         )
-        return self._coerce_payload(
+        question_context = self._coerce_payload(
             payload,
             question=question,
             session_state=session_state,
             parser_signals=parser_signals or {},
         )
+        return question_context, {
+            "prompt_diagnostics": prompt_payload.get("prompt_diagnostics", {}),
+        }
 
     def _coerce_payload(
         self,

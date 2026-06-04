@@ -35,21 +35,32 @@ class QuestionContextPromptBuilder:
             recent_turns=recent_turns,
         )[:1200]
         table_fields = builder._context_table_fields(focus_tables)
+        context_hints = builder._compact_mapping(
+            {
+                "parser_observations": builder._compact_mapping(parser_signals),
+                "pending_clarification": builder._pending_clarification_payload(session_state),
+                "business_knowledge_excerpt": business_knowledge_excerpt,
+                "focus_tables": focus_tables,
+                "table_fields": table_fields,
+            }
+        )
+        prompt_diagnostics = {
+            "conversation_summary_chars": len(conversation_summary),
+            "recent_turn_count": len(recent_turns),
+            "business_knowledge_excerpt_chars": len(business_knowledge_excerpt),
+            "focus_table_count": len(focus_tables),
+            "table_field_table_count": len(table_fields),
+            "table_field_count": sum(len(fields) for fields in table_fields.values()),
+            "has_pending_clarification": bool(context_hints.get("pending_clarification")),
+        }
         return {
             "task": "question_context_generation",
             "question": question,
             "conversation_summary": conversation_summary,
             "last_turn": builder._last_turn_payload(session_state),
             "recent_turns": recent_turns,
-            "context_hints": builder._compact_mapping(
-                {
-                    "parser_observations": builder._compact_mapping(parser_signals),
-                    "pending_clarification": builder._pending_clarification_payload(session_state),
-                    "business_knowledge_excerpt": business_knowledge_excerpt,
-                    "focus_tables": focus_tables,
-                    "table_fields": table_fields,
-                }
-            ),
+            "context_hints": context_hints,
+            "prompt_diagnostics": prompt_diagnostics,
             "instructions": {
                 "return_format": "json",
                 "fields": [

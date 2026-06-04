@@ -40,7 +40,7 @@ class QuestionAnalysisService:
     ) -> dict[str, Any]:
         total_started = time.perf_counter()
         stage_started = time.perf_counter()
-        question_context = self._build_question_context(
+        question_context, prompt_metadata = self._build_question_context(
             question=question,
             session_state=session_state,
             cancellation_token=cancellation_token,
@@ -63,6 +63,7 @@ class QuestionAnalysisService:
             "question_context": question_context,
             "classification": classification,
             "warnings": warnings,
+            **prompt_metadata,
         }
 
     def _build_question_context(
@@ -72,7 +73,7 @@ class QuestionAnalysisService:
         session_state: SessionState | None,
         cancellation_token: CancellationToken | None,
     ):
-        return self.question_context_service.build(
+        return self.question_context_service.build_with_prompt_metadata(
             question=question,
             session_state=session_state,
             parser_signals={},

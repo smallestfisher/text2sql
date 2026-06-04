@@ -283,8 +283,16 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
 
         self.assertEqual(
             sorted(trace.keys()),
-            ["classification", "effective_question", "original_question", "question_context", "warnings"],
+            [
+                "classification",
+                "effective_question",
+                "original_question",
+                "prompt_diagnostics",
+                "question_context",
+                "warnings",
+            ],
         )
+        self.assertIsInstance(trace["prompt_diagnostics"], dict)
         self.assertEqual(trace["effective_question"], "2026年Array工厂XPS类产品，每个月分别投入多少物量")
         self.assertEqual(trace["question_context"].context_relation, "follow_up")
         self.assertEqual(trace["question_context"].semantic_brief, "查询2026年Array工厂XPS类产品的实际投入物量，按月份展示。")
@@ -348,8 +356,16 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
 
         self.assertEqual(
             sorted(trace.keys()),
-            ["classification", "effective_question", "original_question", "question_context", "warnings"],
+            [
+                "classification",
+                "effective_question",
+                "original_question",
+                "prompt_diagnostics",
+                "question_context",
+                "warnings",
+            ],
         )
+        self.assertIsInstance(trace["prompt_diagnostics"], dict)
 
     def test_session_state_stores_semantic_brief_in_recent_turns(self) -> None:
         sql_context_value = SqlGenerationContext(

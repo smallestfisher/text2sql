@@ -156,6 +156,65 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn("当前用户问题应优先视为对上一轮澄清问题的回答", constraints)
         self.assertIn("不要把“是的”“不是”“对”等确认词当成独立业务问题", constraints)
 
+    def test_question_context_prompt_includes_prompt_diagnostics(self) -> None:
+        session_state = SessionState(
+            session_id="sess_prompt_diagnostics",
+            subject_domain="plan_actual",
+            pending_clarification=PendingClarification(
+                original_question="3月呢",
+                effective_question="2026年3月Array工厂审批版投入物量与实际物量Gap和达成率",
+                semantic_brief="查询2026年3月Array工厂审批版投入物量与实际物量的Gap和达成率。",
+                clarification_question="你是指2026年3月吗？",
+                reason="confirm_month_replacement",
+            ),
+            recent_turns=[
+                QueryTurnRecord(
+                    question="2026年Array工厂Oxide类产品，每个月分别投入多少物量",
+                    semantic_brief="查询actual_input_qty；业务域是计划实际；按biz_month展示。",
+                )
+            ],
+        )
+
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question="是的",
+            session_state=session_state,
+            parser_signals={"subject_domain": "plan_actual"},
+        )
+
+        diagnostics = prompt["prompt_diagnostics"]
+        context_hints = prompt["context_hints"]
+        focus_tables = context_hints.get("focus_tables", [])
+        table_fields = context_hints.get("table_fields", {})
+
+        self.assertEqual(diagnostics["conversation_summary_chars"], len(prompt["conversation_summary"]))
+        self.assertEqual(diagnostics["recent_turn_count"], 1)
+        self.assertEqual(
+            diagnostics["business_knowledge_excerpt_chars"],
+            len(context_hints["business_knowledge_excerpt"]),
+        )
+        self.assertEqual(diagnostics["focus_table_count"], len(focus_tables))
+        self.assertEqual(diagnostics["table_field_table_count"], len(table_fields))
+        self.assertEqual(
+            diagnostics["table_field_count"],
+            sum(len(fields) for fields in table_fields.values()),
+        )
+        self.assertTrue(diagnostics["has_pending_clarification"])
+
+    def test_question_context_prompt_diagnostics_are_counts_not_raw_payload(self) -> None:
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question="2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+            session_state=None,
+            parser_signals={},
+        )
+
+        diagnostics = prompt["prompt_diagnostics"]
+
+        self.assertNotIn("conversation_summary", diagnostics)
+        self.assertNotIn("recent_turns", diagnostics)
+        self.assertNotIn("business_knowledge_excerpt", diagnostics)
+        self.assertNotIn("table_fields", diagnostics)
+        self.assertTrue(all(isinstance(value, (int, bool)) for value in diagnostics.values()))
+
     def test_sql_prompt_includes_semantic_brief(self) -> None:
         sql_context_value = SqlGenerationContext(
             question_type="new",
@@ -236,6 +295,59 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertEqual(prompt["retrieval_context"]["business_knowledge"], bundle.business_knowledge)
         self.assertEqual(prompt["retrieval_context"]["examples"], bundle.retrieved_examples)
         self.assertEqual(prompt["retrieval_context"]["join_patterns"], bundle.selected_join_patterns)
+
+    def test_sql_prompt_context_summary_includes_prompt_diagnostics(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            metrics=["inventory_qty"],
+            tables=["oms_inventory"],
+            filters=[FilterItem(field="biz_month", op="latest_n", value={"count": 1, "source_table": "oms_inventory"})],
+            analysis_mode="distribution",
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存库龄分布",
+        )
+        summary = prompt["context_summary"]
+        diagnostics = summary["prompt_diagnostics"]
+
+        self.assertEqual(diagnostics["available_table_count"], len(prompt["available_tables"]))
+        self.assertEqual(
+            diagnostics["available_table_column_count"],
+            sum(len(schema["columns"]) for schema in prompt["available_tables"].values()),
+        )
+        self.assertEqual(
+            diagnostics["retrieved_example_count"],
+            len(prompt["retrieval_context"]["examples"]),
+        )
+        self.assertEqual(
+            diagnostics["join_pattern_count"],
+            len(prompt["retrieval_context"]["join_patterns"]),
+        )
+        self.assertEqual(diagnostics["evidence_context_key_count"], len(prompt["evidence_context"]))
+        self.assertGreater(diagnostics["prompt_payload_chars"], 0)
+        self.assertGreaterEqual(diagnostics["retrieved_example_chars"], 0)
+
+    def test_sql_prompt_diagnostics_are_counts_not_raw_payload(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            metrics=["inventory_qty"],
+            tables=["oms_inventory"],
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存",
+        )
+        diagnostics = prompt["context_summary"]["prompt_diagnostics"]
+
+        self.assertNotIn("available_tables", diagnostics)
+        self.assertNotIn("retrieval_context", diagnostics)
+        self.assertNotIn("evidence_context", diagnostics)
+        self.assertTrue(all(isinstance(value, int) for value in diagnostics.values()))
 
     def test_prompt_assets_keep_only_sql_generation_assets(self) -> None:
         assets = self.prompt_builder._prompt_assets()

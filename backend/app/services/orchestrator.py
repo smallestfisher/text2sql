@@ -157,6 +157,7 @@ class ConversationOrchestrator:
             question_context = analysis_trace["question_context"]
             warnings.extend(analysis_warnings)
 
+            prompt_diagnostics = analysis_trace.get("prompt_diagnostics", {})
             self._log_stage_io(
                 "question_analysis",
                 inputs={
@@ -168,6 +169,7 @@ class ConversationOrchestrator:
                     "question_context": self._question_context_summary(question_context),
                     "classification": self._classification_summary(classification),
                     "warnings": analysis_warnings,
+                    "prompt_diagnostics": prompt_diagnostics,
                 },
             )
 
@@ -176,7 +178,10 @@ class ConversationOrchestrator:
                 "question_context",
                 "completed",
                 getattr(question_context, "decision", "answerable"),
-                metadata={"question_context": question_context.model_dump(mode="json")},
+                metadata={
+                    "question_context": question_context.model_dump(mode="json"),
+                    "prompt_diagnostics": prompt_diagnostics,
+                },
             )
 
             stage_started_at = time.perf_counter()
