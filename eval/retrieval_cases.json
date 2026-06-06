@@ -1,0 +1,55 @@
+[
+  {
+    "id": "retrieval_demand_latest_p_oxide_fgcode_sales_financial_001",
+    "question": "202605月最新P版Oxide产品需求量前10的FGCODE，对应产品大类、需求量、销售业绩和财务业绩分别是多少",
+    "subject_domain": "demand",
+    "expected_available_tables": [
+      "p_demand",
+      "product_attributes",
+      "sales_financial_perf"
+    ],
+    "expected_business_knowledge_ids": [
+      "demand_fgcode_mapping",
+      "demand_product_attributes_direct_join",
+      "demand_horizontal_month_mapping"
+    ],
+    "expected_join_pattern_ids": [
+      "demand_product_attributes_direct_join"
+    ],
+    "notes": "检索回归样本：P版横表需求 + Oxide产品属性 + 销售/财务实绩。目标是确保结构化证据闭合后 SQL prompt 至少具备三类必要表 schema。"
+  },
+  {
+    "id": "retrieval_demand_sales_vs_latest_p_demand_diff_fgcode_001",
+    "question": "202604月销售业绩和最新P版202604需求量差异最大的前10个FGCODE，输出FGCODE、销售业绩、需求量和差异量",
+    "subject_domain": "demand",
+    "expected_available_tables": [
+      "p_demand",
+      "sales_financial_perf"
+    ],
+    "expected_business_knowledge_ids": [
+      "demand_fgcode_mapping",
+      "demand_horizontal_month_mapping"
+    ],
+    "expected_join_pattern_ids": [
+      "demand_product_mapping_sales_financial_join"
+    ],
+    "notes": "检索回归样本：需求与销售实绩按 FGCODE 对齐并计算差异，确保销售财务事实表和 P 版需求事实表同时进入 SQL prompt。"
+  },
+  {
+    "id": "retrieval_plan_actual_approved_actual_gap_rate_001",
+    "question": "2026年3月Cell工厂审批版产出物量与实际产出物量Gap和达成率",
+    "subject_domain": "plan_actual",
+    "expected_available_tables": [
+      "monthly_plan_approved",
+      "production_actuals"
+    ],
+    "expected_business_knowledge_ids": [
+      "plan_actual_approved_actual_gap_rate",
+      "plan_actual_factory_names"
+    ],
+    "expected_join_pattern_ids": [
+      "plan_actual_approved_vs_actual_join"
+    ],
+    "notes": "检索回归样本：审批版与实际对比需要计划事实表和实际事实表，并命中聚合后 join 的规则。"
+  }
+]

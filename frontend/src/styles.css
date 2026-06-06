@@ -481,7 +481,6 @@ button {
 
 .mini-tag,
 .hint-chip,
-.context-chip,
 .hero-badge {
   display: inline-flex;
   align-items: center;
@@ -635,14 +634,6 @@ button {
   justify-content: flex-end;
 }
 
-.workspace-context-strip {
-  gap: 8px;
-}
-
-.workspace-context-strip .context-chip {
-  padding: 6px 10px;
-}
-
 .hero-badge {
   width: fit-content;
   padding: 7px 12px;
@@ -787,7 +778,6 @@ button {
 
 .hero-stats,
 .auth-metrics,
-.context-strip,
 .composer-hints {
   display: flex;
   flex-wrap: wrap;
@@ -808,17 +798,12 @@ button {
   font-size: 15px;
 }
 
-.context-chip,
 .hint-chip {
   padding: 8px 12px;
   border: 1px solid var(--border);
   background: var(--card-strong);
   color: #5f686e;
   font-size: 12px;
-}
-
-.context-chip.is-muted {
-  color: var(--text-soft);
 }
 
 .conversation-panel {

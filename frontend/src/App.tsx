@@ -707,7 +707,6 @@ function App() {
     queryLog: activeTraceArtifact?.query_log || latestQueryLogs[0] || null,
   });
 
-  const contextChips = buildContextChips(sessionState);
   const isAdmin = (currentUser?.roles || []).includes("admin");
   const showAdminCenter = isAdmin && viewMode === "admin";
   const showInspector = viewMode === "workspace";
@@ -935,15 +934,15 @@ function App() {
                       {workspaceError
                         ? workspaceError
                         : selectedSession
-                          ? `${workspaceDomain || "上下文未建立"} · 更新于 ${formatDate(selectedSession.updated_at)}`
-                          : "支持自然语言问数、上下文追问、SQL 审阅和 Trace 排查"}
+                          ? `更新于 ${formatDate(selectedSession.updated_at)}`
+                          : "支持自然语言问数、SQL 审阅和 Trace 排查"}
                     </div>
                   </div>
 
                   <div className="toolbar-stats workspace-toolbar-stats">
                     <span className="toolbar-stat">
                       当前域
-                      <strong>{workspaceDomain || "等待上下文"}</strong>
+                      <strong>{workspaceDomain || "-"}</strong>
                     </span>
                     <span className="toolbar-stat">
                       会话数
@@ -956,19 +955,6 @@ function App() {
                   </div>
                 </div>
 
-                {contextChips.length ? (
-                  <div className="context-strip workspace-context-strip">
-                    {contextChips.map((chip) => (
-                      <span className="context-chip" key={chip}>
-                        {chip}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="context-strip workspace-context-strip">
-                    <span className="context-chip is-muted">发送第一条问题后，这里会显示当前会话上下文</span>
-                  </div>
-                )}
               </section>
 
               <section className="conversation-panel">
@@ -978,7 +964,7 @@ function App() {
                       <div className="welcome-card">
                         <div className="welcome-title">把业务问题直接说出来</div>
                         <div className="welcome-copy">
-                          系统会按会话上下文自动补足语义，生成 SQL、执行结果和 Trace。
+                          系统会生成 SQL、执行结果和 Trace。
                         </div>
                       </div>
 
@@ -1054,7 +1040,6 @@ function App() {
                       <div className="composer-hints">
                         <span className="hint-chip">Enter 发送</span>
                         <span className="hint-chip">Shift + Enter 换行</span>
-                        <span className="hint-chip">自动继承会话上下文</span>
                       </div>
 
                       <button className="send-button" type="submit" disabled={chatPending}>
@@ -1072,7 +1057,7 @@ function App() {
                   <div>
                     <div className="panel-title">会话详情</div>
                     <div className="panel-subtitle">
-                      {workspaceDomain || "等待上下文"}
+                      {workspaceDomain || "-"}
                     </div>
                   </div>
 
@@ -1736,7 +1721,7 @@ function ConversationResultCard(props: {
     <div className={`message-result-card${props.isActive ? " is-active" : ""}`}>
       <div className="message-result-head">
         <div className="message-result-summary">
-          <strong>{domain || "等待上下文"}</strong>
+          <strong>{domain || "-"}</strong>
           <span>{describeResponseStatus(status)}</span>
           <span>{showRowCount ? `结果 ${rowCount} 行` : "未进入 SQL"}</span>
         </div>
@@ -2435,24 +2420,6 @@ function normalizeMessages(items: ChatMessage[]) {
     normalized.push(message);
   }
   return normalized;
-}
-
-function buildContextChips(state: SessionState | null) {
-  if (!state) {
-    return [];
-  }
-
-  const chips = [
-    ...(state.metrics || []).slice(0, 2).map((item) => `指标 · ${item}`),
-    ...(state.dimensions || []).slice(0, 2).map((item) => `维度 · ${item}`),
-    ...(state.entities || []).slice(0, 2).map((item) => `实体 · ${item}`),
-  ];
-
-  if (state.time_context?.grain && state.time_context.grain !== "unknown") {
-    chips.push(`时间 · ${state.time_context.grain}`);
-  }
-
-  return Array.from(new Set(chips)).slice(0, 6);
 }
 
 function describeProgressStage(stage: string) {

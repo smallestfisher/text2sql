@@ -19,6 +19,7 @@ services:
       VECTOR_API_KEY: ${VECTOR_API_KEY:-${OPENAI_API_KEY:-}}
       VECTOR_API_BASE: ${VECTOR_API_BASE:-https://api.siliconflow.cn/v1}
       VECTOR_MODEL: ${VECTOR_MODEL:-Qwen/Qwen3-Embedding-8B}
+      VECTOR_TOP_K: ${VECTOR_TOP_K:-8}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-dev-token-secret-change-me}
       ENABLE_DOCS: ${ENABLE_DOCS:-true}
     volumes:

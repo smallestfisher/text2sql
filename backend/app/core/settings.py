@@ -81,7 +81,7 @@ class Settings(BaseModel):
     vector_api_base: str | None = _default_vector_api_base()
     vector_model: str = os.getenv("VECTOR_MODEL", "Qwen/Qwen3-Embedding-8B")
     vector_dimensions: int = int(os.getenv("VECTOR_DIMENSIONS", "1024"))
-    vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "3"))
+    vector_top_k: int = int(os.getenv("VECTOR_TOP_K", "8"))
     vector_timeout_seconds: int = int(os.getenv("VECTOR_TIMEOUT_SECONDS", "20"))
     sql_timeout_seconds: int = int(os.getenv("SQL_TIMEOUT_SECONDS", "30"))
     default_sql_limit: int = int(os.getenv("DEFAULT_SQL_LIMIT", "200"))

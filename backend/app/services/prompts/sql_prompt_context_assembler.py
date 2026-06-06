@@ -39,6 +39,8 @@ class SqlPromptContextAssembler:
         selected_sources = builder._selected_sources_for_sql(context, retrieval)
         selected_join_patterns = builder._selected_join_patterns(context, selected_sources, retrieval)
         selected_sources = builder._expand_sources_with_join_patterns(selected_sources, selected_join_patterns)
+        selected_business_knowledge = builder._select_business_knowledge_entries(context, selected_sources, retrieval)
+        selected_sources = builder._expand_sources_with_business_knowledge(selected_sources, selected_business_knowledge)
         prompt_context = context.model_copy(update={"tables": selected_sources})
         time_resolution = builder._time_resolution(prompt_context)
         retrieved_examples = builder._select_retrieved_examples(context, retrieval, selected_sources=selected_sources)

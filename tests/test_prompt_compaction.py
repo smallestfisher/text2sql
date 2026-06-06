@@ -296,6 +296,35 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertEqual(prompt["retrieval_context"]["examples"], bundle.retrieved_examples)
         self.assertEqual(prompt["retrieval_context"]["join_patterns"], bundle.selected_join_patterns)
 
+    def test_sql_prompt_closes_schemas_for_selected_structured_knowledge(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="demand",
+            tables=["p_demand"],
+            semantic_brief="查询最新P版需求对应的销售业绩和财务业绩。",
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="table_schema",
+                    source_id="p_demand",
+                    score=4.0,
+                    summary="P version demand",
+                    metadata={"table": "p_demand", "domains": ["demand"]},
+                )
+            ]
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question="最新P版需求对应的销售业绩和财务业绩",
+        )
+
+        self.assertIn("demand_fgcode_mapping", prompt["context_summary"]["business_knowledge_entry_ids"])
+        self.assertIn("sales_financial_perf", prompt["available_tables"])
+        self.assertIn("sales_qty (销售业绩)", prompt["available_tables"]["sales_financial_perf"]["columns"])
+
     def test_sql_prompt_context_summary_includes_prompt_diagnostics(self) -> None:
         sql_context_value = SqlGenerationContext(
             question_type="new",

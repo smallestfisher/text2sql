@@ -129,6 +129,23 @@ class PromptBuilder:
                     expanded.append(table_name)
         return expanded[:8]
 
+    def _expand_sources_with_business_knowledge(
+        self,
+        selected_sources: list[str],
+        selected_business_knowledge: list[dict],
+    ) -> list[str]:
+        expanded = list(selected_sources)
+        for entry in selected_business_knowledge:
+            tables = entry.get("tables", [])
+            if not isinstance(tables, list):
+                continue
+            for table_name in tables:
+                if not isinstance(table_name, str) or table_name not in self._tables_metadata:
+                    continue
+                if table_name not in expanded:
+                    expanded.append(table_name)
+        return expanded[:8]
+
     def _tables_from_retrieval_hit(self, hit: RetrievalHit) -> list[str]:
         tables: list[str] = []
         metadata_tables = hit.metadata.get("tables", [])

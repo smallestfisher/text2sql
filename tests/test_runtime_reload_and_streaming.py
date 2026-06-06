@@ -61,6 +61,13 @@ class VectorRetrieverTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not configured"):
             retriever.embed_text_with_signature("查询库存")
 
+    def test_default_vector_top_k_keeps_cross_source_retrieval_room(self) -> None:
+        settings_source = Path("backend/app/core/settings.py").read_text(encoding="utf-8")
+        env_example = Path("env.example").read_text(encoding="utf-8")
+
+        self.assertIn('os.getenv("VECTOR_TOP_K", "8")', settings_source)
+        self.assertIn('VECTOR_TOP_K="8"', env_example)
+
 
 class RetrievalServiceFailFastTests(unittest.TestCase):
     def test_retrieval_corpus_excludes_domain_config_metrics(self) -> None:
