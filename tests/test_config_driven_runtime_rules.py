@@ -126,6 +126,30 @@ class StubFollowUpXpsQuestionContextLLMClient:
         }
 
 
+class FakeChatCompletionResponse:
+    choices = [type("Choice", (), {"message": type("Message", (), {"content": "SELECT 1"})()})()]
+
+
+class FakeOpenAIClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.chat = type(
+            "Chat",
+            (),
+            {
+                "completions": type(
+                    "Completions",
+                    (),
+                    {"create": self._create},
+                )()
+            },
+        )()
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        return FakeChatCompletionResponse()
+
+
 class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -181,6 +205,31 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(health["metrics"]["question_context"]["requests"], 2)
         self.assertEqual(health["metrics"]["question_context"]["provider_calls"], 2)
         self.assertEqual(health["metrics"]["question_context"].get("cache_hits", 0), 0)
+
+    def test_llm_cache_prompt_option_is_passed_to_openai_compatible_client(self) -> None:
+        client = LLMClient(cache_prompt=False)
+        fake_client = FakeOpenAIClient()
+        client.client = fake_client
+
+        content = client._complete_once(
+            [{"role": "user", "content": "SELECT 1"}],
+            stream=False,
+        )
+
+        self.assertEqual(content, "SELECT 1")
+        self.assertEqual(fake_client.calls[0]["extra_body"], {"cache_prompt": False})
+
+    def test_llm_cache_prompt_option_is_omitted_when_unset(self) -> None:
+        client = LLMClient()
+        fake_client = FakeOpenAIClient()
+        client.client = fake_client
+
+        client._complete_once(
+            [{"role": "user", "content": "SELECT 1"}],
+            stream=False,
+        )
+
+        self.assertNotIn("extra_body", fake_client.calls[0])
 
     def test_repair_sql_uses_dedicated_retry_budget(self) -> None:
         client = StubRepairLLMClient()

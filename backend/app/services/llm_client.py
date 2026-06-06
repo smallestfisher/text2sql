@@ -34,6 +34,7 @@ class LLMClient:
         repair_max_retries: int | None = None,
         cache_ttl_seconds: int = 300,
         cache_max_entries: int = 256,
+        cache_prompt: bool | None = None,
     ) -> None:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for LLM SQL validation helpers")
@@ -45,6 +46,7 @@ class LLMClient:
         self.repair_max_retries = max(1, repair_max_retries if repair_max_retries is not None else max_retries)
         self.cache_ttl_seconds = max(0, cache_ttl_seconds)
         self.cache_max_entries = max(0, cache_max_entries)
+        self.cache_prompt = cache_prompt
         self._response_cache: OrderedDict[str, tuple[float, object]] = OrderedDict()
         self._metrics: dict[str, dict[str, int]] = {}
         self.sql_dialect = SqlDialect.from_name("oracle")
@@ -258,6 +260,7 @@ class LLMClient:
             "sql_dialect": self.sql_dialect.name,
             "cache_ttl_seconds": self.cache_ttl_seconds,
             "cache_max_entries": self.cache_max_entries,
+            "cache_prompt": getattr(self, "cache_prompt", None),
             "cache_entries": len(self._response_cache),
             "metrics": deepcopy(self._metrics),
         }
@@ -360,11 +363,7 @@ class LLMClient:
     def _complete_once(self, messages: list[dict], *, stream: bool) -> str:
         try:
             response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=0.1,
-                timeout=self.timeout_seconds,
-                stream=stream,
+                **self._completion_kwargs(messages=messages, stream=stream),
             )
             return self._response_content(response)
         except TypeError:
@@ -372,13 +371,22 @@ class LLMClient:
                 raise
             logger.info("llm non-stream response was not parseable; retrying with stream=true")
             response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=0.1,
-                timeout=self.timeout_seconds,
-                stream=True,
+                **self._completion_kwargs(messages=messages, stream=True),
             )
             return self._response_content(response)
+
+    def _completion_kwargs(self, *, messages: list[dict], stream: bool) -> dict:
+        kwargs = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": 0.1,
+            "timeout": self.timeout_seconds,
+            "stream": stream,
+        }
+        cache_prompt = getattr(self, "cache_prompt", None)
+        if cache_prompt is not None:
+            kwargs["extra_body"] = {"cache_prompt": cache_prompt}
+        return kwargs
 
     def _response_content(self, response) -> str:
         choices = getattr(response, "choices", None)

@@ -50,6 +50,13 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_optional_bool(name: str) -> bool | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Text2SQL Backend")
     app_version: str = os.getenv("APP_VERSION", "0.3.0")
@@ -66,6 +73,7 @@ class Settings(BaseModel):
     sql_repair_max_retries: int = int(os.getenv("SQL_REPAIR_MAX_RETRIES", "1"))
     llm_cache_ttl_seconds: int = int(os.getenv("LLM_CACHE_TTL_SECONDS", "300"))
     llm_cache_max_entries: int = int(os.getenv("LLM_CACHE_MAX_ENTRIES", "256"))
+    llm_cache_prompt: bool | None = _env_optional_bool("LLM_CACHE_PROMPT")
     enable_vector_retrieval: bool = _env_bool("ENABLE_VECTOR_RETRIEVAL", default=True)
     prewarm_vector_retrieval: bool = _env_bool("PREWARM_VECTOR_RETRIEVAL", default=True)
     vector_retrieval_provider: str = _default_vector_provider()

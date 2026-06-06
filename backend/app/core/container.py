@@ -116,6 +116,7 @@ class AppContainer:
             repair_max_retries=self.settings.sql_repair_max_retries,
             cache_ttl_seconds=self.settings.llm_cache_ttl_seconds,
             cache_max_entries=self.settings.llm_cache_max_entries,
+            cache_prompt=self.settings.llm_cache_prompt,
         )
         self.question_context_service = QuestionContextService(
             llm_client=self.llm_client,

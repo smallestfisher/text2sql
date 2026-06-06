@@ -55,6 +55,7 @@ AUTH_TOKEN_SECRET="change-me"
 - `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
 - `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
 - `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。
+- `LLM_CACHE_PROMPT=false`：透传 llama.cpp OpenAI-compatible `cache_prompt` 开关；不设置时不发送该私有参数。
 - `DEFAULT_SQL_LIMIT` / `HIGH_RISK_SQL_LIMIT`：默认 SQL 结果限制和高风险结果限制阈值。
 - `SQL_TIMEOUT_SECONDS` / `EXECUTION_MAX_ROWS`：SQL 执行超时和单次最大返回行数。
 - `EXECUTION_CACHE_TTL_SECONDS` / `EXECUTION_CACHE_MAX_ENTRIES`：相同 SQL 的短期执行结果缓存。
