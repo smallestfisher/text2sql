@@ -446,18 +446,19 @@ class RetrievalService:
             if not (domains or tables or keywords or notes):
                 continue
             entry_id = str(entry.get("id", "business_knowledge"))
+            base_metadata = {
+                "kind": "business_knowledge",
+                "entry_id": entry_id,
+                "domains": domains,
+                "tables": tables,
+                "keywords": keywords,
+            }
             documents.append(
                 self._build_document(
                     source_type="knowledge",
                     source_id=f"business_knowledge:{entry_id}",
                     summary=notes[0] if notes else entry_id,
-                    metadata={
-                        "kind": "business_knowledge",
-                        "entry_id": entry_id,
-                        "domains": domains,
-                        "tables": tables,
-                        "keywords": keywords,
-                    },
+                    metadata={**base_metadata, "chunk_type": "entry"},
                     text_parts=[
                         entry_id,
                         " ".join(domains),
@@ -467,6 +468,26 @@ class RetrievalService:
                     ],
                 )
             )
+            for note_index, note in enumerate(notes):
+                documents.append(
+                    self._build_document(
+                        source_type="knowledge",
+                        source_id=f"business_knowledge:{entry_id}:note:{note_index}",
+                        summary=note,
+                        metadata={
+                            **base_metadata,
+                            "chunk_type": "note",
+                            "chunk_index": note_index,
+                        },
+                        text_parts=[
+                            entry_id,
+                            " ".join(domains),
+                            " ".join(tables),
+                            " ".join(keywords),
+                            note,
+                        ],
+                    )
+                )
         return documents
 
     def _build_table_schema_documents(self) -> list[dict]:
@@ -597,12 +618,32 @@ class RetrievalService:
     def _rerank_hits(self, hits: list[RetrievalHit]) -> list[RetrievalHit]:
         deduplicated: dict[tuple[str, str], RetrievalHit] = {}
         for hit in hits:
-            key = (hit.source_type, hit.source_id)
+            key = self._hit_dedup_key(hit)
             if key not in deduplicated:
                 deduplicated[key] = hit
                 continue
 
             existing = deduplicated[key]
+            if existing.source_id != hit.source_id:
+                merged_features = self._unique(existing.matched_features + hit.matched_features)
+                merged_source_score = max(existing.source_score or 0.0, hit.source_score or 0.0)
+                merged_channel = existing.retrieval_channel
+                if existing.retrieval_channel != hit.retrieval_channel:
+                    merged_channel = "hybrid"
+                if hit.score > existing.score:
+                    replacement = hit.model_copy(deep=True)
+                    replacement.source_score = merged_source_score
+                    replacement.matched_features = merged_features
+                    replacement.retrieval_channel = merged_channel
+                    replacement.metadata = {**existing.metadata, **hit.metadata}
+                    deduplicated[key] = replacement
+                    continue
+                existing.source_score = merged_source_score
+                existing.matched_features = merged_features
+                existing.retrieval_channel = merged_channel
+                existing.metadata = {**hit.metadata, **existing.metadata}
+                continue
+
             existing.score = round(existing.score + hit.score, 6)
             existing.source_score = max(existing.source_score or 0.0, hit.source_score or 0.0)
             existing.matched_features = self._unique(existing.matched_features + hit.matched_features)
@@ -642,6 +683,13 @@ class RetrievalService:
             selected.append(hit)
 
         return selected
+
+    def _hit_dedup_key(self, hit: RetrievalHit) -> tuple[str, str]:
+        if hit.source_type == "knowledge":
+            entry_id = hit.metadata.get("entry_id")
+            if isinstance(entry_id, str) and entry_id:
+                return hit.source_type, f"entry:{entry_id}"
+        return hit.source_type, hit.source_id
 
     def _select_top_hits(self, hits: list[RetrievalHit], *, limit: int) -> list[RetrievalHit]:
         if limit <= 0 or len(hits) <= limit:

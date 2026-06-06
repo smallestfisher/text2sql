@@ -93,6 +93,8 @@ class PromptBuilder:
         self,
         context: SqlGenerationContext,
         retrieval: RetrievalContext | None,
+        *,
+        include_join_pattern_hits: bool = True,
     ) -> list[str]:
         selected: list[str] = []
         for table_name in context.tables:
@@ -100,6 +102,8 @@ class PromptBuilder:
                 selected.append(table_name)
         if retrieval is not None:
             for hit in retrieval.hits:
+                if hit.source_type == "join_pattern" and not include_join_pattern_hits:
+                    continue
                 for table_name in self._tables_from_retrieval_hit(hit):
                     if table_name in self._tables_metadata and table_name not in selected:
                         selected.append(table_name)
@@ -481,8 +485,13 @@ class PromptBuilder:
         for hit in retrieval.hits:
             if hit.source_type != "knowledge":
                 continue
-            entry_id = hit.source_id.removeprefix("business_knowledge:")
-            if entry_id == hit.source_id:
+            entry_id = hit.metadata.get("entry_id")
+            if not isinstance(entry_id, str) or not entry_id:
+                entry_id = hit.source_id.removeprefix("business_knowledge:")
+                if entry_id == hit.source_id:
+                    continue
+                entry_id = entry_id.split(":note:", 1)[0]
+            if not entry_id:
                 continue
             scores[entry_id] = max(scores.get(entry_id, 0.0), hit.score)
         return scores

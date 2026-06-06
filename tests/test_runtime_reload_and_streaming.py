@@ -25,6 +25,7 @@ from backend.app.models.trace import TraceRecord
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.metadata_registry import MetadataRegistry
+from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.progress_service import ProgressService
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.session_workspace_service import SessionWorkspaceService
@@ -119,6 +120,78 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         self.assertIn("MONTH7", text)
         self.assertIn("PM_VERSION", sql_features["referenced_fields"])
         self.assertIn("union_all_unpivot", sql_features["sql_patterns"])
+
+    def test_business_knowledge_vector_documents_include_note_chunks(self) -> None:
+        domain_config = DomainConfigLoader().load()
+        service = RetrievalService(domain_config=domain_config)
+
+        note_document = next(
+            item
+            for item in service.corpus_documents
+            if item["source_type"] == "knowledge"
+            and item["source_id"] == "business_knowledge:demand_fgcode_mapping:note:3"
+        )
+
+        self.assertEqual(note_document["metadata"]["entry_id"], "demand_fgcode_mapping")
+        self.assertEqual(note_document["metadata"]["chunk_type"], "note")
+        self.assertEqual(note_document["metadata"]["chunk_index"], 3)
+        self.assertIn("sales_financial_perf", note_document["metadata"]["tables"])
+        self.assertIn("销售或财务业绩", note_document["text"])
+        self.assertNotIn("Cell No、Array No、CF No", note_document["text"])
+
+    def test_note_knowledge_hits_score_parent_entry(self) -> None:
+        builder = PromptBuilder.__new__(PromptBuilder)
+        scores = builder._retrieved_knowledge_hit_scores(
+            SimpleNamespace(
+                hits=[
+                    RetrievalHit(
+                        source_type="knowledge",
+                        source_id="business_knowledge:demand_fgcode_mapping:note:3",
+                        score=0.77,
+                        summary="sales financial note",
+                        metadata={"entry_id": "demand_fgcode_mapping", "chunk_type": "note"},
+                    )
+                ]
+            )
+        )
+
+        self.assertEqual(scores, {"demand_fgcode_mapping": 0.77})
+
+    def test_knowledge_chunks_are_folded_by_parent_entry_when_reranking(self) -> None:
+        service = RetrievalService.__new__(RetrievalService)
+        ranked_hits = service._rerank_hits(
+            [
+                RetrievalHit(
+                    source_type="knowledge",
+                    source_id="business_knowledge:demand_fgcode_mapping:note:0",
+                    score=1.0,
+                    summary="fgcode note",
+                    matched_features=["keyword:1.000"],
+                    metadata={"entry_id": "demand_fgcode_mapping", "chunk_type": "note"},
+                ),
+                RetrievalHit(
+                    source_type="knowledge",
+                    source_id="business_knowledge:demand_fgcode_mapping:note:3",
+                    score=3.0,
+                    summary="sales financial note",
+                    matched_features=["keyword:3.000"],
+                    metadata={"entry_id": "demand_fgcode_mapping", "chunk_type": "note"},
+                ),
+                RetrievalHit(
+                    source_type="table_schema",
+                    source_id="sales_financial_perf",
+                    score=2.0,
+                    summary="sales schema",
+                    metadata={"table": "sales_financial_perf"},
+                ),
+            ]
+        )
+
+        knowledge_hits = [hit for hit in ranked_hits if hit.source_type == "knowledge"]
+        self.assertEqual(len(knowledge_hits), 1)
+        self.assertEqual(knowledge_hits[0].source_id, "business_knowledge:demand_fgcode_mapping:note:3")
+        self.assertIn("keyword:1.000", knowledge_hits[0].matched_features)
+        self.assertIn("keyword:3.000", knowledge_hits[0].matched_features)
 
     def test_top_hits_preserve_available_evidence_source_types(self) -> None:
         service = RetrievalService.__new__(RetrievalService)

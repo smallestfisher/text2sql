@@ -36,7 +36,11 @@ class SqlPromptContextAssembler:
         retrieval: RetrievalContext | None = None,
     ) -> SqlPromptContextBundle:
         builder = self._prompt_builder
-        selected_sources = builder._selected_sources_for_sql(context, retrieval)
+        selected_sources = builder._selected_sources_for_sql(
+            context,
+            retrieval,
+            include_join_pattern_hits=False,
+        )
         selected_join_patterns = builder._selected_join_patterns(context, selected_sources, retrieval)
         selected_sources = builder._expand_sources_with_join_patterns(selected_sources, selected_join_patterns)
         selected_business_knowledge = builder._select_business_knowledge_entries(context, selected_sources, retrieval)
