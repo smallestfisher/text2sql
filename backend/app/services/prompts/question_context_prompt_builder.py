@@ -18,15 +18,17 @@ class QuestionContextPromptBuilder:
         question: str,
         session_state: SessionState | None,
         parser_signals: dict[str, Any] | None = None,
+        include_history: bool = True,
     ) -> dict:
         builder = self._prompt_builder
         parser_signals = parser_signals or {}
-        subject_domain = str(parser_signals.get("subject_domain") or (session_state.subject_domain if session_state else "unknown"))
-        focus_tables = builder._question_context_focus_tables(subject_domain, parser_signals, session_state)
-        conversation_summary = builder._conversation_summary(session_state) if session_state is not None else ""
+        history_state = session_state if include_history else None
+        subject_domain = str(parser_signals.get("subject_domain") or (history_state.subject_domain if history_state else "unknown"))
+        focus_tables = builder._question_context_focus_tables(subject_domain, parser_signals, history_state)
+        conversation_summary = builder._conversation_summary(history_state) if history_state is not None else ""
         recent_turns = [
             builder._turn_text(item)
-            for item in (session_state.recent_turns[-4:] if session_state is not None else [])
+            for item in (history_state.recent_turns[-4:] if history_state is not None else [])
         ]
         business_knowledge_excerpt = builder._question_context_business_knowledge(
             subject_domain=subject_domain,
@@ -38,7 +40,7 @@ class QuestionContextPromptBuilder:
         context_hints = builder._compact_mapping(
             {
                 "parser_observations": builder._compact_mapping(parser_signals),
-                "pending_clarification": builder._pending_clarification_payload(session_state),
+                "pending_clarification": builder._pending_clarification_payload(history_state),
                 "business_knowledge_excerpt": business_knowledge_excerpt,
                 "focus_tables": focus_tables,
                 "table_fields": table_fields,
@@ -52,12 +54,17 @@ class QuestionContextPromptBuilder:
             "table_field_table_count": len(table_fields),
             "table_field_count": sum(len(fields) for fields in table_fields.values()),
             "has_pending_clarification": bool(context_hints.get("pending_clarification")),
+            "history_included": bool(history_state is not None),
         }
         return {
             "task": "question_context_generation",
+            "context_policy": {
+                "history_included": bool(history_state is not None),
+                "purpose": "contextual_rewrite" if history_state is not None else "current_question_admission",
+            },
             "question": question,
             "conversation_summary": conversation_summary,
-            "last_turn": builder._last_turn_payload(session_state),
+            "last_turn": builder._last_turn_payload(history_state),
             "recent_turns": recent_turns,
             "context_hints": context_hints,
             "prompt_diagnostics": prompt_diagnostics,
@@ -78,6 +85,9 @@ class QuestionContextPromptBuilder:
                 "constraints": [
                     "只做问题上下文整理，不生成 SQL。",
                     "subject_domain 只能输出 subject_domain_values 中的一个值；如果不能稳定判断标准业务域，输出 unknown，不要自造新的业务域名称。",
+                    "当 context_policy.history_included=false 时，只能根据当前 question 判断；如果当前问题本身完整，必须返回 context_relation=new，并保持 effective_question 等于原问题。",
+                    "当 context_policy.history_included=false 且当前 question 明显依赖历史、省略了查询对象或使用指代时，返回 context_relation=ambiguous 或 follow_up，不要猜测历史内容。",
+                    "当 context_policy.history_included=true 时，才允许使用 conversation_summary、last_turn、recent_turns 和 pending_clarification 补全省略追问。",
                     "如果当前问题是追问，effective_question 必须改写成不依赖上下文也能理解的完整自然语言问题。",
                     "首问只要本身是一个完整的自然语言业务查询句，就必须返回 decision=answerable、context_relation=new，并把原问题作为 effective_question；不要在 question_context 阶段追问字段、表、SQL 实现、可选维度、可选过滤条件、额外时间范围或业务口径细节。",
                     "当 context_relation=new 时，effective_question 必须忠实保留当前用户原话的查询对象、指标、时间、版本、数量和条件；不得用历史上下文替换、覆盖或改写当前问题的明确信息。",

@@ -50,11 +50,13 @@ class PromptBuilder:
         question: str,
         session_state: SessionState | None,
         parser_signals: dict[str, Any] | None = None,
+        include_history: bool = True,
     ) -> dict:
         return self.question_context_prompt_builder.build(
             question=question,
             session_state=session_state,
             parser_signals=parser_signals,
+            include_history=include_history,
         )
 
     def conversation_summary(self, session_state: SessionState | None) -> str:

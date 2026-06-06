@@ -7,7 +7,7 @@ from backend.app.models.semantic_types import FilterItem
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
-from backend.app.models.session_state import PendingClarification, SessionState
+from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.orchestrator import ConversationOrchestrator
@@ -126,6 +126,19 @@ class StubFollowUpXpsQuestionContextLLMClient:
         }
 
 
+class RecordingQuestionContextLLMClient:
+    def __init__(self, responses: list[dict]) -> None:
+        self.enabled = True
+        self.responses = list(responses)
+        self.prompts: list[dict] = []
+
+    def generate_question_context(self, prompt_payload, cancellation_token=None):
+        self.prompts.append(prompt_payload)
+        if not self.responses:
+            raise AssertionError("unexpected question context call")
+        return self.responses.pop(0)
+
+
 class FakeChatCompletionResponse:
     choices = [type("Choice", (), {"message": type("Message", (), {"content": "SELECT 1"})()})()]
 
@@ -205,6 +218,112 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(health["metrics"]["question_context"]["requests"], 2)
         self.assertEqual(health["metrics"]["question_context"]["provider_calls"], 2)
         self.assertEqual(health["metrics"]["question_context"].get("cache_hits", 0), 0)
+
+    def test_complete_question_context_admission_does_not_expose_history(self) -> None:
+        question = "202604月销售业绩对202604月份最后一版P版中202605需求量覆盖不足的客户有哪些？"
+        llm_client = RecordingQuestionContextLLMClient(
+            [
+                {
+                    "decision": "answerable",
+                    "context_relation": "new",
+                    "subject_domain": "demand",
+                    "effective_question": question,
+                    "semantic_brief": "查询202604销售业绩对202605需求量覆盖不足的客户。",
+                    "reason": "当前问题已经包含查询对象、时间、指标和输出对象。",
+                }
+            ]
+        )
+        analysis_service = QuestionAnalysisService(
+            domain_config=self.domain_config,
+            llm_client=llm_client,
+            prompt_builder=PromptBuilder(semantic_runtime=self.semantic_runtime),
+            semantic_runtime=self.semantic_runtime,
+        )
+        session_state = SessionState(
+            session_id="sess_polluted_history",
+            subject_domain="plan_actual",
+            tables=["production_actuals", "product_attributes"],
+            conversation_summary="用户此前查询Array工厂Oxide产品投入物量。",
+            recent_turns=[
+                QueryTurnRecord(
+                    question="2026年Array工厂Oxide类产品，每个月分别投入多少物量",
+                    semantic_brief="查询Array工厂Oxide产品实际投入物量。",
+                )
+            ],
+        )
+
+        trace = analysis_service.analyze_question(
+            question=question,
+            session_state=session_state,
+        )
+
+        self.assertEqual(len(llm_client.prompts), 1)
+        admission_prompt = llm_client.prompts[0]
+        self.assertEqual(admission_prompt["conversation_summary"], "")
+        self.assertIsNone(admission_prompt["last_turn"])
+        self.assertEqual(admission_prompt["recent_turns"], [])
+        self.assertNotIn("pending_clarification", admission_prompt["context_hints"])
+        self.assertNotIn("production_actuals", admission_prompt["context_hints"].get("focus_tables", []))
+        self.assertEqual(trace["question_context"].context_relation, "new")
+        self.assertEqual(trace["effective_question"], question)
+
+    def test_context_admission_uses_history_only_for_context_dependent_question(self) -> None:
+        llm_client = RecordingQuestionContextLLMClient(
+            [
+                {
+                    "decision": "clarification_needed",
+                    "context_relation": "ambiguous",
+                    "subject_domain": "unknown",
+                    "effective_question": "XPS呢",
+                    "semantic_brief": "",
+                    "clarification_question": "需要结合上一轮问题补全。",
+                    "reason": "当前问题存在省略表达。",
+                },
+                {
+                    "decision": "answerable",
+                    "context_relation": "follow_up",
+                    "subject_domain": "plan_actual",
+                    "effective_question": "2026年Array工厂XPS类产品，每个月分别投入多少物量",
+                    "semantic_brief": "查询2026年Array工厂XPS类产品的实际投入物量，按月份展示。",
+                    "reason": "结合上一轮Oxide查询，将产品属性替换为XPS。",
+                },
+            ]
+        )
+        analysis_service = QuestionAnalysisService(
+            domain_config=self.domain_config,
+            llm_client=llm_client,
+            prompt_builder=PromptBuilder(semantic_runtime=self.semantic_runtime),
+            semantic_runtime=self.semantic_runtime,
+        )
+        session_state = SessionState(
+            session_id="sess_follow_up_history",
+            subject_domain="plan_actual",
+            tables=["production_actuals", "product_attributes"],
+            recent_turns=[
+                QueryTurnRecord(
+                    question="2026年Array工厂Oxide类产品，每个月分别投入多少物量",
+                    semantic_brief="查询2026年Array工厂Oxide类产品的实际投入物量，按月份展示。",
+                )
+            ],
+        )
+
+        trace = analysis_service.analyze_question(
+            question="XPS呢",
+            session_state=session_state,
+        )
+
+        self.assertEqual(len(llm_client.prompts), 2)
+        admission_prompt, rewrite_prompt = llm_client.prompts
+        self.assertEqual(admission_prompt["conversation_summary"], "")
+        self.assertEqual(admission_prompt["recent_turns"], [])
+        self.assertIn("Oxide", rewrite_prompt["conversation_summary"])
+        self.assertTrue(rewrite_prompt["recent_turns"])
+        self.assertIn("product_attributes", rewrite_prompt["context_hints"]["table_fields"])
+        self.assertEqual(trace["question_context"].context_relation, "follow_up")
+        self.assertEqual(
+            trace["effective_question"],
+            "2026年Array工厂XPS类产品，每个月分别投入多少物量",
+        )
 
     def test_llm_cache_prompt_option_is_passed_to_openai_compatible_client(self) -> None:
         client = LLMClient(cache_prompt=False)
@@ -345,7 +464,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(trace["effective_question"], "2026年Array工厂XPS类产品，每个月分别投入多少物量")
         self.assertEqual(trace["question_context"].context_relation, "follow_up")
         self.assertEqual(trace["question_context"].semantic_brief, "查询2026年Array工厂XPS类产品的实际投入物量，按月份展示。")
-        self.assertEqual(llm_client.rewrite_calls, 1)
+        self.assertEqual(llm_client.rewrite_calls, 2)
         self.assertEqual(trace["classification"].question_type, "follow_up")
         self.assertFalse(trace["classification"].inherit_context)
         self.assertEqual(sql_context_value.semantic_brief, trace["question_context"].semantic_brief)

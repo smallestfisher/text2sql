@@ -42,24 +42,81 @@ class QuestionContextService:
         if not getattr(self.llm_client, "enabled", False) or not hasattr(self.llm_client, "generate_question_context"):
             raise LLMServiceError("question context generation requires an enabled LLM client")
 
-        prompt_payload = self.prompt_builder.build_question_context_prompt(
+        parser_signals = parser_signals or {}
+        admission_prompt = self.prompt_builder.build_question_context_prompt(
             question=question,
             session_state=session_state,
-            parser_signals=parser_signals or {},
+            parser_signals=parser_signals,
+            include_history=False,
         )
-        payload = self.llm_client.generate_question_context(
-            prompt_payload,
+        admission_payload = self.llm_client.generate_question_context(
+            admission_prompt,
             cancellation_token=cancellation_token,
         )
-        question_context = self._coerce_payload(
-            payload,
+        admission_context = self._coerce_payload(
+            admission_payload,
             question=question,
-            session_state=session_state,
-            parser_signals=parser_signals or {},
+            session_state=None,
+            parser_signals=parser_signals,
         )
+        prompt_payload = admission_prompt
+        question_context = admission_context
+        history_used = False
+
+        if self._should_use_history_for_context(admission_context, session_state):
+            prompt_payload = self.prompt_builder.build_question_context_prompt(
+                question=question,
+                session_state=session_state,
+                parser_signals=parser_signals,
+                include_history=True,
+            )
+            payload = self.llm_client.generate_question_context(
+                prompt_payload,
+                cancellation_token=cancellation_token,
+            )
+            question_context = self._coerce_payload(
+                payload,
+                question=question,
+                session_state=session_state,
+                parser_signals=parser_signals,
+            )
+            history_used = True
+
         return question_context, {
-            "prompt_diagnostics": prompt_payload.get("prompt_diagnostics", {}),
+            "prompt_diagnostics": self._prompt_diagnostics(
+                prompt_payload=prompt_payload,
+                admission_prompt=admission_prompt,
+                admission_context=admission_context,
+                history_used=history_used,
+            ),
         }
+
+    def _should_use_history_for_context(
+        self,
+        admission_context: QuestionContext,
+        session_state: SessionState | None,
+    ) -> bool:
+        if session_state is None:
+            return False
+        context_relation = admission_context.context_relation
+        return context_relation in {"follow_up", "ambiguous"}
+
+    def _prompt_diagnostics(
+        self,
+        *,
+        prompt_payload: dict,
+        admission_prompt: dict,
+        admission_context: QuestionContext,
+        history_used: bool,
+    ) -> dict[str, Any]:
+        diagnostics = dict(prompt_payload.get("prompt_diagnostics", {}))
+        diagnostics["context_admission"] = {
+            "decision": admission_context.decision,
+            "context_relation": admission_context.context_relation,
+            "history_used": history_used,
+            "prompt_diagnostics": admission_prompt.get("prompt_diagnostics", {}),
+        }
+        return diagnostics
 
     def _coerce_payload(
         self,
