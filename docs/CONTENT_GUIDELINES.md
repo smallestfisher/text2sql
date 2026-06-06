@@ -4,6 +4,7 @@
 
 - `examples/nl2sql_examples.template.json`
 - `semantic/business_knowledge.json`
+- `eval/retrieval_cases.json`
 
 目标是让样例和业务知识都能被检索、进入 prompt，并且长期可维护。不要把它们写成一次性补丁、临时解释或和真实表结构脱节的经验描述。
 
@@ -47,6 +48,30 @@
 ### 1.3 写入 eval case
 
 如果目标是防止某个真实问题回归，写入 `eval/evaluation_cases.json`，不要只写样例或知识库。样例和知识库负责影响生成，eval case 负责验收行为。
+
+### 1.4 写入 retrieval case
+
+如果目标是防止关键检索证据或表 schema 丢失，写入 `eval/retrieval_cases.json`。retrieval case 不跑 LLM、不校验最终 SQL，只校验检索和 SQL prompt 组装后的证据覆盖。
+
+适合写 retrieval case 的情况：
+
+- 多表问题必须覆盖几张关键表，例如需求、产品属性和销售财务事实表。
+- 某条业务知识或 join pattern 必须进入 prompt。
+- 修复的是检索、rerank、证据闭合或 prompt context assembly，而不是 SQL 写法本身。
+
+推荐格式：
+
+```json
+{
+  "id": "retrieval_demand_latest_p_oxide_fgcode_sales_financial_001",
+  "question": "202605月最新P版Oxide产品需求量前10的FGCODE，对应产品大类、需求量、销售业绩和财务业绩分别是多少",
+  "subject_domain": "demand",
+  "expected_available_tables": ["p_demand", "product_attributes", "sales_financial_perf"],
+  "expected_business_knowledge_ids": ["demand_fgcode_mapping"],
+  "expected_join_pattern_ids": ["demand_product_attributes_direct_join"],
+  "notes": "检索回归样本：P版横表需求 + Oxide产品属性 + 销售/财务实绩。"
+}
+```
 
 ## 2. 样例编写规范
 
@@ -130,11 +155,14 @@
 
 - 写成面向 SQL 生成的指令，而不是业务背景介绍。
 - 一条 note 尽量保持短句；复杂规则拆成多条。
+- 向量语料会把每条 note 拆成单独子文档；一条 note 应只表达一个明确规则，避免把多个不相关规则写在同一句里。
 - 同时写清正向规则和关键禁忌。例如“必须先聚合再 join”，以及“禁止明细 join 后再 SUM”。
 - 公式必须明确方向。例如 `Gap = 实际投入 - 审批投入`，不要只写“计算 Gap”。
 - 口径有条件分支时写清触发条件。例如“MDL 默认 panel，其他工厂默认 glass”。
 - 时间、版本、单位、枚举值要贴近真实物理字段和存储格式。
 - 不写互相冲突的规则。发现冲突时，先合并或修正旧 entry。
+
+note 子文档只影响检索粒度，不改变 `business_knowledge.json` 的录入格式。命中 note 后仍会回填父 entry，并用父 entry 的 `tables` 做 schema closure。
 
 ### 3.3 粒度控制
 

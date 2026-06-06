@@ -119,6 +119,7 @@
 - 业务知识存在但没进入 prompt。
 - 样例或 join pattern 没进 top hits。
 - 向量索引未预热或同步失败。
+- 检索命中了业务知识或 join pattern，但最终 `available_tables` 没有闭合到证据声明的表。
 
 优先修：
 
@@ -126,10 +127,13 @@
 - `semantic/business_knowledge.json`
 - `examples/nl2sql_examples.template.json`
 - `semantic/join_patterns.json`
+- `eval/retrieval_cases.json`
 - `RetrievalService`
 - `SqlPromptContextAssembler` 的证据组装，或 `PromptBuilder` 共享 helper 的排序和压缩逻辑
 
 向量状态看 `GET /api/admin/runtime/status` 里的 `vector_retrieval` 和 `retrieval_corpus`。如果启用了向量检索但索引未就绪，请执行 `POST /api/admin/runtime/vector/prewarm`。
+
+如果问题是检索证据覆盖不足，优先新增或更新 retrieval case，再运行 `python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests`。这个测试只验证检索命中和 SQL prompt 的 `available_tables`、`business_knowledge_entry_ids`、`join_pattern_ids`，不依赖 LLM 和 SQL 执行。
 
 ### SQL Prompt
 
@@ -141,6 +145,8 @@
 - `retrieved_example_ids`
 - `join_pattern_ids`
 - `time_resolution_count`
+
+`selected_sources` 是最终 SQL prompt 可用表。它会基于已选中的 join pattern 和 business knowledge 做 schema closure；如果这里缺少某张关键表，先回到 Retrieval 检查对应证据是否命中、证据 metadata 是否声明了该表。
 
 再看生成的 `sql`。
 

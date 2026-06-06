@@ -68,6 +68,10 @@ QuestionContext prompt 会带入最近会话、待澄清上下文、相关业务
 - `semantic/join_patterns.json`：稳定 join 方式。
 - 向量语料：启用后使用同一批资产生成并持久化到 runtime MySQL。
 
+检索命中进入 SQL prompt 前会做证据闭合：已选中的 join pattern 会补齐其声明的 companion tables；已选中的 business knowledge 会补齐其声明的真实表 schema。这个步骤只根据已命中的结构化证据补 schema，不在 Python 中按业务关键词硬编码表选择。
+
+`semantic/business_knowledge.json` 的维护格式保持 entry + notes。构建向量语料时，每条 entry 会生成一个父文档，并为每条 note 额外生成 note 子文档。note 子文档仍携带父 entry 的 `entry_id`、`domains`、`tables` 和 `keywords`，命中后会折叠回父 entry，避免同一 entry 的多个 note 占满 top hits。
+
 trace 和 runtime log 会记录命中来源、分数、通道和 matched features。
 
 ### Trace 与 Runtime Log
