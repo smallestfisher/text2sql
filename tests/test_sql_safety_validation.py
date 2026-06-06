@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.sql_validator import SqlValidator
 
@@ -94,6 +95,22 @@ class SqlSafetyValidationTests(unittest.TestCase):
 
         self.assertEqual([], result.errors)
         self.assertTrue(any("avoid positional ORDER BY" in item for item in result.warnings))
+
+    def test_sources_outside_sql_context_are_rejected(self) -> None:
+        sql_context = SqlGenerationContext(
+            question_type="new",
+            subject_domain="unknown",
+            tables=["production_actuals"],
+        )
+
+        result = self.sql_validator.validate_detailed(
+            "SELECT FGCODE, SUM(sales_qty) AS sales_qty FROM sales_financial_perf GROUP BY FGCODE FETCH FIRST 10 ROWS ONLY",
+            self.domain_config,
+            sql_context=sql_context,
+        )
+
+        self.assertIn("sql references sources outside sql context: sales_financial_perf", result.errors)
+        self.assertIn("context_mismatch_risk", result.risk_flags)
 
 
 if __name__ == "__main__":

@@ -130,6 +130,22 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertNotIn("matched_examples", prompt["context_hints"])
         self.assertNotIn("matched_join_patterns", prompt["context_hints"])
 
+    def test_question_context_prompt_declares_supported_subject_domains(self) -> None:
+        prompt = self.prompt_builder.build_question_context_prompt(
+            question="202604月销售业绩和最新P版202604需求量差异最大的前10个FGCODE",
+            session_state=None,
+            parser_signals={},
+        )
+
+        instructions = prompt["instructions"]
+        constraints = "\n".join(instructions["constraints"])
+
+        self.assertEqual(
+            instructions["subject_domain_values"],
+            ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"],
+        )
+        self.assertIn("subject_domain 只能输出 subject_domain_values 中的一个值", constraints)
+
     def test_question_context_prompt_includes_pending_clarification(self) -> None:
         session_state = SessionState(
             session_id="sess_pending_clarification",
@@ -324,6 +340,40 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn("demand_fgcode_mapping", prompt["context_summary"]["business_knowledge_entry_ids"])
         self.assertIn("sales_financial_perf", prompt["available_tables"])
         self.assertIn("sales_qty (销售业绩)", prompt["available_tables"]["sales_financial_perf"]["columns"])
+
+    def test_sql_prompt_keeps_retrieved_examples_matching_selected_sources_when_domain_unknown(self) -> None:
+        question = "202604月销售业绩和最新P版202604需求量差异最大的前10个FGCODE"
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="unknown",
+            tables=[],
+            semantic_brief=question,
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="demand_sales_vs_latest_p_demand_diff_fgcode_202604_001",
+                    score=8.0,
+                    summary=question,
+                    metadata={
+                        "subject_domain": "demand",
+                        "tables": ["p_demand", "sales_financial_perf"],
+                    },
+                )
+            ]
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question=question,
+        )
+
+        self.assertIn(
+            "demand_sales_vs_latest_p_demand_diff_fgcode_202604_001",
+            prompt["context_summary"]["retrieved_example_ids"],
+        )
 
     def test_sql_prompt_context_summary_includes_prompt_diagnostics(self) -> None:
         sql_context_value = SqlGenerationContext(

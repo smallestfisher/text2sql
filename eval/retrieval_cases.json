@@ -28,7 +28,8 @@
     ],
     "expected_business_knowledge_ids": [
       "demand_fgcode_mapping",
-      "demand_horizontal_month_mapping"
+      "demand_horizontal_month_mapping",
+      "sales_financial_perf_grain"
     ],
     "expected_join_pattern_ids": [
       "demand_product_mapping_sales_financial_join"

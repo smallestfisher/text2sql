@@ -417,6 +417,7 @@ class ConversationOrchestrator:
                     retrieval=retrieval,
                     question=effective_question,
                 )
+                sql_context = self._apply_prompt_allowed_sources_to_sql_context(sql_context, sql_prompt)
                 self._log_timing(trace.trace_id, "build_sql_prompt", stage_started_at)
                 self._log_stage_io(
                     "build_sql_prompt",
@@ -1235,8 +1236,11 @@ class ConversationOrchestrator:
         if retrieval is None:
             return sql_context
         tables = list(sql_context.tables)
+        domain_filter = sql_context.subject_domain
+        if self._single_retrieval_domain(retrieval) is None:
+            domain_filter = "unknown"
         for hit in retrieval.hits:
-            if not self._hit_matches_domain(hit, sql_context.subject_domain):
+            if not self._hit_matches_domain(hit, domain_filter):
                 continue
             metadata_tables = hit.metadata.get("tables", [])
             if isinstance(metadata_tables, list):
@@ -1285,21 +1289,22 @@ class ConversationOrchestrator:
         return None
 
     def _single_retrieval_domain(self, retrieval) -> str | None:
+        candidate_domains: list[str] = []
         for hit in getattr(retrieval, "hits", []) or []:
-            hit_domain = self._single_primary_domain(self._hit_domains(hit))
-            if hit_domain is not None:
-                return hit_domain
-        domains = [domain for domain in retrieval.domains if domain in SUPPORTED_SUBJECT_DOMAINS and domain != "unknown"]
-        unique_domains = []
-        for domain in domains:
-            if domain not in unique_domains:
-                unique_domains.append(domain)
-        resolved_domain = self._single_primary_domain(unique_domains)
+            for domain in self._hit_domains(hit):
+                if domain not in candidate_domains:
+                    candidate_domains.append(domain)
+        for domain in getattr(retrieval, "domains", []) or []:
+            if domain in SUPPORTED_SUBJECT_DOMAINS and domain != "unknown" and domain not in candidate_domains:
+                candidate_domains.append(domain)
+        resolved_domain = self._single_primary_domain(candidate_domains)
         if resolved_domain is not None:
             return resolved_domain
+        if candidate_domains:
+            return None
 
         table_domains = []
-        for hit in retrieval.hits:
+        for hit in getattr(retrieval, "hits", []) or []:
             table_names = []
             metadata_tables = hit.metadata.get("tables", [])
             if isinstance(metadata_tables, list):
@@ -1312,6 +1317,26 @@ class ConversationOrchestrator:
                     if domain != "unknown" and domain not in table_domains:
                         table_domains.append(domain)
         return self._single_primary_domain(table_domains)
+
+    def _apply_prompt_allowed_sources_to_sql_context(self, sql_context, sql_prompt):
+        if not isinstance(sql_prompt, dict):
+            return sql_context
+        evidence_context = sql_prompt.get("evidence_context", {})
+        if not isinstance(evidence_context, dict):
+            return sql_context
+        allowed_sources = evidence_context.get("allowed_sources", [])
+        if not isinstance(allowed_sources, list):
+            return sql_context
+        tables: list[str] = []
+        for source in allowed_sources:
+            if not isinstance(source, str) or not source.strip():
+                continue
+            table_name = source.strip()
+            if table_name not in tables:
+                tables.append(table_name)
+        if not tables or tables == getattr(sql_context, "tables", []):
+            return sql_context
+        return sql_context.model_copy(deep=True, update={"tables": tables})
 
     def _hit_matches_domain(self, hit, subject_domain: str) -> bool:
         if subject_domain == "unknown":

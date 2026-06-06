@@ -74,8 +74,10 @@ class QuestionContextPromptBuilder:
                 ],
                 "decision_values": ["answerable", "clarification_needed", "invalid"],
                 "context_relation_values": ["new", "follow_up", "ambiguous"],
+                "subject_domain_values": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"],
                 "constraints": [
                     "只做问题上下文整理，不生成 SQL。",
+                    "subject_domain 只能输出 subject_domain_values 中的一个值；如果不能稳定判断标准业务域，输出 unknown，不要自造新的业务域名称。",
                     "如果当前问题是追问，effective_question 必须改写成不依赖上下文也能理解的完整自然语言问题。",
                     "首问只要本身是一个完整的自然语言业务查询句，就必须返回 decision=answerable、context_relation=new，并把原问题作为 effective_question；不要在 question_context 阶段追问字段、表、SQL 实现、可选维度、可选过滤条件、额外时间范围或业务口径细节。",
                     "当 context_relation=new 时，effective_question 必须忠实保留当前用户原话的查询对象、指标、时间、版本、数量和条件；不得用历史上下文替换、覆盖或改写当前问题的明确信息。",

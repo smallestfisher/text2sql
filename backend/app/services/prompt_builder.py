@@ -541,7 +541,7 @@ class PromptBuilder:
             example = examples.get(hit.source_id)
             if example is None:
                 continue
-            if not self._retrieved_example_matches_context(context, example, hit):
+            if not self._retrieved_example_matches_context(context, example, hit, selected_sources=selected_sources):
                 continue
             payload = {
                 "id": example.id,
@@ -693,12 +693,17 @@ class PromptBuilder:
         context: SqlGenerationContext,
         example: ExampleRecord,
         hit: RetrievalHit,
+        *,
+        selected_sources: list[str] | None = None,
     ) -> bool:
         if example.subject_domain == context.subject_domain:
             return True
 
         context_tables = set(context.tables)
         if context_tables and context_tables.intersection(example.tables):
+            return True
+        selected_tables = set(selected_sources or [])
+        if selected_tables and selected_tables.intersection(example.tables):
             return True
 
         context_metrics = set(context.metrics)

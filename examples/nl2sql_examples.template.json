@@ -125,6 +125,30 @@
     "notes": "P 版需求是横表，必须完整展开 REQUIREMENT_QTY、NEXT_REQUIREMENT、LAST_REQUIREMENT、MONTH4、MONTH5、MONTH6、MONTH7 到 demand_month 后再按目标月份过滤。PM_VERSION 是版本标识不是行唯一键，同一版本会有多条明细；最新 5 版指最新 5 个不同 PM_VERSION，不是最新 5 条原表记录。应先解析显示版本中的版本年月、W 周号和 P 周内版次后排序取最新 5 个 P 版，再回到这些版本下的全部明细行，按 202604 汇总并取需求量最高的 FGCODE。"
   },
   {
+    "id": "demand_sales_vs_latest_p_demand_diff_fgcode_202604_001",
+    "question": "202604月销售业绩和最新P版202604需求量差异最大的前10个FGCODE，输出FGCODE、销售业绩、需求量和差异量",
+    "sql": "WITH parsed_versions AS (SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}')) AS version_month, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION), latest_version AS (SELECT PM_VERSION FROM (SELECT PM_VERSION FROM parsed_versions ORDER BY version_month DESC, version_week DESC, version_seq DESC, PM_VERSION DESC) FETCH FIRST 1 ROW ONLY), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM p_demand), sales_data AS (SELECT FGCODE, SUM(NVL(sales_qty, 0)) AS sales_performance FROM sales_financial_perf WHERE report_month = '202604' GROUP BY FGCODE), demand_data AS (SELECT FGCODE, SUM(NVL(demand_qty, 0)) AS demand_qty FROM demand_unpivot WHERE PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_month = '202604' GROUP BY FGCODE) SELECT COALESCE(s.FGCODE, d.FGCODE) AS FGCODE, NVL(s.sales_performance, 0) AS sales_performance, NVL(d.demand_qty, 0) AS demand_qty, NVL(s.sales_performance, 0) - NVL(d.demand_qty, 0) AS difference_amount FROM sales_data s FULL OUTER JOIN demand_data d ON s.FGCODE = d.FGCODE ORDER BY ABS(NVL(s.sales_performance, 0) - NVL(d.demand_qty, 0)) DESC FETCH FIRST 10 ROWS ONLY;",
+    "subject_domain": "demand",
+    "metrics": [
+      "sales_qty",
+      "demand_qty",
+      "difference_amount"
+    ],
+    "dimensions": [
+      "FGCODE"
+    ],
+    "tags": [
+      "sales_financial",
+      "horizontal_table",
+      "latest_version",
+      "fgcode",
+      "difference",
+      "aggregate_then_join"
+    ],
+    "result_shape": "fgcode_sales_demand_difference_topn",
+    "notes": "销售业绩与最新P版需求量差异样例。sales_financial_perf 的明细粒度包含 report_month、SBU_DESC、BU_DESC、CUSTOMER、FGCODE，同一 FGCODE 同月可能有多条明细，因此销售侧必须先按 report_month 和 FGCODE 聚合 sales_qty。P 版需求必须先解析 PM_VERSION 取最新一个 P 版版本标识，再完整展开横向月份列到 demand_month，按目标需求月份 202604 聚合 demand_qty。两侧都聚合到 FGCODE 后再 FULL OUTER JOIN 计算差异量，差异量默认 sales_performance - demand_qty，按绝对差异排序取前10。"
+  },
+  {
     "id": "demand_latest_p_recent6m_ttl_001",
     "question": "最新p版，最近6个月的ttl需求物量",
     "sql": "WITH parsed_versions AS (SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}')) AS version_month, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION), latest_version AS (SELECT PM_VERSION FROM (SELECT PM_VERSION FROM parsed_versions ORDER BY version_month DESC, version_week DESC, version_seq DESC, PM_VERSION DESC) FETCH FIRST 1 ROW ONLY), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CUSTOMER, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT demand_month, SUM(NVL(demand_qty, 0)) AS ttl_demand_qty FROM demand_unpivot WHERE PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_month BETWEEN TO_CHAR(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -5), 'YYYYMM') AND TO_CHAR(TRUNC(SYSDATE, 'MM'), 'YYYYMM') GROUP BY demand_month ORDER BY demand_month FETCH FIRST 200 ROWS ONLY;",

@@ -706,6 +706,111 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             "我是指的最新5版p版需求中，202603需求量最多的fgcode是哪一个",
         )
 
+    def test_mixed_retrieval_domains_do_not_resolve_to_first_single_domain_hit(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        retrieval = RetrievalContext(
+            domains=["demand", "sales_financial", "plan_actual"],
+            hits=[
+                RetrievalHit(
+                    source_type="table_schema",
+                    source_id="sales_financial_perf",
+                    score=6.0,
+                    summary="销售与财务实绩表",
+                    metadata={"table": "sales_financial_perf", "domains": ["demand", "sales_financial"]},
+                ),
+                RetrievalHit(
+                    source_type="knowledge",
+                    source_id="business_knowledge:production_actuals_act_type_panel_volume:note:4",
+                    score=3.5,
+                    summary="MDL工厂top10投入型号及其物量",
+                    metadata={"domains": ["plan_actual"], "tables": ["production_actuals"]},
+                ),
+                RetrievalHit(
+                    source_type="example",
+                    source_id="demand_latest_p_202605_oxide_product_count_001",
+                    score=2.4,
+                    summary="最新P版需求",
+                    metadata={"subject_domain": "demand", "tables": ["p_demand"]},
+                ),
+            ],
+        )
+
+        self.assertIsNone(orchestrator._single_retrieval_domain(retrieval))
+
+    def test_single_retrieval_domain_resolves_when_unambiguous(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        retrieval = RetrievalContext(
+            domains=["inventory"],
+            hits=[
+                RetrievalHit(
+                    source_type="table_schema",
+                    source_id="oms_inventory",
+                    score=5.0,
+                    summary="OMS库存",
+                    metadata={"table": "oms_inventory", "domains": ["inventory"]},
+                )
+            ],
+        )
+
+        self.assertEqual(orchestrator._single_retrieval_domain(retrieval), "inventory")
+
+    def test_prompt_allowed_sources_replace_sql_context_tables_for_validation(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="unknown",
+            tables=["production_actuals"],
+            semantic_brief="查询销售业绩与最新P版需求量差异。",
+        )
+        sql_prompt = {
+            "evidence_context": {
+                "allowed_sources": ["sales_financial_perf", "p_demand", "product_mapping"],
+            }
+        }
+
+        resolved_context = orchestrator._apply_prompt_allowed_sources_to_sql_context(
+            sql_context_value,
+            sql_prompt,
+        )
+
+        self.assertEqual(resolved_context.tables, ["sales_financial_perf", "p_demand", "product_mapping"])
+        self.assertEqual(sql_context_value.tables, ["production_actuals"])
+
+    def test_mixed_retrieval_domains_do_not_filter_cross_domain_tables(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="sales_financial",
+            tables=[],
+            semantic_brief="查询销售业绩与最新P版需求量差异。",
+        )
+        retrieval = RetrievalContext(
+            domains=["sales_financial", "demand"],
+            hits=[
+                RetrievalHit(
+                    source_type="table_schema",
+                    source_id="sales_financial_perf",
+                    score=5.0,
+                    summary="销售与财务实绩表",
+                    metadata={"table": "sales_financial_perf", "domains": ["sales_financial"]},
+                ),
+                RetrievalHit(
+                    source_type="table_schema",
+                    source_id="p_demand",
+                    score=4.0,
+                    summary="P版需求表",
+                    metadata={"table": "p_demand", "domains": ["demand"]},
+                ),
+            ],
+        )
+
+        resolved_context = orchestrator._apply_retrieval_tables_to_sql_context(
+            sql_context_value,
+            retrieval,
+        )
+
+        self.assertEqual(resolved_context.tables, ["sales_financial_perf", "p_demand"])
+
     def test_terminal_clarification_is_saved_as_pending_context(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
         previous_state = SessionState(session_id="sess_pending")

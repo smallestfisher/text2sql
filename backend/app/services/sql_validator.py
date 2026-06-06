@@ -115,7 +115,7 @@ class SqlValidator:
             expected_sources.update(inspection.cte_names)
             unexpected_sources = [source for source in used_sources if source not in expected_sources]
             if unexpected_sources:
-                warnings.append(f"sql references sources outside sql context: {', '.join(unexpected_sources)}")
+                errors.append(f"sql references sources outside sql context: {', '.join(unexpected_sources)}")
 
             missing_context_filters = [
                 filter_item.field

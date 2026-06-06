@@ -5,7 +5,7 @@
       "id": "demand_fgcode_mapping",
       "domains": ["demand", "sales_financial"],
       "tables": ["p_demand", "v_demand", "product_mapping", "sales_financial_perf"],
-      "keywords": ["FGCODE", "product_mapping", "Cell No", "Array No", "CF No", "customer"],
+      "keywords": ["FGCODE", "product_mapping", "Cell No", "Array No", "CF No", "customer", "销售业绩", "财务业绩", "需求量", "差异量", "sales_financial_perf"],
       "notes": [
         "p_demand 和 v_demand 的核心业务实体是 FGCODE。",
         "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell No、Array No、CF No 分别对应不同阶段编码列。",
@@ -14,10 +14,21 @@
       ]
     },
     {
+      "id": "sales_financial_perf_grain",
+      "domains": ["sales_financial", "demand"],
+      "tables": ["sales_financial_perf"],
+      "keywords": ["sales_financial_perf", "销售业绩", "财务业绩", "sales_qty", "FINANCIAL_qty", "report_month", "FGCODE", "CUSTOMER", "差异量"],
+      "notes": [
+        "sales_financial_perf 的明细粒度是 report_month、SBU_DESC、BU_DESC、CUSTOMER、FGCODE；同一 FGCODE 在同一结算月份可能有多条客户或组织维度明细。",
+        "按 FGCODE 与需求量、产品属性或其他事实口径对比前，应先在 sales_financial_perf 内按目标月份和目标维度聚合销售业绩或财务业绩，再与其他已聚合结果对齐。",
+        "销售业绩通常使用 SUM(NVL(sales_qty, 0))；财务业绩通常使用 SUM(NVL(FINANCIAL_qty, 0))。"
+      ]
+    },
+    {
       "id": "demand_horizontal_month_mapping",
       "domains": ["demand"],
       "tables": ["p_demand", "v_demand"],
-      "keywords": ["MONTH", "REQUIREMENT_QTY", "NEXT_REQUIREMENT", "LAST_REQUIREMENT", "MONTH4", "MONTH5", "MONTH6", "MONTH7", "PM_VERSION"],
+      "keywords": ["MONTH", "REQUIREMENT_QTY", "NEXT_REQUIREMENT", "LAST_REQUIREMENT", "MONTH4", "MONTH5", "MONTH6", "MONTH7", "PM_VERSION", "最新P版", "需求量", "demand_month"],
       "notes": [
         "p_demand 和 v_demand 是横向需求表，目标需求月份不能简单理解成 base MONTH 本身。",
         "需求月份映射规则是：offset 0 对应 REQUIREMENT_QTY，offset 1 对应 NEXT_REQUIREMENT，offset 2 对应 LAST_REQUIREMENT，offset 3 到 6 分别对应 MONTH4 到 MONTH7。",
