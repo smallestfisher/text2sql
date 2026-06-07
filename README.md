@@ -1,21 +1,10 @@
 # Text2SQL
 
-Text2SQL 是一个面向中文业务问题的 Oracle 查询工作台。用户用自然语言提问，后端基于真实表结构、业务知识、样例、join pattern 和检索上下文生成 Oracle SQL，经过校验、执行、审计后返回结果，并把运行证据保存到 MySQL runtime 库。
+Text2SQL 是面向中文业务问题的 Oracle 查询工作台。用户用自然语言提问，后端基于真实表结构、业务知识、样例、join pattern 和检索证据生成 Oracle SQL，经过校验、执行和审计后返回结果，并把运行证据保存到 MySQL runtime 库。
 
-## 当前边界
+## 快速启动
 
-- 业务库固定为 Oracle，连接串来自 `BUSINESS_DATABASE_URL`。
-- runtime 库固定为 MySQL，连接串来自 `RUNTIME_DATABASE_URL`。
-- 业务 SQL 生成、repair、AST 解析和校验都按 Oracle 规则运行。
-- SQL 安全错误会阻断执行；质量警告和风险标签会写入 trace、query log 和 SQL audit，用于排查和治理。
-- `semantic/`、`examples/`、`eval/` 是语义资产、检索语料、管理台编辑和评测的共同来源。
-- 后端启动时会检查数据库、runtime schema、metadata、`sqlglot` 和向量检索配置；关键启动依赖失败会阻断启动，LLM 状态可在 runtime status 中查看。
-- 非业务输入会作为 `invalid` 终止响应处理，不进入检索、SQL 生成或执行链路。
-- 准确率修复优先沉淀到表结构说明、业务知识、样例、join pattern、retrieval、prompt 和 validator。
-
-## Docker 启动
-
-准备环境文件，至少填写 `OPENAI_API_KEY` 和 `AUTH_TOKEN_SECRET`。
+准备环境文件。默认开启向量检索时，需要填写 `OPENAI_API_KEY`、`VECTOR_API_KEY` 和 `AUTH_TOKEN_SECRET`：
 
 ```bash
 cp env.example .env
@@ -34,40 +23,15 @@ docker compose up -d --build
 - `text2sql-oracle`：业务库，默认用户 `admin/admin123`，服务名 `FREEPDB1`。
 - `text2sql-mysql`：runtime 库，默认库 `manager`，用户 `admin/admin123`。
 
-容器内默认连接串使用 Docker 服务名：
-
-```env
-BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@oracle:1521/?service_name=FREEPDB1"
-RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@mysql:3306/manager"
-```
-
-如果只改应用代码，按影响范围重建镜像：
-
-```bash
-docker compose up -d --build backend frontend
-```
-
 不要把 `docker compose down -v` 当作常规重启命令；它会删除 Oracle 和 MySQL 数据卷。
 
 ## 本机开发
-
-安装依赖：
 
 ```bash
 cp env.example .env
 pip install -r backend/requirements.txt
 cd frontend && npm install && cd ..
-```
-
-只启动数据库：
-
-```bash
 docker compose up -d oracle mysql
-```
-
-启动应用：
-
-```bash
 scripts/devctl.sh start
 scripts/devctl.sh status
 ```
@@ -78,6 +42,33 @@ scripts/devctl.sh status
 scripts/devctl.sh restart backend
 scripts/devctl.sh logs frontend
 ```
+
+## 关键配置
+
+`.env` 至少确认这些值：
+
+```env
+BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@127.0.0.1:1521/?service_name=FREEPDB1"
+RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@127.0.0.1:3306/manager"
+OPENAI_API_KEY="your_llm_api_key"
+OPENAI_API_BASE="https://api.siliconflow.cn/v1"
+LLM_MODEL="Qwen/Qwen3-14B"
+VECTOR_API_KEY="your_embedding_api_key"
+AUTH_TOKEN_SECRET="change-me"
+```
+
+常用开关：
+
+- `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索。
+- `VECTOR_API_KEY`：启用向量检索时必须可用；如果向量服务和主 LLM 共用同一个 key，可以填同一个值。
+- `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时预热向量索引。
+- `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
+- `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
+- `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。
+- `DEFAULT_SQL_LIMIT` / `HIGH_RISK_SQL_LIMIT`：SQL 结果限制和风险标记阈值。
+- `SQL_TIMEOUT_SECONDS` / `EXECUTION_MAX_ROWS`：SQL 执行超时和单次最大返回行数。
+
+## 数据初始化
 
 新数据卷首次启动时会自动初始化：
 
@@ -91,31 +82,7 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 docker exec -i text2sql-mysql mysql -uadmin -padmin123 manager < sql/runtime_store.sql
 ```
 
-## 关键配置
-
-`.env` 至少确认这些值：
-
-```env
-BUSINESS_DATABASE_URL="oracle+oracledb://admin:admin123@127.0.0.1:1521/?service_name=FREEPDB1"
-RUNTIME_DATABASE_URL="mysql+pymysql://admin:admin123@127.0.0.1:3306/manager"
-OPENAI_API_KEY="your_llm_api_key"
-OPENAI_API_BASE="https://api.siliconflow.cn/v1"
-AUTH_TOKEN_SECRET="change-me"
-```
-
-常用开关：
-
-- `ENABLE_VECTOR_RETRIEVAL=true`：启用向量检索。
-- `PREWARM_VECTOR_RETRIEVAL=true`：启动和 metadata reload 时预热向量索引。
-- `LLM_MAX_RETRIES`：QuestionContext 和 SQL 首轮生成重试次数。
-- `SQL_REPAIR_MAX_RETRIES`：SQL repair 重试次数。
-- `LLM_CACHE_TTL_SECONDS` / `LLM_CACHE_MAX_ENTRIES`：进程内 LLM prompt cache。
-- `DEFAULT_SQL_LIMIT` / `HIGH_RISK_SQL_LIMIT`：SQL 结果限制和风险标记阈值。
-- `SQL_TIMEOUT_SECONDS` / `EXECUTION_MAX_ROWS`：SQL 执行超时和单次最大返回行数。
-
-## 业务数据
-
-业务表结构在 [sql/oracle_business_schema.sql](sql/oracle_business_schema.sql)。测试数据可从 `test_data.xlsx` 生成 Oracle insert 脚本：
+测试数据可从 `test_data.xlsx` 生成 Oracle insert 脚本：
 
 ```bash
 python3 scripts/import_test_data_to_oracle.py
@@ -124,8 +91,12 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 
 ## 文档
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：当前架构、主链路、核心对象、SQL 治理和 runtime 落库。
-- [docs/DEBUG_PLAYBOOK.md](docs/DEBUG_PLAYBOOK.md)：真实问题答错时的分层排查路径。
-- [docs/CONTENT_GUIDELINES.md](docs/CONTENT_GUIDELINES.md)：样例和业务知识库编写规范。
-- [backend/README.md](backend/README.md)：后端运行、配置、API 和目录结构。
-- [frontend/README.md](frontend/README.md)：前端工作台结构和数据入口。
+- [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)：架构、运行、API、调试、语义资产维护和验证入口。
+- [docs/TODO.md](docs/TODO.md)：尚未实现但已经形成方向约束的工程待办。
+
+## 验证
+
+```bash
+python3 -m unittest discover -s tests
+python3 backend/domain_config_lint.py
+```
