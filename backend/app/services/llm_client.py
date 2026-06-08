@@ -112,6 +112,21 @@ class LLMClient:
 
         raise LLMServiceError("llm returned invalid JSON during question context generation")
 
+    # Diagnostic fields that downstream trace/UI/eval consume from the prompt
+    # return value but that the LLM does not need in order to generate SQL.
+    # Stripping them before serialization keeps the model payload within the
+    # context window without affecting any persisted prompt metadata.
+    _LLM_VIEW_OMIT_KEYS = ("context_summary", "context_budget")
+
+    def _llm_view(self, prompt_payload: dict) -> dict:
+        if not isinstance(prompt_payload, dict):
+            return prompt_payload
+        return {
+            key: value
+            for key, value in prompt_payload.items()
+            if key not in self._LLM_VIEW_OMIT_KEYS
+        }
+
     def generate_sql_hint(
         self,
         prompt_payload: dict,
@@ -124,7 +139,7 @@ class LLMClient:
             "只能使用用户 prompt 中提供的真实数据库表和字段，生成一条可执行的只读 SQL。"
             "只返回 SQL，不要输出 markdown、注释或解释。"
         )
-        user_prompt = json.dumps(prompt_payload, ensure_ascii=False)
+        user_prompt = json.dumps(self._llm_view(prompt_payload), ensure_ascii=False)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -191,7 +206,7 @@ class LLMClient:
             constraints = [*extra_constraints, *constraints]
         repair_payload = {
             "task": "sql_repair",
-            "original_prompt": prompt_payload,
+            "original_prompt": self._llm_view(prompt_payload),
             "sql": sql,
             "errors": errors,
             "warnings": warnings,
