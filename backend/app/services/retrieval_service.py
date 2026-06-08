@@ -19,6 +19,39 @@ from backend.app.services.vector_retriever import VectorRetriever
 logger = logging.getLogger(__name__)
 
 
+_TOKENIZER_LOCK = threading.Lock()
+_CHINESE_TOKENIZER = None
+_CHINESE_TOKENIZER_READY = False
+
+
+def _get_chinese_tokenizer():
+    """Lazily build a dedicated jieba tokenizer.
+
+    Returns ``None`` when jieba is unavailable so callers can fall back to
+    bigram-only Chinese tokenization without crashing.
+    """
+
+    global _CHINESE_TOKENIZER, _CHINESE_TOKENIZER_READY
+    if _CHINESE_TOKENIZER_READY:
+        return _CHINESE_TOKENIZER
+    with _TOKENIZER_LOCK:
+        if _CHINESE_TOKENIZER_READY:
+            return _CHINESE_TOKENIZER
+        try:
+            import jieba
+
+            tokenizer = jieba.Tokenizer()
+            tokenizer.initialize()
+            _CHINESE_TOKENIZER = tokenizer
+        except Exception:  # pragma: no cover - depends on optional dependency
+            logger.warning(
+                "jieba is unavailable; falling back to bigram Chinese tokenization"
+            )
+            _CHINESE_TOKENIZER = None
+        _CHINESE_TOKENIZER_READY = True
+    return _CHINESE_TOKENIZER
+
+
 class RetrievalService:
     def __init__(
         self,
@@ -49,6 +82,7 @@ class RetrievalService:
         self.business_knowledge = self._load_business_knowledge()
         self.join_patterns = self._load_join_patterns()
         self.table_domains = self._build_table_domains()
+        self._seed_chinese_tokenizer()
         self.corpus_documents: list[dict] = []
         self.document_frequency: Counter[str] = Counter()
         self.average_doc_length = 1.0
@@ -106,6 +140,7 @@ class RetrievalService:
         self.business_knowledge = self._load_business_knowledge()
         self.join_patterns = self._load_join_patterns()
         self.table_domains = self._build_table_domains()
+        self._seed_chinese_tokenizer()
         should_prewarm = self.prewarm_vector_index_on_reload if prewarm_vectors is None else prewarm_vectors
         self._refresh_indexes(prewarm_vectors=False)
         if should_prewarm:
@@ -730,18 +765,85 @@ class RetrievalService:
             key=lambda hit: original_rank.get((hit.source_type, hit.source_id), len(hits)),
         )
 
+    def _seed_chinese_tokenizer(self) -> None:
+        """Feed domain keywords into jieba so compound business terms survive.
+
+        Without seeding, jieba splits terms like "最新P版" or "达成率" into
+        smaller generic words, weakening lexical matching against the corpus.
+        Seeding is best-effort: when jieba is unavailable the bigram fallback
+        still applies, so failures here must never break index construction.
+        """
+
+        tokenizer = _get_chinese_tokenizer()
+        if tokenizer is None:
+            return
+        seen: set[str] = set()
+        for term in self._domain_lexicon_terms():
+            normalized = term.strip()
+            if len(normalized) < 2 or normalized in seen:
+                continue
+            seen.add(normalized)
+            try:
+                tokenizer.add_word(normalized)
+            except Exception:  # pragma: no cover - defensive, jieba is forgiving
+                continue
+
+    def _domain_lexicon_terms(self) -> list[str]:
+        terms: list[str] = []
+
+        def collect(values: object) -> None:
+            if isinstance(values, str):
+                if any("一" <= char <= "龥" for char in values):
+                    terms.append(values)
+                return
+            if isinstance(values, list):
+                for item in values:
+                    collect(item)
+
+        for entry in self.business_knowledge:
+            if isinstance(entry, dict):
+                collect(entry.get("keywords"))
+        for pattern in self.join_patterns:
+            if isinstance(pattern, dict):
+                collect(pattern.get("keywords"))
+        for example in self.examples:
+            collect(getattr(example, "coverage_tags", None))
+        return terms
+
     def _tokenize(self, text: str) -> set[str]:
         ascii_tokens = {
             token.lower()
             for token in re.findall(r"[A-Za-z0-9_]+", text)
             if len(token) > 1
         }
-        chinese_chunks = {
-            chunk
-            for chunk in re.findall(r"[\u4e00-\u9fa5]{2,}", text)
-            if len(chunk) >= 2
-        }
-        return ascii_tokens.union(chinese_chunks)
+        chinese_tokens: set[str] = set()
+        for chunk in re.findall(r"[\u4e00-\u9fa5]+", text):
+            if len(chunk) < 2:
+                continue
+            chinese_tokens.update(self._tokenize_chinese_chunk(chunk))
+        return ascii_tokens.union(chinese_tokens)
+
+    def _tokenize_chinese_chunk(self, chunk: str) -> set[str]:
+        """Tokenize a run of Chinese characters into searchable terms.
+
+        The original implementation kept each whole run as a single token, which
+        made BM25 keyword matching effectively whole-phrase-only for Chinese and
+        collapsed recall onto the vector channel. We now segment with jieba when
+        available, and always add character bigrams plus the whole chunk so that
+        both word-level and substring matches contribute to lexical scoring.
+        """
+
+        tokens: set[str] = {chunk}
+        tokenizer = _get_chinese_tokenizer()
+        if tokenizer is not None:
+            tokens.update(
+                word
+                for word in tokenizer.cut(chunk, HMM=True)
+                if len(word) >= 2 and not word.isspace()
+            )
+        for index in range(len(chunk) - 1):
+            tokens.add(chunk[index : index + 2])
+        return tokens
 
     def _lookup_document(self, source_type: str, source_id: str) -> dict | None:
         return self.document_lookup.get((source_type, source_id))
