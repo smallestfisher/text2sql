@@ -66,6 +66,13 @@
 
 检索命中进入 SQL prompt 前会做证据闭合：已选中的 join pattern 会补齐 companion tables；已选中的 business knowledge 会补齐其声明的真实表 schema。这个步骤只根据已命中的结构化证据补 schema，不在 Python 中按业务关键词硬编码表选择。
 
+检索打分分两路融合：
+
+- 关键词通道用 BM25，对中文先用 jieba 分词（叠加字符 bigram 兜底），并用业务知识、join pattern 的关键词给分词器播种，避免“最新P版”“达成率”这类复合业务词被切碎。jieba 不可用时退化为纯 bigram，不阻断索引构建。
+- 向量通道启用后用同一批语料的 embedding 算 cosine。
+
+两个通道的原始分量纲不同（BM25 约 0-50，cosine 约 0.3-0.9），直接相加会让向量被淹没。因此排序使用 `fusion_score`：对每个通道分别做 min-max 归一化到 `[0,1]` 再融合，同一文档跨通道命中时 `fusion_score` 相加。`hit.score` 保留 BM25 原量级，供下游 business knowledge / example / join pattern 的加权打分继续使用。向量关闭时归一化是单通道内的保序变换，排序结果不变。
+
 ### SqlGenerationContext 与 ContextSummary
 
 `SqlGenerationContext` 是 SQL prompt 的内部输入载体，只打包问题分类、语义摘要、检索选出的表、澄清状态和会话必要信息。它不是结构化业务规则引擎，不承载场景化硬编码约束。
@@ -262,6 +269,14 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 ```
 
 这个测试只验证检索命中和 SQL prompt 的 `available_tables`、`business_knowledge_entry_ids`、`join_pattern_ids`，不依赖 LLM 和 SQL 执行。
+
+测试默认在 vector 关闭下运行，只校验 keyword 通道能稳定命中的证据。`retrieval_cases.json` 里的 `vector_only_expected_join_pattern_ids` 是只有 vector 通道参与排序时才能召回的证据，仅在 vector 启用时才会被校验。要验证 vector 通道在真实环境的命中质量，用只读探针打印两个通道的原始分数分布：
+
+```bash
+.venv/bin/python scripts/probe_retrieval_scores.py
+```
+
+探针会加载 `.env`（需要 `VECTOR_API_KEY`），对 `eval/retrieval_cases.json` 跑真实的 keyword BM25 和 vector cosine，打印每个通道的分数范围和 top 命中。它只读、不落库、不改代码，只调用 embedding API。
 
 ### SQL Prompt 排查
 
