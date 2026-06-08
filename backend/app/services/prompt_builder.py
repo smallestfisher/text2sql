@@ -938,6 +938,13 @@ class PromptBuilder:
             context.tables,
             logical_field,
         ):
+            # Day-grain fields also match biz_month (they can be projected to a
+            # month via SUBSTR), but they are handled correctly by the biz_date
+            # loop below. Emitting them here produces a duplicate and, worse, a
+            # wrong month_filter_example that compares a YYYYMMDD column to a
+            # YYYYMM literal. Skip them so only true month fields flow through.
+            if str(candidate.get("grain") or "").lower() == "day":
+                continue
             field_expr = candidate["qualified_field"]
             projection_expr = self._month_projection_expression(field_expr, candidate.get("format")) or field_expr
             payload = {
