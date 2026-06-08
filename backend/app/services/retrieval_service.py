@@ -121,6 +121,7 @@ class RetrievalService:
         hits: list[RetrievalHit] = []
         hits.extend(self._retrieve_text_document_hits(query_tokens))
         hits.extend(self._retrieve_text_vector_hits(" ".join(retrieval_terms)))
+        self._apply_fusion_scores(hits)
         hits = self._rerank_hits(hits)
         top_hits = self._select_top_hits(hits, limit=5)
         return RetrievalContext(
@@ -650,6 +651,38 @@ class RetrievalService:
             )
         return hits
 
+    def _apply_fusion_scores(self, hits: list[RetrievalHit]) -> None:
+        """Assign a channel-normalized fusion_score used only for ranking.
+
+        BM25 (keyword) scores span roughly 0-48 while vector cosine scores span
+        roughly 0.3-0.9, so adding them directly lets keyword dominate and makes
+        the paid vector channel almost irrelevant to ordering. We min-max
+        normalize each channel to [0, 1] independently using the channel's raw
+        source_score, then store the result in fusion_score. hit.score keeps its
+        original BM25 magnitude so downstream weighting/thresholds that assume
+        that scale stay correct.
+
+        Normalization is a monotonic transform within a channel, so when only
+        one channel is present the relative ordering is unchanged.
+        """
+
+        by_channel: dict[str, list[RetrievalHit]] = {}
+        for hit in hits:
+            by_channel.setdefault(hit.retrieval_channel, []).append(hit)
+        for channel_hits in by_channel.values():
+            raw_scores = [
+                hit.source_score if hit.source_score is not None else hit.score
+                for hit in channel_hits
+            ]
+            lowest = min(raw_scores)
+            highest = max(raw_scores)
+            span = highest - lowest
+            for hit, raw in zip(channel_hits, raw_scores):
+                if span <= 0:
+                    hit.fusion_score = 1.0
+                else:
+                    hit.fusion_score = (raw - lowest) / span
+
     def _rerank_hits(self, hits: list[RetrievalHit]) -> list[RetrievalHit]:
         deduplicated: dict[tuple[str, str], RetrievalHit] = {}
         for hit in hits:
@@ -662,24 +695,32 @@ class RetrievalService:
             if existing.source_id != hit.source_id:
                 merged_features = self._unique(existing.matched_features + hit.matched_features)
                 merged_source_score = max(existing.source_score or 0.0, hit.source_score or 0.0)
+                # Keep the stronger fusion_score so the surviving variant ranks
+                # on the best evidence either channel produced for this entry.
+                merged_fusion_score = max(existing.fusion_score or 0.0, hit.fusion_score or 0.0)
                 merged_channel = existing.retrieval_channel
                 if existing.retrieval_channel != hit.retrieval_channel:
                     merged_channel = "hybrid"
                 if hit.score > existing.score:
                     replacement = hit.model_copy(deep=True)
                     replacement.source_score = merged_source_score
+                    replacement.fusion_score = merged_fusion_score
                     replacement.matched_features = merged_features
                     replacement.retrieval_channel = merged_channel
                     replacement.metadata = {**existing.metadata, **hit.metadata}
                     deduplicated[key] = replacement
                     continue
                 existing.source_score = merged_source_score
+                existing.fusion_score = merged_fusion_score
                 existing.matched_features = merged_features
                 existing.retrieval_channel = merged_channel
                 existing.metadata = {**hit.metadata, **existing.metadata}
                 continue
 
             existing.score = round(existing.score + hit.score, 6)
+            # Same document hit by both channels: add normalized contributions so
+            # hybrid evidence outranks single-channel hits of comparable strength.
+            existing.fusion_score = round((existing.fusion_score or 0.0) + (hit.fusion_score or 0.0), 6)
             existing.source_score = max(existing.source_score or 0.0, hit.source_score or 0.0)
             existing.matched_features = self._unique(existing.matched_features + hit.matched_features)
             existing.metadata = {**existing.metadata, **hit.metadata}
@@ -688,7 +729,7 @@ class RetrievalService:
 
         ranked = sorted(
             deduplicated.values(),
-            key=lambda item: (item.score, self._source_priority(item.source_type)),
+            key=lambda item: (item.fusion_score or 0.0, self._source_priority(item.source_type)),
             reverse=True,
         )
 

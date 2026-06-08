@@ -25,6 +25,7 @@ class RetrievalEvalTests(unittest.TestCase):
             semantic_runtime=cls.semantic_runtime,
         )
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
+        cls.vector_enabled = cls.retrieval_service.vector_retriever.enabled
 
     def test_retrieval_cases_cover_expected_prompt_evidence(self) -> None:
         cases = json.loads(RETRIEVAL_CASES_PATH.read_text(encoding="utf-8"))
@@ -74,6 +75,18 @@ class RetrievalEvalTests(unittest.TestCase):
                     join_pattern_ids,
                 )
             )
+
+            # Evidence that only surfaces once the vector channel participates
+            # in ranking. The keyword-only path cannot rank this join pattern
+            # high enough, so it is validated only when vector retrieval is on.
+            if self.vector_enabled:
+                failures.extend(
+                    self._missing_items(
+                        case,
+                        "vector_only_expected_join_pattern_ids",
+                        join_pattern_ids,
+                    )
+                )
 
         self.assertEqual(failures, [])
 

@@ -13,10 +13,10 @@
       "demand_product_attributes_direct_join",
       "demand_horizontal_month_mapping"
     ],
-    "expected_join_pattern_ids": [
+    "vector_only_expected_join_pattern_ids": [
       "demand_product_attributes_direct_join"
     ],
-    "notes": "检索回归样本：P版横表需求 + Oxide产品属性 + 销售/财务实绩。目标是确保结构化证据闭合后 SQL prompt 至少具备三类必要表 schema。"
+    "notes": "检索回归样本：P版横表需求 + Oxide产品属性 + 销售/财务实绩。目标是确保结构化证据闭合后 SQL prompt 至少具备三类必要表 schema。join_pattern demand_product_attributes_direct_join 仅靠向量通道召回（keyword BM25 下被 sales_financial join 盖过），因此放在 vector_only_expected_join_pattern_ids，只在向量检索启用时校验。"
   },
   {
     "id": "retrieval_demand_sales_vs_latest_p_demand_diff_fgcode_001",

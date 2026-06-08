@@ -10,6 +10,7 @@ class RetrievalHit(BaseModel):
     summary: str
     retrieval_channel: str = "keyword"
     source_score: float | None = None
+    fusion_score: float | None = None
     matched_features: list[str] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
 
