@@ -118,14 +118,28 @@ class LLMClient:
     # context window without affecting any persisted prompt metadata.
     _LLM_VIEW_OMIT_KEYS = ("context_summary", "context_budget")
 
+    # evidence_context must stay in the return value (orchestrator reads
+    # allowed_sources to back-fill sql_context.tables), but these inner fields
+    # are redundant for the LLM: allowed_sources duplicates available_tables
+    # keys, and context_source is a fixed provenance label.
+    _LLM_VIEW_EVIDENCE_OMIT_KEYS = ("allowed_sources", "context_source")
+
     def _llm_view(self, prompt_payload: dict) -> dict:
         if not isinstance(prompt_payload, dict):
             return prompt_payload
-        return {
+        view = {
             key: value
             for key, value in prompt_payload.items()
             if key not in self._LLM_VIEW_OMIT_KEYS
         }
+        evidence_context = view.get("evidence_context")
+        if isinstance(evidence_context, dict):
+            view["evidence_context"] = {
+                key: value
+                for key, value in evidence_context.items()
+                if key not in self._LLM_VIEW_EVIDENCE_OMIT_KEYS
+            }
+        return view
 
     def generate_sql_hint(
         self,
