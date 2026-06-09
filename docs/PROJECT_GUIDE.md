@@ -71,7 +71,11 @@
 - 关键词通道用 BM25，对中文先用 jieba 分词（叠加字符 bigram 兜底），并用业务知识、join pattern 的关键词给分词器播种，避免“最新P版”“达成率”这类复合业务词被切碎。jieba 不可用时退化为纯 bigram，不阻断索引构建。
 - 向量通道启用后用同一批语料的 embedding 算 cosine。
 
-两个通道的原始分量纲不同（BM25 约 0-50，cosine 约 0.3-0.9），直接相加会让向量被淹没。因此排序使用 `fusion_score`：对每个通道分别做 min-max 归一化到 `[0,1]` 再融合，同一文档跨通道命中时 `fusion_score` 相加。`hit.score` 保留 BM25 原量级，供下游 business knowledge / example / join pattern 的加权打分继续使用。向量关闭时归一化是单通道内的保序变换，排序结果不变。
+两个通道的原始分量纲不同（BM25 约 0-50，cosine 约 0.3-0.9），直接相加会让向量被淹没。因此排序使用 `fusion_score`：按 `(retrieval_channel, source_type)` 分桶做 min-max 归一化到 `[0,1]` 再融合，同一文档跨通道命中时 `fusion_score` 相加。按 `source_type` 分桶是为了和检索证据配额一致，避免高分 example 或 knowledge 把同一通道里的 join pattern 压低。`hit.score` 保留 BM25 原量级，只供 trace、探针和调试观察原始命中强度，不再参与下游二次打分（见下文）。向量关闭时归一化是配额竞争桶内的保序变换，排序结果不变。
+
+检索最终透出的 hit 数量按 source-type 配额总和计算（example 2、table schema 2、knowledge 2、join pattern 1），避免 rerank 已保留的证据在最后截断阶段被提前丢弃。
+
+SQL prompt 二次选择 example、business knowledge 和 join pattern 时，不再直接使用 BM25/cosine 原始量级；检索命中先获得固定到场分，再通过 bounded retrieval boost 进入结构化 evidence 打分。example 的准入闸门也按归一化 `fusion_score` 判断，而非原始 `hit.score`，使纯向量召回、无结构重叠但语义相关的 example 仍能进入打分。每个问题仍只选择 1 条主 join pattern；一条 join pattern 可以覆盖多张表和多段 join path。
 
 ### SqlGenerationContext 与 ContextSummary
 

@@ -53,6 +53,13 @@ def _get_chinese_tokenizer():
 
 
 class RetrievalService:
+    HIT_SOURCE_TYPE_QUOTAS = {
+        "example": 2,
+        "table_schema": 2,
+        "knowledge": 2,
+        "join_pattern": 1,
+    }
+
     def __init__(
         self,
         domain_config: dict,
@@ -123,7 +130,7 @@ class RetrievalService:
         hits.extend(self._retrieve_text_vector_hits(" ".join(retrieval_terms)))
         self._apply_fusion_scores(hits)
         hits = self._rerank_hits(hits)
-        top_hits = self._select_top_hits(hits, limit=5)
+        top_hits = self._select_top_hits(hits, limit=self._top_hit_limit())
         return RetrievalContext(
             domains=self._domains_from_hits(top_hits),
             metrics=self._metrics_from_hits(top_hits),
@@ -657,27 +664,31 @@ class RetrievalService:
         BM25 (keyword) scores span roughly 0-48 while vector cosine scores span
         roughly 0.3-0.9, so adding them directly lets keyword dominate and makes
         the paid vector channel almost irrelevant to ordering. We min-max
-        normalize each channel to [0, 1] independently using the channel's raw
-        source_score, then store the result in fusion_score. hit.score keeps its
-        original BM25 magnitude so downstream weighting/thresholds that assume
-        that scale stay correct.
+        normalize independently inside each channel/source-type bucket using the
+        raw source_score, then store the result in fusion_score. The source-type
+        bucket matters because _rerank_hits applies quotas by source_type; a
+        highly relevant vector join pattern should not be down-ranked only
+        because examples or knowledge chunks are stronger in the same channel.
+        hit.score keeps its original BM25 magnitude so downstream weighting and
+        thresholds that assume that scale stay correct.
 
-        Normalization is a monotonic transform within a channel, so when only
-        one channel is present the relative ordering is unchanged.
+        Normalization is a monotonic transform within the bucket that competes
+        for quota, so when only one channel is present the relative ordering for
+        each source type is unchanged.
         """
 
-        by_channel: dict[str, list[RetrievalHit]] = {}
+        by_bucket: dict[tuple[str, str], list[RetrievalHit]] = {}
         for hit in hits:
-            by_channel.setdefault(hit.retrieval_channel, []).append(hit)
-        for channel_hits in by_channel.values():
+            by_bucket.setdefault((hit.retrieval_channel, hit.source_type), []).append(hit)
+        for bucket_hits in by_bucket.values():
             raw_scores = [
                 hit.source_score if hit.source_score is not None else hit.score
-                for hit in channel_hits
+                for hit in bucket_hits
             ]
             lowest = min(raw_scores)
             highest = max(raw_scores)
             span = highest - lowest
-            for hit, raw in zip(channel_hits, raw_scores):
+            for hit, raw in zip(bucket_hits, raw_scores):
                 if span <= 0:
                     hit.fusion_score = 1.0
                 else:
@@ -733,18 +744,12 @@ class RetrievalService:
             reverse=True,
         )
 
-        quotas = {
-            "example": 2,
-            "table_schema": 2,
-            "knowledge": 2,
-            "join_pattern": 1,
-        }
         selected: list[RetrievalHit] = []
         selected_keys: set[tuple[str, str]] = set()
         counts: Counter[str] = Counter()
 
         for hit in ranked:
-            quota = quotas.get(hit.source_type, 1)
+            quota = self.HIT_SOURCE_TYPE_QUOTAS.get(hit.source_type, 1)
             if counts[hit.source_type] >= quota:
                 continue
             key = (hit.source_type, hit.source_id)
@@ -759,6 +764,9 @@ class RetrievalService:
             selected.append(hit)
 
         return selected
+
+    def _top_hit_limit(self) -> int:
+        return sum(self.HIT_SOURCE_TYPE_QUOTAS.values())
 
     def _hit_dedup_key(self, hit: RetrievalHit) -> tuple[str, str]:
         if hit.source_type == "knowledge":

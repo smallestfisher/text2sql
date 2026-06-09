@@ -46,6 +46,26 @@ class StaticExampleRegistry:
         return []
 
 
+class MutableExampleRegistry(StaticExampleRegistry):
+    @property
+    def examples_template(self) -> list[dict]:
+        return [dict(item) for item in self._examples]
+
+    @examples_template.setter
+    def examples_template(self, examples: list[dict]) -> None:
+        self._examples = examples
+
+
+class CountingExampleFactory:
+    def __init__(self, delegate: ExampleFactory) -> None:
+        self.delegate = delegate
+        self.normalize_calls = 0
+
+    def normalize(self, payload: dict):
+        self.normalize_calls += 1
+        return self.delegate.normalize(payload)
+
+
 class CountingLLMClient:
     def __init__(self) -> None:
         self.enabled = True
@@ -112,6 +132,216 @@ class PromptCompactionTests(unittest.TestCase):
         table_fields = "\n".join(prompt["context_hints"]["table_fields"]["product_attributes"])
         self.assertIn("IS_XPS", table_fields)
         self.assertIn("IS_OXIDE", table_fields)
+
+    def test_load_examples_caches_normalized_records_until_template_changes(self) -> None:
+        registry = MutableExampleRegistry(
+            [
+                {
+                    "id": "cache_example_1",
+                    "question": "最新 OMS 库存",
+                    "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 10 ROWS ONLY",
+                    "subject_domain": "inventory",
+                    "tags": ["oms_inventory"],
+                }
+            ]
+        )
+        prompt_builder = PromptBuilder(
+            semantic_runtime=self.semantic_runtime,
+            metadata_registry=registry,
+        )
+        factory = CountingExampleFactory(prompt_builder.example_factory)
+        prompt_builder.example_factory = factory
+
+        first = prompt_builder._load_examples()
+        second = prompt_builder._load_examples()
+
+        self.assertIs(first, second)
+        self.assertEqual(factory.normalize_calls, 1)
+
+        registry.examples_template = [
+            {
+                "id": "cache_example_2",
+                "question": "最新 OMS 库存库龄",
+                "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 10 ROWS ONLY",
+                "subject_domain": "inventory",
+                "tags": ["oms_inventory"],
+            }
+        ]
+
+        third = prompt_builder._load_examples()
+
+        self.assertIsNot(third, first)
+        self.assertEqual(set(third), {"cache_example_2"})
+        self.assertEqual(factory.normalize_calls, 2)
+
+    def test_retrieved_example_ranking_uses_bounded_fusion_boost(self) -> None:
+        prompt_builder = PromptBuilder(
+            semantic_runtime=self.semantic_runtime,
+            metadata_registry=StaticExampleRegistry(
+                [
+                    {
+                        "id": "weak_raw_high_fusion",
+                        "question": "最新 OMS 库存",
+                        "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 10 ROWS ONLY",
+                        "subject_domain": "inventory",
+                        "tags": ["oms_inventory"],
+                    },
+                    {
+                        "id": "strong_raw_low_fusion",
+                        "question": "最新 OMS 库存",
+                        "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 10 ROWS ONLY",
+                        "subject_domain": "inventory",
+                        "tags": ["oms_inventory"],
+                    },
+                ]
+            ),
+        )
+        context = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+            filters=[FilterItem(field="source_table", op="=", value="oms_inventory")],
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="weak_raw_high_fusion",
+                    score=0.2,
+                    fusion_score=0.1,
+                    summary="vector evidence",
+                ),
+                RetrievalHit(
+                    source_type="example",
+                    source_id="strong_raw_low_fusion",
+                    score=9.0,
+                    fusion_score=0.0,
+                    summary="weak normalized evidence",
+                ),
+            ]
+        )
+
+        examples = prompt_builder._select_retrieved_examples(
+            context,
+            retrieval,
+            selected_sources=["oms_inventory"],
+        )
+
+        self.assertEqual([item["id"] for item in examples], ["weak_raw_high_fusion", "strong_raw_low_fusion"])
+
+    def test_retrieval_boost_has_presence_floor_for_retrieved_examples_and_join_patterns(self) -> None:
+        hit = RetrievalHit(
+            source_type="example",
+            source_id="retrieved_zero_fusion",
+            score=0.2,
+            fusion_score=0.0,
+            summary="retrieved",
+        )
+
+        self.assertGreater(self.prompt_builder._retrieval_boost(hit), 0.0)
+
+    def test_vector_only_example_passes_context_gate_via_fusion_score(self) -> None:
+        # A vector-only example carries a tiny raw hit.score (cosine * 0.45),
+        # so the old `hit.score >= 2.0` gate could never admit it without
+        # structural overlap. The gate now keys off fusion_score, so an example
+        # that is relevant only through the vector channel can still enter
+        # scoring as long as it has a semantic matched_feature.
+        example = self.prompt_builder.example_factory.normalize(
+            {
+                "id": "vector_only_example",
+                "question": "最新 OMS 库存",
+                "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 10 ROWS ONLY",
+                "subject_domain": "inventory",
+                "tags": ["oms_inventory"],
+            }
+        )
+        # Context shares no domain / table / metric / filter with the example,
+        # so the only way through _retrieved_example_matches_context is the
+        # final fusion-score + matched_feature fallback.
+        context = SqlGenerationContext(
+            question_type="new",
+            subject_domain="plan_actual",
+            tables=["monthly_plan_approved"],
+        )
+        vector_hit = RetrievalHit(
+            source_type="example",
+            source_id="vector_only_example",
+            score=0.3,
+            fusion_score=0.5,
+            summary="vector evidence",
+            matched_features=["metrics:report_month"],
+        )
+
+        self.assertTrue(
+            self.prompt_builder._retrieved_example_matches_context(
+                context,
+                example,
+                vector_hit,
+                selected_sources=["monthly_plan_approved"],
+            )
+        )
+
+        # The weakest hit in its bucket normalizes to fusion_score 0; it must
+        # not slip through the gate on matched_features alone.
+        weakest_hit = vector_hit.model_copy(update={"fusion_score": 0.0})
+        self.assertFalse(
+            self.prompt_builder._retrieved_example_matches_context(
+                context,
+                example,
+                weakest_hit,
+                selected_sources=["monthly_plan_approved"],
+            )
+        )
+
+    def test_join_pattern_ranking_uses_bounded_fusion_boost_and_keeps_single_primary_pattern(self) -> None:
+        prompt_builder = PromptBuilder(
+            semantic_runtime=self.semantic_runtime,
+            metadata_registry=StaticExampleRegistry([]),
+        )
+        context = SqlGenerationContext(
+            question_type="new",
+            subject_domain="demand",
+            tables=[],
+            semantic_brief="",
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="join_pattern",
+                    source_id="vector_primary_join",
+                    score=0.2,
+                    fusion_score=0.1,
+                    summary="vector primary",
+                    metadata={
+                        "domains": ["demand"],
+                        "tables": ["p_demand"],
+                        "join_path": ["p_demand.FGCODE = product_attributes.product_ID"],
+                        "notes": ["vector primary"],
+                    },
+                ),
+                RetrievalHit(
+                    source_type="join_pattern",
+                    source_id="raw_score_join",
+                    score=9.0,
+                    fusion_score=0.0,
+                    summary="raw score",
+                    metadata={
+                        "domains": ["demand"],
+                        "tables": ["p_demand"],
+                        "join_path": ["p_demand.FGCODE = sales_financial_perf.FGCODE"],
+                        "notes": ["raw score"],
+                    },
+                ),
+            ]
+        )
+
+        patterns = prompt_builder._selected_join_patterns(
+            context,
+            selected_sources=["p_demand"],
+            retrieval=retrieval,
+        )
+
+        self.assertEqual([item["id"] for item in patterns], ["vector_primary_join"])
 
     def test_question_context_prompt_only_checks_natural_language_completeness(self) -> None:
         prompt = self.prompt_builder.build_question_context_prompt(

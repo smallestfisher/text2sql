@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import unittest
 
+from backend.app.models.retrieval import RetrievalHit
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.prompt_builder import PromptBuilder
@@ -20,6 +21,99 @@ RETRIEVAL_CASES_PATH = REPO_ROOT / "eval" / "retrieval_cases.json"
 
 def _text_key(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class FusionScoreTests(unittest.TestCase):
+    def test_fusion_scores_are_normalized_inside_source_type_buckets(self) -> None:
+        service = RetrievalService.__new__(RetrievalService)
+        hits = [
+            RetrievalHit(
+                source_type="example",
+                source_id="example_top",
+                score=0.9,
+                summary="",
+                retrieval_channel="vector",
+                source_score=0.9,
+            ),
+            RetrievalHit(
+                source_type="example",
+                source_id="example_second",
+                score=0.8,
+                summary="",
+                retrieval_channel="vector",
+                source_score=0.8,
+            ),
+            RetrievalHit(
+                source_type="join_pattern",
+                source_id="join_only_vector_hit",
+                score=0.7,
+                summary="",
+                retrieval_channel="vector",
+                source_score=0.7,
+            ),
+        ]
+
+        service._apply_fusion_scores(hits)
+
+        scores = {hit.source_id: hit.fusion_score for hit in hits}
+        self.assertEqual(scores["example_top"], 1.0)
+        self.assertEqual(scores["example_second"], 0.0)
+        self.assertEqual(scores["join_only_vector_hit"], 1.0)
+
+
+class RetrievalQuotaTests(unittest.TestCase):
+    def test_retrieve_text_preserves_hits_up_to_source_type_quota_total(self) -> None:
+        service = RetrievalService.__new__(RetrievalService)
+        service.vector_retriever = type(
+            "DisabledVectorRetriever",
+            (),
+            {"enabled": False},
+        )()
+        service.corpus_documents = []
+        service._ensure_vector_ready = lambda: None
+        service._unique = lambda values: list(dict.fromkeys(values))
+        service._tokenize = lambda text: {"query"}
+        service._retrieve_text_vector_hits = lambda query_text: []
+        service._count_hits_by_source = RetrievalService._count_hits_by_source.__get__(service)
+        service._count_hits_by_channel = RetrievalService._count_hits_by_channel.__get__(service)
+        service._retrieval_channels = RetrievalService._retrieval_channels.__get__(service)
+        service._domains_from_hits = lambda hits: []
+        service._metrics_from_hits = lambda hits: []
+        service._apply_fusion_scores = lambda hits: [
+            setattr(hit, "fusion_score", hit.score) for hit in hits
+        ]
+        service._hit_dedup_key = RetrievalService._hit_dedup_key.__get__(service)
+        service._source_priority = RetrievalService._source_priority.__get__(service)
+        service._rerank_hits = RetrievalService._rerank_hits.__get__(service)
+        service._select_top_hits = RetrievalService._select_top_hits.__get__(service)
+        service._retrieve_text_document_hits = lambda query_tokens: [
+            RetrievalHit(source_type="example", source_id="example_1", score=9, summary=""),
+            RetrievalHit(source_type="example", source_id="example_2", score=8, summary=""),
+            RetrievalHit(source_type="table_schema", source_id="table_1", score=7, summary=""),
+            RetrievalHit(source_type="table_schema", source_id="table_2", score=6, summary=""),
+            RetrievalHit(source_type="knowledge", source_id="knowledge_1", score=5, summary=""),
+            RetrievalHit(source_type="knowledge", source_id="knowledge_2", score=4, summary=""),
+            RetrievalHit(source_type="join_pattern", source_id="join_1", score=3, summary=""),
+        ]
+
+        retrieval = RetrievalService.retrieve_text(
+            service,
+            question="query",
+            semantic_brief="query",
+        )
+
+        self.assertEqual(
+            [hit.source_id for hit in retrieval.hits],
+            [
+                "example_1",
+                "example_2",
+                "table_1",
+                "table_2",
+                "knowledge_1",
+                "knowledge_2",
+                "join_1",
+            ],
+        )
 
 
 @unittest.skipUnless(

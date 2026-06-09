@@ -91,8 +91,10 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 
 ## 文档
 
-- [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)：架构、运行、API、调试、语义资产维护和验证入口。
-- [docs/TODO.md](docs/TODO.md)：尚未实现但已经形成方向约束的工程待办。
+- [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)：唯一主文档。架构、运行、API、调试、语义资产维护和验证入口。
+- [docs/RETRIEVAL_ACCURACY_REVIEW.md](docs/RETRIEVAL_ACCURACY_REVIEW.md)：检索准确率与运行效率评审，含已处理项的实施记录。
+- [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)：结构性重构评审快照（类职责、分层、技术债务）。
+- [docs/TODO.md](docs/TODO.md)：尚未实现但已经形成方向约束的工程待办（当前为 PromptBuilder 拆分）。
 
 ## 验证
 

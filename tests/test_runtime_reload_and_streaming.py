@@ -148,6 +148,7 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
                         source_type="knowledge",
                         source_id="business_knowledge:demand_fgcode_mapping:note:3",
                         score=0.77,
+                        fusion_score=0.77,
                         summary="sales financial note",
                         metadata={"entry_id": "demand_fgcode_mapping", "chunk_type": "note"},
                     )

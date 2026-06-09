@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -22,6 +23,10 @@ from backend.app.services.sql_dialect import SqlDialect
 class PromptBuilder:
     BUSINESS_KNOWLEDGE_MAX_CHARS = 1600
     BUSINESS_KNOWLEDGE_MAX_ITEMS_PER_ENTRY = 3
+    RETRIEVAL_BOOST_WEIGHT = 4.0
+    RETRIEVAL_FUSION_SCORE_CAP = 1.5
+    RETRIEVAL_PRESENCE_BONUS = 2.0
+    KNOWLEDGE_PRESENCE_BONUS = 3.0
 
     def __init__(
         self,
@@ -32,6 +37,8 @@ class PromptBuilder:
         self.metadata_registry = metadata_registry or MetadataRegistry()
         self.sql_dialect = SqlDialect.from_name("oracle")
         self.sql_ast_validator = SqlAstValidator()
+        self._examples_cache_signature: str | None = None
+        self._examples_cache: dict[str, ExampleRecord] | None = None
         self.example_factory = (
             ExampleFactory(semantic_runtime.domain_config, semantic_runtime)
             if semantic_runtime is not None
@@ -167,6 +174,9 @@ class PromptBuilder:
 
     def _load_examples(self) -> dict[str, ExampleRecord]:
         payload = self.metadata_registry.examples_template
+        signature = self._metadata_signature(payload)
+        if self._examples_cache_signature == signature and self._examples_cache is not None:
+            return self._examples_cache
         examples: dict[str, ExampleRecord] = {}
         for index, item in enumerate(payload if isinstance(payload, list) else []):
             try:
@@ -174,7 +184,12 @@ class PromptBuilder:
             except Exception as exc:
                 raise RuntimeError(f"invalid example record at index {index}: {exc}") from exc
             examples[example.id] = example
+        self._examples_cache_signature = signature
+        self._examples_cache = examples
         return examples
+
+    def _metadata_signature(self, payload: object) -> str:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
     def _load_business_knowledge(self) -> list[dict]:
         return self.metadata_registry.business_knowledge_entries
@@ -474,7 +489,7 @@ class PromptBuilder:
         score += 0.5 * sum(1 for term in terms if term and term in entry_text)
         entry_id = str(entry.get("id", ""))
         if entry_id and knowledge_hit_scores and entry_id in knowledge_hit_scores:
-            score += 6 + knowledge_hit_scores[entry_id]
+            score += self.KNOWLEDGE_PRESENCE_BONUS + self._retrieval_boost_from_fusion(knowledge_hit_scores[entry_id])
         return score
 
     def _retrieved_knowledge_hit_scores(
@@ -495,7 +510,7 @@ class PromptBuilder:
                 entry_id = entry_id.split(":note:", 1)[0]
             if not entry_id:
                 continue
-            scores[entry_id] = max(scores.get(entry_id, 0.0), hit.score)
+            scores[entry_id] = max(scores.get(entry_id, 0.0), self._hit_fusion_score(hit))
         return scores
 
     def _retrieved_join_pattern_blocks(
@@ -572,7 +587,7 @@ class PromptBuilder:
         example: ExampleRecord,
         hit: RetrievalHit,
     ) -> float:
-        score = hit.score
+        score = self._retrieval_boost(hit)
         if example.subject_domain == context.subject_domain:
             score += 5
         selected_tables = set(selected_sources or []).union(context.tables)
@@ -620,7 +635,7 @@ class PromptBuilder:
                 if hit.source_type != "join_pattern":
                     continue
                 payload = self._join_pattern_payload_from_hit(hit)
-                score = hit.score + self._score_join_pattern_payload(context, selected_sources, payload)
+                score = self._retrieval_boost(hit) + self._score_join_pattern_payload(context, selected_sources, payload)
                 candidates[payload["id"]] = (score, -index, payload)
 
         for index, pattern in enumerate(self.metadata_registry.join_patterns):
@@ -687,6 +702,22 @@ class PromptBuilder:
         score = evidence_score + domain_bonus
         return score
 
+    def _retrieval_boost(self, hit: RetrievalHit) -> float:
+        return self.RETRIEVAL_PRESENCE_BONUS + self._retrieval_boost_from_fusion(self._hit_fusion_score(hit))
+
+    def _retrieval_boost_from_fusion(self, fusion_score: float | None) -> float:
+        if fusion_score is None:
+            return 0.0
+        return self.RETRIEVAL_BOOST_WEIGHT * min(
+            max(float(fusion_score), 0.0),
+            self.RETRIEVAL_FUSION_SCORE_CAP,
+        )
+
+    def _hit_fusion_score(self, hit: RetrievalHit) -> float:
+        if hit.fusion_score is not None:
+            return float(hit.fusion_score)
+        return 1.0 if hit.score > 0 else 0.0
+
     def _selected_join_pattern_ids(self, selected_join_patterns: list[dict]) -> list[str]:
         return [str(item["id"]) for item in selected_join_patterns if item.get("id")]
 
@@ -717,8 +748,16 @@ class PromptBuilder:
         if context_filter_fields and context_filter_fields.intersection(example_filter_fields):
             return True
 
+        # Last-resort gate for examples with no structural overlap. Use the
+        # normalized fusion_score, not the raw hit.score: vector hits carry
+        # hit.score = cosine * 0.45 (~0.15-0.4), which can never clear a raw
+        # >= 2.0 threshold, so a vector-only example would be dropped before
+        # scoring and the retrieval boost could never apply. fusion_score > 0
+        # means this hit is not the weakest in its (channel, source_type)
+        # bucket, which paired with a semantic matched_feature is enough signal
+        # to let it compete on score.
         return bool(
-            hit.score >= 2.0
+            self._hit_fusion_score(hit) > 0
             and any(
                 feature.startswith(("metrics:", "filters:", "version:", "time_", "metric:"))
                 for feature in hit.matched_features
