@@ -18,14 +18,105 @@ class DbRuntimeLogRepository:
     def list_query_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         session_id: str | None = None,
         user_id: str | None = None,
         sql_risk_level: str | None = None,
         subject_domain: str | None = None,
         risk_flag: str | None = None,
     ) -> list[RuntimeQueryLogRecord]:
+        where_sql, params = self._query_log_filters(
+            session_id=session_id,
+            user_id=user_id,
+            sql_risk_level=sql_risk_level,
+            subject_domain=subject_domain,
+        )
+        fetch_all_for_risk_filter = bool(risk_flag)
+        paging_sql = "" if fetch_all_for_risk_filter else "LIMIT :limit OFFSET :offset"
+        if not fetch_all_for_risk_filter:
+            params["limit"] = max(1, limit)
+            params["offset"] = max(0, offset)
+        rows = self.database_connector.fetch_all(
+            f"""
+            SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+                   effective_question, context_relation, question_decision,
+                   conversation_summary, semantic_brief, question_context_json,
+                   answer_status, context_valid, context_risk_level, context_risk_flags_json,
+                   sql_valid, sql_risk_level, sql_risk_flags_json,
+                   executed, row_count, warnings_json, trace_json, created_at
+            FROM query_logs
+            {where_sql}
+            ORDER BY created_at DESC, trace_id DESC
+            {paging_sql}
+            """,
+            params,
+        )
+        records = [self._hydrate_query_log(row) for row in rows]
+        if risk_flag:
+            records = [
+                record
+                for record in records
+                if risk_flag in record.context_risk_flags or risk_flag in record.sql_risk_flags
+            ]
+            return records[max(0, offset):max(0, offset) + max(1, limit)]
+        return records
+
+    def count_query_logs(
+        self,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        sql_risk_level: str | None = None,
+        subject_domain: str | None = None,
+        risk_flag: str | None = None,
+    ) -> int:
+        where_sql, params = self._query_log_filters(
+            session_id=session_id,
+            user_id=user_id,
+            sql_risk_level=sql_risk_level,
+            subject_domain=subject_domain,
+        )
+        if not risk_flag:
+            row = self.database_connector.fetch_one(
+                f"SELECT COUNT(*) AS total FROM query_logs {where_sql}",
+                params,
+            )
+            return int(row["total"]) if row else 0
+        rows = self.database_connector.fetch_all(
+            f"""
+            SELECT context_risk_flags_json, sql_risk_flags_json
+            FROM query_logs
+            {where_sql}
+            """,
+            params,
+        )
+        return sum(
+            1
+            for row in rows
+            if risk_flag in json_loads(row.get("context_risk_flags_json"), [])
+            or risk_flag in json_loads(row.get("sql_risk_flags_json"), [])
+        )
+
+    def count_query_logs_created_between(self, start: datetime, end: datetime) -> int:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM query_logs
+            WHERE created_at >= :start AND created_at < :end
+            """,
+            {"start": start, "end": end},
+        )
+        return int(row["total"]) if row else 0
+
+    @staticmethod
+    def _query_log_filters(
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+        sql_risk_level: str | None = None,
+        subject_domain: str | None = None,
+    ) -> tuple[str, dict[str, object]]:
         clauses: list[str] = []
-        params: dict[str, object] = {"limit": max(limit * 3, limit)}
+        params: dict[str, object] = {}
         if session_id:
             clauses.append("session_id = :session_id")
             params["session_id"] = session_id
@@ -38,30 +129,7 @@ class DbRuntimeLogRepository:
         if subject_domain:
             clauses.append("subject_domain = :subject_domain")
             params["subject_domain"] = subject_domain
-        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = self.database_connector.fetch_all(
-            f"""
-            SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
-                   effective_question, context_relation, question_decision,
-                   conversation_summary, semantic_brief, question_context_json,
-                   answer_status, context_valid, context_risk_level, context_risk_flags_json,
-                   sql_valid, sql_risk_level, sql_risk_flags_json,
-                   executed, row_count, warnings_json, trace_json, created_at
-            FROM query_logs
-            {where_sql}
-            ORDER BY created_at DESC, trace_id DESC
-            LIMIT :limit
-            """,
-            params,
-        )
-        records = [self._hydrate_query_log(row) for row in rows]
-        if risk_flag:
-            records = [
-                record
-                for record in records
-                if risk_flag in record.context_risk_flags or risk_flag in record.sql_risk_flags
-            ]
-        return records[:limit]
+        return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
 
     def get_query_log(self, trace_id: str) -> RuntimeQueryLogRecord | None:
         row = self.database_connector.fetch_one(

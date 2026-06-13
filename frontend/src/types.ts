@@ -5,6 +5,31 @@ export interface UserContext {
   is_active: boolean;
 }
 
+export interface AdminUserRecord extends UserContext {
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserCollectionResponse {
+  users: AdminUserRecord[];
+  count: number;
+}
+
+export interface AdminMetricChangeRecord {
+  total: number;
+  today: number;
+  yesterday: number;
+  delta: number;
+}
+
+export interface AdminMetricsSummary {
+  users: AdminMetricChangeRecord;
+  sessions: AdminMetricChangeRecord;
+  query_logs: AdminMetricChangeRecord;
+  feedbacks: AdminMetricChangeRecord;
+  generated_at: string;
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: string;

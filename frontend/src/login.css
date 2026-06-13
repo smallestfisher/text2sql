@@ -238,6 +238,27 @@
   line-height: 1.35;
 }
 
+.bootstrap-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #f0f7ff;
+  border: 1px solid #d0e3ff;
+  color: #2563eb;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.bootstrap-notice svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
 .auth-form {
   display: flex;
   flex-direction: column;
@@ -275,6 +296,16 @@
   box-shadow: none;
 }
 
+.input-shell.has-error {
+  border-color: #ff4d6d;
+  background: #fff8f9;
+}
+
+.input-shell.has-error:focus-within {
+  border-color: #ff4d6d;
+  box-shadow: 0 0 0 3px rgba(255, 77, 109, 0.1);
+}
+
 .input-icon {
   width: 25px;
   height: 25px;
@@ -296,6 +327,21 @@
   box-shadow: none;
 }
 
+/* 隐藏浏览器默认的密码显示按钮 */
+.input-shell input[type="password"]::-ms-reveal,
+.input-shell input[type="password"]::-ms-clear {
+  display: none;
+}
+
+.input-shell input[type="password"]::-webkit-credentials-auto-fill-button,
+.input-shell input[type="password"]::-webkit-caps-lock-indicator,
+.input-shell input[type="password"]::-webkit-textfield-decoration-container button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  position: absolute !important;
+}
+
 .login-page .input-shell input:focus,
 .login-page .input-shell input:focus-visible {
   border: 0;
@@ -310,6 +356,8 @@
 
 .input-shell input:disabled {
   cursor: not-allowed;
+  opacity: 0.6;
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .password-toggle {
@@ -322,6 +370,13 @@
   border: 0;
   background: transparent;
   color: #a1aab9;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.password-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .password-toggle svg {
@@ -362,17 +417,11 @@
 
 .remember-option input:checked {
   border-color: #4778ff;
-  background: #4778ff;
-  background-image:
-    linear-gradient(45deg, transparent 58%, #fff 58%),
-    linear-gradient(135deg, #fff 42%, transparent 42%);
-  background-position:
-    5px 11px,
-    9px 11px;
-  background-size:
-    6px 2px,
-    10px 2px;
+  background-color: #4778ff;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M13 4L6 11L3 8' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px 14px;
 }
 
 .forgot-password {
@@ -382,21 +431,37 @@
   color: #3475ff;
   font-size: 17px;
   font-weight: 600;
+  cursor: pointer;
+  transition: color 140ms ease;
 }
 
-.forgot-password:hover {
+.forgot-password:hover:not(:disabled) {
   color: #245ce4;
+}
+
+.forgot-password:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .login-card .form-error {
   margin: -4px 0 -2px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid #ffd1d8;
   border-radius: 8px;
   background: #fff1f3;
   color: #c02436;
   font-size: 14px;
-  line-height: 1.35;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.login-card .form-error svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
 }
 
 .login-submit,
@@ -417,9 +482,15 @@
   color: #ffffff;
   background: linear-gradient(90deg, #3d83ff 0%, #5d39f4 100%);
   box-shadow: 0 12px 26px rgba(68, 100, 246, 0.24);
+  cursor: pointer;
+  transition: box-shadow 180ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
-.login-submit:hover {
+.login-submit:hover:not(:disabled) {
   box-shadow: 0 15px 30px rgba(68, 100, 246, 0.3);
 }
 
@@ -427,6 +498,21 @@
   opacity: 0.74;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+.spinner-icon {
+  width: 20px;
+  height: 20px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .sso-submit {
@@ -452,6 +538,138 @@
 .forgot-password:focus-visible,
 .login-submit:focus-visible,
 .sso-submit:focus-visible {
+  outline: 2px solid rgba(48, 105, 255, 0.48);
+  outline-offset: 2px;
+}
+
+/* 忘记密码弹窗 */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(7, 20, 61, 0.5);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  animation: fadeIn 200ms ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.forgot-password-modal {
+  width: min(460px, calc(100vw - 40px));
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  animation: slideUp 250ms ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 28px;
+  border-bottom: 1px solid #e8ecf2;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: #101b36;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.modal-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.modal-close:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.modal-body {
+  padding: 24px 28px;
+}
+
+.modal-body p {
+  margin: 0 0 12px;
+  color: #374151;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.modal-body p:last-child {
+  margin-bottom: 0;
+}
+
+.modal-hint {
+  color: #6b7280 !important;
+  font-size: 14px !important;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 20px 28px;
+  border-top: 1px solid #e8ecf2;
+}
+
+.modal-button {
+  height: 42px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #3d83ff 0%, #5d39f4 100%);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: box-shadow 140ms ease;
+}
+
+.modal-button:hover {
+  box-shadow: 0 8px 16px rgba(68, 100, 246, 0.24);
+}
+
+.modal-button:focus-visible {
   outline: 2px solid rgba(48, 105, 255, 0.48);
   outline-offset: 2px;
 }
@@ -581,5 +799,17 @@
   .login-submit,
   .sso-submit {
     font-size: 18px;
+  }
+
+  .modal-header {
+    padding: 20px 20px;
+  }
+
+  .modal-body {
+    padding: 20px 20px;
+  }
+
+  .modal-footer {
+    padding: 16px 20px;
   }
 }

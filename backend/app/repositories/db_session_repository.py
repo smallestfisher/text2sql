@@ -98,15 +98,15 @@ class DbSessionRepository:
             )
         return sessions
 
-    def list_sessions(self, limit: int = 50) -> list[ChatSession]:
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[ChatSession]:
         rows = self.database_connector.fetch_all(
             """
             SELECT session_id, user_id, title, status, current_state_json, created_at, updated_at
             FROM chat_sessions
             ORDER BY updated_at DESC, created_at DESC
-            LIMIT :limit
+            LIMIT :limit OFFSET :offset
             """,
-            {"limit": limit},
+            {"limit": max(1, limit), "offset": max(0, offset)},
         )
         sessions: list[ChatSession] = []
         for row in rows:
@@ -123,6 +123,21 @@ class DbSessionRepository:
                 )
             )
         return sessions
+
+    def count_sessions(self) -> int:
+        row = self.database_connector.fetch_one("SELECT COUNT(*) AS total FROM chat_sessions")
+        return int(row["total"]) if row else 0
+
+    def count_sessions_created_between(self, start: datetime, end: datetime) -> int:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM chat_sessions
+            WHERE created_at >= :start AND created_at < :end
+            """,
+            {"start": start, "end": end},
+        )
+        return int(row["total"]) if row else 0
 
     def list_messages(self, session_id: str) -> list[ChatMessage]:
         rows = self.database_connector.fetch_all(

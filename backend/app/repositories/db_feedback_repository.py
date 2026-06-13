@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from backend.app.models.feedback import FeedbackRecord
 from backend.app.repositories.db_repository_utils import as_datetime
 from backend.app.services.database_connector import DatabaseConnector
@@ -71,3 +73,18 @@ class DbFeedbackRepository:
             )
             for row in rows
         ]
+
+    def count_records(self) -> int:
+        row = self.database_connector.fetch_one("SELECT COUNT(*) AS total FROM feedback_logs")
+        return int(row["total"]) if row else 0
+
+    def count_records_created_between(self, start: datetime, end: datetime) -> int:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM feedback_logs
+            WHERE created_at >= :start AND created_at < :end
+            """,
+            {"start": start, "end": end},
+        )
+        return int(row["total"]) if row else 0

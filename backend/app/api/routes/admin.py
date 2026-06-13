@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.app.api.dependencies import get_container, get_current_user, require_admin_user, reset_container
 from backend.app.core.container import AppContainer
 from backend.app.models.admin import (
+    AdminMetricChangeRecord,
+    AdminMetricsSummary,
     ExampleCollectionResponse,
     ExampleMutationResponse,
     MetadataDocument,
@@ -23,6 +27,7 @@ from backend.app.models.auth import (
     AdminPasswordResetRequest,
     RoleRecord,
     RoleUpsertRequest,
+    UserCollectionResponse,
     UserContext,
     UserUpsertRequest,
 )
@@ -78,6 +83,45 @@ class RuntimeQueryLogMaterializeExampleRequest(BaseModel):
     scenario: str | None = None
     coverage_tags: list[str] = Field(default_factory=list)
     notes: str | None = None
+
+
+@router.get("/metrics/summary", response_model=AdminMetricsSummary)
+def admin_metrics_summary(container: AppContainer = Depends(get_container)) -> AdminMetricsSummary:
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+    tomorrow_start = today_start + timedelta(days=1)
+
+    def build_metric(total: int, today: int, yesterday: int) -> AdminMetricChangeRecord:
+        return AdminMetricChangeRecord(
+            total=total,
+            today=today,
+            yesterday=yesterday,
+            delta=today - yesterday,
+        )
+
+    return AdminMetricsSummary(
+        users=build_metric(
+            container.auth_repository.count_users(),
+            container.auth_repository.count_users_created_between(today_start, tomorrow_start),
+            container.auth_repository.count_users_created_between(yesterday_start, today_start),
+        ),
+        sessions=build_metric(
+            container.session_repository.count_sessions(),
+            container.session_repository.count_sessions_created_between(today_start, tomorrow_start),
+            container.session_repository.count_sessions_created_between(yesterday_start, today_start),
+        ),
+        query_logs=build_metric(
+            container.runtime_log_repository.count_query_logs(),
+            container.runtime_log_repository.count_query_logs_created_between(today_start, tomorrow_start),
+            container.runtime_log_repository.count_query_logs_created_between(yesterday_start, today_start),
+        ),
+        feedbacks=build_metric(
+            container.feedback_repository.count_records(),
+            container.feedback_repository.count_records_created_between(today_start, tomorrow_start),
+            container.feedback_repository.count_records_created_between(yesterday_start, today_start),
+        ),
+        generated_at=datetime.utcnow(),
+    )
 
 
 @router.get("/metadata/overview", response_model=MetadataOverview)
@@ -245,9 +289,10 @@ def prewarm_runtime_vector_index(container: AppContainer = Depends(get_container
 @router.get("/runtime/sessions", response_model=RuntimeSessionCollectionResponse)
 def list_runtime_sessions(
     limit: int = 50,
+    offset: int = 0,
     container: AppContainer = Depends(get_container),
 ) -> RuntimeSessionCollectionResponse:
-    return container.runtime_admin_service.list_sessions(limit=limit)
+    return container.runtime_admin_service.list_sessions(limit=limit, offset=offset)
 
 
 @router.get("/runtime/sessions/{session_id}/history", response_model=SessionHistoryResponse)
@@ -273,6 +318,7 @@ def list_runtime_session_snapshots(
 @router.get("/runtime/query-logs", response_model=RuntimeQueryLogCollectionResponse)
 def list_runtime_query_logs(
     limit: int = 50,
+    offset: int = 0,
     session_id: str | None = None,
     user_id: str | None = None,
     sql_risk_level: str | None = None,
@@ -282,6 +328,7 @@ def list_runtime_query_logs(
 ) -> RuntimeQueryLogCollectionResponse:
     return container.runtime_admin_service.list_query_logs(
         limit=limit,
+        offset=offset,
         session_id=session_id,
         user_id=user_id,
         sql_risk_level=sql_risk_level,
@@ -396,9 +443,13 @@ def materialize_runtime_query_log_as_example(
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
-@router.get("/users", response_model=list[UserContext])
-def list_users(container: AppContainer = Depends(get_container)) -> list[UserContext]:
-    return container.auth_service.list_users()
+@router.get("/users", response_model=UserCollectionResponse)
+def list_users(
+    limit: int = 50,
+    offset: int = 0,
+    container: AppContainer = Depends(get_container),
+) -> UserCollectionResponse:
+    return container.auth_service.list_admin_users(limit=limit, offset=offset)
 
 
 @router.get("/users/{user_id}", response_model=UserContext)

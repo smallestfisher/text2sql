@@ -12,6 +12,7 @@ from backend.app.core.exceptions import PermissionDeniedError
 from backend.app.models.auth import (
     ADMIN_ROLE,
     AdminPasswordResetRequest,
+    AdminUserRecord,
     AuthUserRecord,
     BootstrapAdminRequest,
     LoginRequest,
@@ -19,6 +20,7 @@ from backend.app.models.auth import (
     PasswordChangeRequest,
     RoleRecord,
     RoleUpsertRequest,
+    UserCollectionResponse,
     UserContext,
     UserUpsertRequest,
     VIEWER_ROLE,
@@ -99,6 +101,13 @@ class AuthService:
     def list_users(self) -> list[UserContext]:
         return [self._to_user_context(item) for item in self.repository.list_users()]
 
+    def list_admin_users(self, limit: int = 50, offset: int = 0) -> UserCollectionResponse:
+        users = [
+            self._to_admin_user_record(item)
+            for item in self.repository.list_users(limit=limit, offset=offset)
+        ]
+        return UserCollectionResponse(users=users, count=self.repository.count_users())
+
     def get_user(self, user_id: str) -> UserContext | None:
         user = self.repository.get_by_user_id(user_id)
         return None if user is None else self._to_user_context(user)
@@ -166,7 +175,7 @@ class AuthService:
         if existing is None:
             raise KeyError(user_id)
         if ADMIN_ROLE in existing.roles:
-            self._ensure_not_last_active_admin(existing.user_id)
+            raise PermissionDeniedError("cannot delete admin user")
         deleted = self.repository.delete_user(user_id)
         if not deleted:
             raise KeyError(user_id)
@@ -219,6 +228,16 @@ class AuthService:
             username=user.username,
             roles=user.roles,
             is_active=user.is_active,
+        )
+
+    def _to_admin_user_record(self, user: AuthUserRecord) -> AdminUserRecord:
+        return AdminUserRecord(
+            user_id=user.user_id,
+            username=user.username,
+            roles=user.roles,
+            is_active=user.is_active,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
         )
 
     def _ensure_not_last_active_admin(

@@ -14,6 +14,16 @@ class UserContext(BaseModel):
     is_active: bool = True
 
 
+class AdminUserRecord(UserContext):
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserCollectionResponse(BaseModel):
+    users: list[AdminUserRecord]
+    count: int
+
+
 class AuthUserRecord(BaseModel):
     user_id: str
     username: str

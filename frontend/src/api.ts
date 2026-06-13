@@ -2,6 +2,7 @@ import type {
   BootstrapStatus,
   ChatResponse,
   ProgressEvent,
+  AdminMetricsSummary,
   EvaluationReplayRequest,
   EvaluationReplayResult,
   EvaluationSummary,
@@ -22,6 +23,7 @@ import type {
   SessionWorkspaceResponse,
   TraceRecord,
   UserContext,
+  UserCollectionResponse,
   UserUpsertPayload,
   FeedbackSummary,
 } from "./types";
@@ -31,6 +33,37 @@ type RequestOptions = {
   token?: string | null;
   body?: unknown;
 };
+
+type PageOptions = {
+  limit?: number;
+  offset?: number;
+};
+
+function pageQuery(options: PageOptions = {}) {
+  const params = new URLSearchParams();
+  if (typeof options.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+  if (typeof options.offset === "number") {
+    params.set("offset", String(options.offset));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+export function isAuthFailure(error: unknown) {
+  return error instanceof ApiRequestError && (error.status === 401 || error.status === 403);
+}
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers();
@@ -55,7 +88,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch {
       detail = response.statusText;
     }
-    throw new Error(detail);
+    throw new ApiRequestError(response.status, detail);
   }
 
   return (await response.json()) as T;
@@ -106,7 +139,7 @@ async function requestEventStream(
     } catch {
       detail = response.statusText;
     }
-    throw new Error(detail);
+    throw new ApiRequestError(response.status, detail);
   }
 
   const reader = response.body.getReader();
@@ -149,7 +182,7 @@ async function requestText(path: string, options: RequestOptions = {}): Promise<
     } catch {
       detail = response.statusText;
     }
-    throw new Error(detail);
+    throw new ApiRequestError(response.status, detail);
   }
 
   return await response.text();
@@ -242,8 +275,11 @@ export const api = {
   adminRuntimeStatus(token: string): Promise<RuntimeStatus> {
     return request("/api/admin/runtime/status", { token });
   },
-  adminRuntimeSessions(token: string): Promise<RuntimeSessionCollectionResponse> {
-    return request("/api/admin/runtime/sessions?limit=20", { token });
+  adminMetricsSummary(token: string): Promise<AdminMetricsSummary> {
+    return request("/api/admin/metrics/summary", { token });
+  },
+  adminRuntimeSessions(token: string, options: PageOptions = { limit: 20 }): Promise<RuntimeSessionCollectionResponse> {
+    return request(`/api/admin/runtime/sessions${pageQuery(options)}`, { token });
   },
   adminMetadataOverview(token: string): Promise<MetadataOverview> {
     return request("/api/admin/metadata/overview", { token });
@@ -260,8 +296,8 @@ export const api = {
       token,
     });
   },
-  adminUsers(token: string): Promise<UserContext[]> {
-    return request("/api/admin/users", { token });
+  adminUsers(token: string, options: PageOptions = { limit: 20 }): Promise<UserCollectionResponse> {
+    return request(`/api/admin/users${pageQuery(options)}`, { token });
   },
   adminUpsertUser(token: string, userId: string, payload: UserUpsertPayload): Promise<UserContext> {
     return request(`/api/admin/users/${userId}`, {
@@ -291,8 +327,8 @@ export const api = {
   adminRoles(token: string): Promise<RoleRecord[]> {
     return request("/api/admin/roles", { token });
   },
-  adminQueryLogs(token: string): Promise<RuntimeQueryLogCollectionResponse> {
-    return request("/api/admin/runtime/query-logs?limit=20", { token });
+  adminQueryLogs(token: string, options: PageOptions = { limit: 20 }): Promise<RuntimeQueryLogCollectionResponse> {
+    return request(`/api/admin/runtime/query-logs${pageQuery(options)}`, { token });
   },
   adminFeedbackSummary(token: string): Promise<FeedbackSummary> {
     return request("/api/admin/feedbacks/summary", { token });

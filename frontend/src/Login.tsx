@@ -1,15 +1,20 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import loginIllustration from "./assets/login-illustration.svg";
 import "./login.css";
 
 type AuthMode = "login" | "bootstrap";
+type ThemeMode = "light" | "dark";
 
 interface LoginProps {
   authMode: AuthMode;
   authError: string;
   authPending: boolean;
+  themeMode: ThemeMode;
+  onThemeToggle: () => void;
   onSubmit: (username: string, password: string) => Promise<void>;
 }
+
+const REMEMBER_ME_KEY = "text2sql.frontend.remember_username";
 
 type FeatureIcon = "chat" | "trace" | "chart";
 
@@ -32,13 +37,37 @@ const features: Array<{ icon: FeatureIcon; title: string; description: string }>
 ];
 
 export function Login(props: LoginProps) {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(() => {
+    // 从 localStorage 恢复上次记住的用户名
+    return window.localStorage.getItem(REMEMBER_ME_KEY) || "";
+  });
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => {
+    // 如果有保存的用户名，默认勾选记住我
+    return Boolean(window.localStorage.getItem(REMEMBER_ME_KEY));
+  });
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+
+  useEffect(() => {
+    // 当 authMode 变化时重置表单
+    if (props.authMode === "bootstrap") {
+      setUsername("");
+      setPassword("");
+      setRememberMe(false);
+    }
+  }, [props.authMode]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    // 处理记住我功能
+    if (rememberMe && username.trim()) {
+      window.localStorage.setItem(REMEMBER_ME_KEY, username.trim());
+    } else {
+      window.localStorage.removeItem(REMEMBER_ME_KEY);
+    }
+
     void props.onSubmit(username, password);
   };
 
@@ -47,6 +76,8 @@ export function Login(props: LoginProps) {
     : props.authMode === "bootstrap"
       ? "创建并登录"
       : "登录";
+
+  const isFormDisabled = props.authPending;
 
   return (
     <main className="login-page">
@@ -60,14 +91,14 @@ export function Login(props: LoginProps) {
         </div>
 
         <nav className="header-actions" aria-label="登录页工具">
-          <button className="header-action" type="button">
-            <SunIcon />
-            <span>浅色模式</span>
-          </button>
-          <span className="header-divider" aria-hidden="true" />
-          <button className="header-action" type="button">
-            <HelpIcon />
-            <span>帮助中心</span>
+          <button
+            className={`header-action theme-toggle-button${props.themeMode === "dark" ? " is-active" : ""}`}
+            type="button"
+            onClick={props.onThemeToggle}
+            title="切换主题"
+          >
+            {props.themeMode === "dark" ? <MoonIcon /> : <SunIcon />}
+            <span>{props.themeMode === "dark" ? "深色模式" : "浅色模式"}</span>
           </button>
         </nav>
       </header>
@@ -109,13 +140,26 @@ export function Login(props: LoginProps) {
         </section>
 
         <section className="login-card" aria-label="登录表单">
-          <h2>欢迎回来</h2>
-          <p>登录 QueryMind 用户工作台</p>
+          <h2>
+            {props.authMode === "bootstrap" ? "创建管理员账户" : "欢迎回来"}
+          </h2>
+          <p>
+            {props.authMode === "bootstrap"
+              ? "首次使用，请设置管理员账户信息"
+              : "登录 QueryMind 用户工作台"}
+          </p>
+
+          {props.authMode === "bootstrap" && (
+            <div className="bootstrap-notice">
+              <InfoIcon />
+              <span>密码建议至少 8 位，包含字母和数字</span>
+            </div>
+          )}
 
           <form className="auth-form" onSubmit={handleSubmit}>
             <div className="form-field">
               <label htmlFor="username">用户名</label>
-              <div className="input-shell">
+              <div className={`input-shell${props.authError ? " has-error" : ""}`}>
                 <UserIcon />
                 <input
                   id="username"
@@ -124,14 +168,15 @@ export function Login(props: LoginProps) {
                   onChange={(event) => setUsername(event.target.value)}
                   placeholder="请输入用户名"
                   autoComplete="username"
-                  disabled={props.authPending}
+                  disabled={isFormDisabled}
+                  required
                 />
               </div>
             </div>
 
             <div className="form-field">
               <label htmlFor="password">密码</label>
-              <div className="input-shell">
+              <div className={`input-shell${props.authError ? " has-error" : ""}`}>
                 <LockIcon />
                 <input
                   id="password"
@@ -140,50 +185,89 @@ export function Login(props: LoginProps) {
                   onChange={(event) => setPassword(event.target.value)}
                   placeholder="请输入密码"
                   autoComplete={props.authMode === "bootstrap" ? "new-password" : "current-password"}
-                  disabled={props.authPending}
+                  disabled={isFormDisabled}
+                  required
                 />
                 <button
                   className="password-toggle"
                   type="button"
                   onClick={() => setShowPassword((current) => !current)}
                   aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  disabled={isFormDisabled}
                 >
-                  <EyeIcon />
+                  {showPassword ? <EyeOffIcon /> : <EyeIcon />}
                 </button>
               </div>
             </div>
 
-            <div className="form-options">
-              <label className="remember-option">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(event) => setRememberMe(event.target.checked)}
-                />
-                <span>记住我</span>
-              </label>
-              <button className="forgot-password" type="button">
-                忘记密码？
-              </button>
-            </div>
-
-            {props.authError && (
-              <div className="form-error" role="alert">
-                {props.authError}
+            {props.authMode === "login" && (
+              <div className="form-options">
+                <label className="remember-option">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(event) => setRememberMe(event.target.checked)}
+                    disabled={isFormDisabled}
+                  />
+                  <span>记住我</span>
+                </label>
+                <button
+                  className="forgot-password"
+                  type="button"
+                  onClick={() => setShowForgotPassword(true)}
+                  disabled={isFormDisabled}
+                >
+                  忘记密码？
+                </button>
               </div>
             )}
 
-            <button className="login-submit" type="submit" disabled={props.authPending}>
-              {submitLabel}
-            </button>
+            {props.authError && (
+              <div className="form-error" role="alert">
+                <AlertIcon />
+                <span>{props.authError}</span>
+              </div>
+            )}
 
-            <button className="sso-submit" type="button">
-              <ShieldIcon />
-              <span>企业 SSO 登录</span>
+            <button className="login-submit" type="submit" disabled={isFormDisabled}>
+              {props.authPending && <SpinnerIcon />}
+              <span>{submitLabel}</span>
             </button>
           </form>
         </section>
       </section>
+
+      {/* 忘记密码弹窗 */}
+      {showForgotPassword && (
+        <div className="modal-backdrop" onClick={() => setShowForgotPassword(false)}>
+          <div className="forgot-password-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h3>忘记密码</h3>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => setShowForgotPassword(false)}
+                aria-label="关闭"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>请联系系统管理员重置您的密码。</p>
+              <p className="modal-hint">管理员可以在管理中心的用户管理模块重置任何用户的密码。</p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="modal-button"
+                type="button"
+                onClick={() => setShowForgotPassword(false)}
+              >
+                我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -215,12 +299,10 @@ function SunIcon() {
   );
 }
 
-function HelpIcon() {
+function MoonIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.9" />
-      <path d="M9.4 9.5C9.7 7.9 10.8 7 12.4 7C14.2 7 15.5 8.1 15.5 9.7C15.5 11.1 14.8 11.8 13.4 12.6C12.4 13.1 12 13.8 12 14.8" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-      <circle cx="12" cy="17.5" r="1.1" fill="currentColor" />
+      <path d="M20 15.2A7.8 7.8 0 0 1 8.8 4A8.5 8.5 0 1 0 20 15.2Z" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -289,6 +371,50 @@ function EyeIcon() {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M3.5 12C5.5 8.4 8.3 6.6 12 6.6C15.7 6.6 18.5 8.4 20.5 12C18.5 15.6 15.7 17.4 12 17.4C8.3 17.4 5.5 15.6 3.5 12Z" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" />
       <circle cx="12" cy="12" r="2.7" fill="none" stroke="currentColor" strokeWidth="1.9" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3.5 12C5.5 8.4 8.3 6.6 12 6.6C15.7 6.6 18.5 8.4 20.5 12C18.5 15.6 15.7 17.4 12 17.4C8.3 17.4 5.5 15.6 3.5 12Z" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="2.7" fill="none" stroke="currentColor" strokeWidth="1.9" />
+      <path d="M3 3L21 21" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.9" />
+      <path d="M12 8V8.01M12 11V17" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.9" />
+      <path d="M12 7V13M12 16V16.01" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg className="spinner-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="48" strokeDashoffset="12" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 6L18 18M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }

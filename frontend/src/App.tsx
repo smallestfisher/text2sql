@@ -1,11 +1,13 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Login } from "./Login";
 import workspaceIllustration from "./assets/workspace-illustration.svg";
-import { api } from "./api";
+import { api, isAuthFailure } from "./api";
 import type {
   ChatMessage,
   ChatResponse,
   ChatSession,
+  AdminMetricsSummary,
+  AdminUserRecord,
   EvaluationReplayResult,
   EvaluationSummary,
   FeedbackSummary,
@@ -27,6 +29,9 @@ import type {
 
 const TOKEN_KEY = "text2sql.frontend.token";
 const SESSION_KEY = "text2sql.frontend.session";
+const VIEW_MODE_KEY = "text2sql.frontend.view_mode";
+const THEME_KEY = "text2sql.frontend.theme";
+const ADMIN_TABLE_PAGE_SIZE = 5;
 const PROMPTS = [
   "本月销售额相比上月增长了多少？",
   "各产品线的销售趋势如何？",
@@ -54,6 +59,13 @@ const WORKSPACE_FEATURES = [
     title: "结果解释与建议",
     description: "AI 帮你解读结果，提供业务建议",
   },
+] as const;
+const ADMIN_SIDEBAR_LINKS = [
+  { href: "#admin-overview", icon: "pie", label: "数据总览" },
+  { href: "#admin-runtime", icon: "server", label: "运行状态" },
+  { href: "#admin-index", icon: "search", label: "检索索引" },
+  { href: "#admin-users", icon: "users", label: "用户管理" },
+  { href: "#admin-logs", icon: "document", label: "日志审计" },
 ] as const;
 const PROGRESS_BASE_STAGES = [
   "accepted",
@@ -131,6 +143,7 @@ type PendingProgressStep = {
 type AuthMode = "login" | "bootstrap";
 type InspectorTab = "result" | "sql" | "trace" | "state";
 type ViewMode = "workspace" | "admin";
+type ThemeMode = "light" | "dark";
 
 const emptyUserForm: UserUpsertPayload = {
   username: "",
@@ -139,13 +152,51 @@ const emptyUserForm: UserUpsertPayload = {
   is_active: true,
 };
 
+function readStoredViewMode(): ViewMode {
+  const storedViewMode = window.localStorage.getItem(VIEW_MODE_KEY);
+  return storedViewMode === "admin" ? "admin" : "workspace";
+}
+
+function readStoredThemeMode(): ThemeMode {
+  return window.localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
+}
+
+function applyThemeMode(mode: ThemeMode) {
+  document.documentElement.dataset.theme = mode;
+  document.documentElement.style.colorScheme = mode;
+}
+
+function isAdminUser(user: UserContext | null | undefined) {
+  return (user?.roles || []).includes("admin");
+}
+
 function App() {
   const [token, setToken] = useState<string | null>(() => window.localStorage.getItem(TOKEN_KEY));
+  const [authInitializing, setAuthInitializing] = useState(() => Boolean(window.localStorage.getItem(TOKEN_KEY)));
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authError, setAuthError] = useState("");
   const [authPending, setAuthPending] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("workspace");
+  const [viewMode, setViewModeState] = useState<ViewMode>(() => readStoredViewMode());
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const storedThemeMode = readStoredThemeMode();
+    applyThemeMode(storedThemeMode);
+    return storedThemeMode;
+  });
+
+  function setViewMode(mode: ViewMode) {
+    setViewModeState(mode);
+    window.localStorage.setItem(VIEW_MODE_KEY, mode);
+  }
+
+  function toggleThemeMode() {
+    setThemeMode((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      window.localStorage.setItem(THEME_KEY, next);
+      applyThemeMode(next);
+      return next;
+    });
+  }
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
@@ -169,19 +220,26 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorAttention, setInspectorAttention] = useState(false);
+  const bootRunRef = useRef(0);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const inspectorRef = useRef<HTMLElement | null>(null);
 
   const [adminPending, setAdminPending] = useState(false);
   const [adminError, setAdminError] = useState("");
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [adminMetrics, setAdminMetrics] = useState<AdminMetricsSummary | null>(null);
   const [metadataOverview, setMetadataOverview] = useState<MetadataOverview | null>(null);
-  const [adminUsers, setAdminUsers] = useState<UserContext[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
+  const [adminUserCount, setAdminUserCount] = useState(0);
+  const [adminUserPage, setAdminUserPage] = useState(1);
   const [adminRoles, setAdminRoles] = useState<RoleRecord[]>([]);
   const [adminLogs, setAdminLogs] = useState<RuntimeQueryLogRecord[]>([]);
+  const [adminLogCount, setAdminLogCount] = useState(0);
+  const [adminLogPage, setAdminLogPage] = useState(1);
   const [adminFeedbackSummary, setAdminFeedbackSummary] = useState<FeedbackSummary | null>(null);
   const [adminEvalSummary, setAdminEvalSummary] = useState<EvaluationSummary | null>(null);
   const [adminSessions, setAdminSessions] = useState<ChatSession[]>([]);
+  const [adminSessionCount, setAdminSessionCount] = useState(0);
   const [adminReplayPendingTraceId, setAdminReplayPendingTraceId] = useState<string | null>(null);
   const [adminReplayResult, setAdminReplayResult] = useState<EvaluationReplayResult | null>(null);
   const [adminIndexActionPending, setAdminIndexActionPending] = useState<"" | "reload" | "prewarm" | "reload_prewarm">("");
@@ -195,6 +253,10 @@ function App() {
     void boot();
   }, []);
 
+  useLayoutEffect(() => {
+    applyThemeMode(themeMode);
+  }, [themeMode]);
+
   useEffect(() => {
     const node = threadRef.current;
     if (!node) {
@@ -207,7 +269,7 @@ function App() {
     if (token && viewMode === "admin" && (currentUser?.roles || []).includes("admin")) {
       void loadAdminData(token);
     }
-  }, [token, viewMode, currentUser]);
+  }, [token, viewMode, currentUser, adminUserPage, adminLogPage]);
 
   useEffect(() => {
     if (!inspectorAttention) {
@@ -218,28 +280,96 @@ function App() {
   }, [inspectorAttention]);
 
   async function boot() {
-    try {
-      const status = await api.bootstrapStatus();
-      setAuthMode(status.has_users ? "login" : "bootstrap");
-    } catch (error) {
-      setAuthError(errorMessage(error));
-    }
+    const runId = ++bootRunRef.current;
+    const storedToken = window.localStorage.getItem(TOKEN_KEY);
+    const storedSessionId = window.localStorage.getItem(SESSION_KEY) || null;
 
-    if (!token) {
-      return;
-    }
-
+    setAuthInitializing(Boolean(storedToken));
     try {
-      await initializeWorkspace(token);
-    } catch {
-      clearAuth();
+      try {
+        const status = await api.bootstrapStatus();
+        if (bootRunRef.current !== runId) {
+          return;
+        }
+        setAuthMode(status.has_users ? "login" : "bootstrap");
+      } catch (error) {
+        if (bootRunRef.current !== runId) {
+          return;
+        }
+        setAuthError(errorMessage(error));
+      }
+
+      if (!storedToken) {
+        setToken(null);
+        setCurrentUser(null);
+        return;
+      }
+
+      try {
+        const me = await api.me(storedToken);
+        if (bootRunRef.current !== runId) {
+          return;
+        }
+        setToken(storedToken);
+        setCurrentUser(me);
+        setAuthError("");
+        setWorkspaceError("");
+        if (!isAdminUser(me) && readStoredViewMode() === "admin") {
+          setViewMode("workspace");
+        }
+        setAuthInitializing(false);
+        void restoreWorkspace(storedToken, storedSessionId, runId);
+      } catch (error) {
+        if (bootRunRef.current !== runId) {
+          return;
+        }
+        if (isAuthFailure(error)) {
+          clearAuth();
+          return;
+        }
+        setAuthError(errorMessage(error));
+      }
+    } finally {
+      if (bootRunRef.current === runId) {
+        setAuthInitializing(false);
+      }
     }
   }
 
-  async function initializeWorkspace(authToken: string) {
-    const me = await api.me(authToken);
+  async function initializeWorkspace(authToken: string, preferredSessionId = window.localStorage.getItem(SESSION_KEY) || null) {
+    setWorkspaceError("");
+    let me: UserContext;
+    try {
+      me = await api.me(authToken);
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth();
+        return;
+      }
+      setWorkspaceError(errorMessage(error));
+      return;
+    }
+
     setCurrentUser(me);
-    await refreshSessions(authToken, selectedSessionId);
+    if (!isAdminUser(me) && readStoredViewMode() === "admin") {
+      setViewMode("workspace");
+    }
+    try {
+      await refreshSessions(authToken, preferredSessionId);
+    } catch (error) {
+      setWorkspaceError(errorMessage(error));
+    }
+  }
+
+  async function restoreWorkspace(authToken: string, preferredSessionId: string | null, bootRunId?: number) {
+    try {
+      await refreshSessions(authToken, preferredSessionId);
+    } catch (error) {
+      if (bootRunId !== undefined && bootRunRef.current !== bootRunId) {
+        return;
+      }
+      setWorkspaceError(errorMessage(error));
+    }
   }
 
   async function refreshSessions(authToken: string, preferredSessionId?: string | null) {
@@ -312,6 +442,7 @@ function App() {
   async function handleAuth(username: string, password: string) {
     setAuthPending(true);
     setAuthError("");
+    setWorkspaceError("");
     try {
       if (authMode === "bootstrap") {
         await api.bootstrapAdmin(username, password);
@@ -321,7 +452,12 @@ function App() {
       setToken(loginResponse.access_token);
       setCurrentUser(loginResponse.user);
       setViewMode("workspace");
-      await refreshSessions(loginResponse.access_token, selectedSessionId);
+      setAuthInitializing(false);
+      try {
+        await refreshSessions(loginResponse.access_token, selectedSessionId);
+      } catch (error) {
+        setWorkspaceError(errorMessage(error));
+      }
     } catch (error) {
       setAuthError(errorMessage(error));
     } finally {
@@ -330,11 +466,14 @@ function App() {
   }
 
   function clearAuth() {
+    bootRunRef.current += 1;
     window.localStorage.removeItem(TOKEN_KEY);
     window.localStorage.removeItem(SESSION_KEY);
     setToken(null);
+    setAuthInitializing(false);
     setCurrentUser(null);
     setViewMode("workspace");
+    setAuthError("");
     setSessions([]);
     setSelectedSessionId(null);
     setMessages([]);
@@ -565,25 +704,48 @@ function App() {
   async function loadAdminData(authToken: string) {
     setAdminPending(true);
     setAdminError("");
+    const userPage = Math.max(1, adminUserPage);
+    const logPage = Math.max(1, adminLogPage);
     try {
-      const [status, overview, users, roles, logs, feedbacks, evalSummary, runtimeSessions] = await Promise.all([
+      const [status, metrics, overview, users, roles, logs, feedbacks, evalSummary, runtimeSessions] = await Promise.all([
         api.adminRuntimeStatus(authToken),
+        api.adminMetricsSummary(authToken),
         api.adminMetadataOverview(authToken),
-        api.adminUsers(authToken),
+        api.adminUsers(authToken, {
+          limit: ADMIN_TABLE_PAGE_SIZE,
+          offset: (userPage - 1) * ADMIN_TABLE_PAGE_SIZE,
+        }),
         api.adminRoles(authToken),
-        api.adminQueryLogs(authToken),
+        api.adminQueryLogs(authToken, {
+          limit: ADMIN_TABLE_PAGE_SIZE,
+          offset: (logPage - 1) * ADMIN_TABLE_PAGE_SIZE,
+        }),
         api.adminFeedbackSummary(authToken),
         api.adminEvaluationSummary(authToken),
-        api.adminRuntimeSessions(authToken),
+        api.adminRuntimeSessions(authToken, { limit: 1, offset: 0 }),
       ]);
+      const maxUserPage = Math.max(1, Math.ceil(users.count / ADMIN_TABLE_PAGE_SIZE));
+      const maxLogPage = Math.max(1, Math.ceil(logs.count / ADMIN_TABLE_PAGE_SIZE));
+      if (userPage > maxUserPage) {
+        setAdminUserPage(maxUserPage);
+        return;
+      }
+      if (logPage > maxLogPage) {
+        setAdminLogPage(maxLogPage);
+        return;
+      }
       setRuntimeStatus(status);
+      setAdminMetrics(metrics);
       setMetadataOverview(overview);
-      setAdminUsers(users);
+      setAdminUsers(users.users);
+      setAdminUserCount(metrics.users.total);
       setAdminRoles(roles);
       setAdminLogs(logs.query_logs);
+      setAdminLogCount(metrics.query_logs.total);
       setAdminFeedbackSummary(feedbacks);
       setAdminEvalSummary(evalSummary);
       setAdminSessions(runtimeSessions.sessions);
+      setAdminSessionCount(metrics.sessions.total);
     } catch (error) {
       setAdminError(errorMessage(error));
     } finally {
@@ -737,12 +899,48 @@ function App() {
   const showAdminCenter = isAdmin && viewMode === "admin";
   const showInspector = viewMode === "workspace" && !shouldShowWelcome;
 
+  if (authInitializing || (token && !currentUser)) {
+    return (
+      <main className="auth-restore-screen">
+        <div className="auth-restore-panel">
+          <QueryMindLogo className="auth-restore-logo" />
+          <div>
+            <div className="auth-restore-title">正在恢复登录状态</div>
+            <div className="auth-restore-copy">
+              {workspaceError || authError || "正在校验本地会话，请稍候。"}
+            </div>
+          </div>
+          {!authInitializing && (workspaceError || authError) ? (
+            <div className="auth-restore-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  setAuthError("");
+                  setWorkspaceError("");
+                  void boot();
+                }}
+              >
+                重试
+              </button>
+              <button className="primary-button" type="button" onClick={clearAuth}>
+                返回登录
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
+
   if (!currentUser) {
     return (
       <Login
         authMode={authMode}
         authError={authError}
         authPending={authPending}
+        themeMode={themeMode}
+        onThemeToggle={toggleThemeMode}
         onSubmit={handleAuth}
       />
     );
@@ -802,68 +1000,110 @@ function App() {
             ) : null}
           </div>
 
-          <button className="primary-button new-session-button" type="button" onClick={() => void createSession()} disabled={chatPending}>
-            <AppIcon name="plus" />
-            新建会话
-          </button>
+          {showAdminCenter ? (
+            <div className="sidebar-panel admin-sidebar-panel">
+              <div className="panel-row">
+                <div className="panel-title">管理导航</div>
+                <div className="section-count">{ADMIN_SIDEBAR_LINKS.length}</div>
+              </div>
 
-          <div className="sidebar-panel session-panel">
-            <div className="panel-row">
-              <div className="panel-title">最近会话</div>
-              <div className="section-count">{sessions.length}</div>
-            </div>
+              <nav className="admin-sidebar-nav" aria-label="管理中心导航">
+                {ADMIN_SIDEBAR_LINKS.map((item) => (
+                  <a key={item.href} href={item.href} onClick={() => setSidebarOpen(false)}>
+                    <AppIcon name={item.icon} />
+                    <span>{item.label}</span>
+                  </a>
+                ))}
+              </nav>
 
-            <div className="session-list">
-              {sessions.length ? (
-                sessions.map((session) => {
-                  const displayDomain = resolveDisplayDomain({ sessionState: session.last_state });
-                  const tags = [
-                    displayDomain,
-                    session.status === "archived" ? "archived" : null,
-                  ].filter(Boolean);
-                  return (
-                    <div key={session.id} className={`session-item${session.id === selectedSessionId ? " is-active" : ""}`}>
-                      <div className="session-item-top">
-                        <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)} disabled={chatPending}>
-                          <div className="session-item-title">{formatSessionTitle(session.title)}</div>
-                        </button>
-                        <div className="session-item-time">{formatDate(session.updated_at)}</div>
-                      </div>
-                      <div className="session-item-bottom">
-                        <span className="session-item-id">{session.id.slice(0, 8)}</span>
-                        {tags.length ? (
-                          <div className="mini-tags">
-                            {tags.slice(0, 2).map((tag) => (
-                              <span className="mini-tag" key={tag}>
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                        <button
-                          className="session-delete-button"
-                          type="button"
-                          disabled={chatPending}
-                          onClick={() => void handleDeleteSession(session.id)}
-                          aria-label="删除会话"
-                        >
-                          删除
-                        </button>
-                        </div>
-                      </div>
-                  );
-                })
-              ) : (
-                <div className="empty-card session-empty-card">
-                  <AppIcon name="chat" />
-                  <strong>暂无会话记录</strong>
-                  <span>开始提问，探索你的数据洞察</span>
+              <div className="admin-sidebar-overview">
+                <div className="panel-title">数据概览</div>
+                <div className="admin-sidebar-stats">
+                  <div>
+                    <span>用户</span>
+                    <strong>{String(adminUserCount)}</strong>
+                  </div>
+                  <div>
+                    <span>会话</span>
+                    <strong>{String(adminSessionCount)}</strong>
+                  </div>
+                  <div>
+                    <span>日志</span>
+                    <strong>{String(adminLogCount)}</strong>
+                  </div>
+                  <div>
+                    <span>反馈</span>
+                    <strong>{String(adminMetrics?.feedbacks.total ?? adminFeedbackSummary?.total ?? 0)}</strong>
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <button className="primary-button new-session-button" type="button" onClick={() => void createSession()} disabled={chatPending}>
+                <AppIcon name="plus" />
+                新建会话
+              </button>
 
-          <button className="user-panel" type="button" onClick={clearAuth} aria-label="退出登录">
+              <div className="sidebar-panel session-panel">
+                <div className="panel-row">
+                  <div className="panel-title">最近会话</div>
+                  <div className="section-count">{sessions.length}</div>
+                </div>
+
+                <div className="session-list">
+                  {sessions.length ? (
+                    sessions.map((session) => {
+                      const displayDomain = resolveDisplayDomain({ sessionState: session.last_state });
+                      const tags = [
+                        displayDomain,
+                        session.status === "archived" ? "archived" : null,
+                      ].filter(Boolean);
+                      return (
+                        <div key={session.id} className={`session-item${session.id === selectedSessionId ? " is-active" : ""}`}>
+                          <div className="session-item-top">
+                            <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)} disabled={chatPending}>
+                              <div className="session-item-title">{formatSessionTitle(session.title)}</div>
+                            </button>
+                            <div className="session-item-time">{formatDate(session.updated_at)}</div>
+                          </div>
+                          <div className="session-item-bottom">
+                            <span className="session-item-id">{session.id.slice(0, 8)}</span>
+                            {tags.length ? (
+                              <div className="mini-tags">
+                                {tags.slice(0, 2).map((tag) => (
+                                  <span className="mini-tag" key={tag}>
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                            <button
+                              className="session-delete-button"
+                              type="button"
+                              disabled={chatPending}
+                              onClick={() => void handleDeleteSession(session.id)}
+                              aria-label="删除会话"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="empty-card session-empty-card">
+                      <AppIcon name="chat" />
+                      <strong>暂无会话记录</strong>
+                      <span>开始提问，探索你的数据洞察</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="user-panel">
             <div className="user-head">
               <div className="user-avatar">{(currentUser.username || currentUser.user_id).slice(0, 1).toUpperCase()}</div>
               <div>
@@ -871,8 +1111,10 @@ function App() {
                 <div className="user-meta">{(currentUser.roles || []).includes("admin") ? "超级管理员" : ((currentUser.roles || []).join(", ") || "viewer")}</div>
               </div>
             </div>
-            <AppIcon name="chevron" />
-          </button>
+            <button className="logout-button" type="button" onClick={clearAuth} aria-label="退出登录" title="退出登录">
+              <AppIcon name="logout" />
+            </button>
+          </div>
         </aside>
 
         {showAdminCenter ? (
@@ -881,23 +1123,34 @@ function App() {
               pending={adminPending}
               error={adminError}
               runtimeStatus={runtimeStatus}
+              adminMetrics={adminMetrics}
               metadataOverview={metadataOverview}
               adminUsers={adminUsers}
+              adminUserCount={adminUserCount}
+              adminUserPage={adminUserPage}
               adminSessions={adminSessions}
+              adminSessionCount={adminSessionCount}
               adminRoles={adminRoles}
               adminLogs={adminLogs}
+              adminLogCount={adminLogCount}
+              adminLogPage={adminLogPage}
+              currentUserId={currentUser.user_id}
               feedbackSummary={adminFeedbackSummary}
               evaluationSummary={adminEvalSummary}
               replayPendingTraceId={adminReplayPendingTraceId}
               replayResult={adminReplayResult}
               indexActionPending={adminIndexActionPending}
               indexActionMessage={adminIndexActionMessage}
+              themeMode={themeMode}
               userForm={userForm}
               onUserFormChange={setUserForm}
+              onThemeToggle={toggleThemeMode}
               onSaveUser={() => void handleAdminUserSave()}
               onToggleUser={(user) => void handleAdminToggleUser(user)}
               onResetPassword={(user) => void handleAdminResetPassword(user)}
               onDeleteUser={(user) => void handleAdminDeleteUser(user)}
+              onUserPageChange={setAdminUserPage}
+              onLogPageChange={setAdminLogPage}
               onReplayLog={(log) => void handleAdminReplayLog(log)}
               onReloadMetadata={() => void handleAdminIndexAction("reload")}
               onPrewarmVector={() => void handleAdminIndexAction("prewarm")}
@@ -912,8 +1165,7 @@ function App() {
                 <div className="workspace-toolbar-top">
                   <div className="workspace-breadcrumb">
                     <AppIcon name="home" />
-                    <span>工作台：</span>
-                    <strong>{workspaceTitle}</strong>
+                    <strong>工作台</strong>
                   </div>
 
                   <div className="workspace-actions">
@@ -921,13 +1173,14 @@ function App() {
                       <AppIcon name="refresh" />
                       刷新
                     </button>
-                    <button className="toolbar-button" type="button">
-                      <AppIcon name="sun" />
-                      浅色模式
-                    </button>
-                    <button className="toolbar-button" type="button">
-                      <AppIcon name="help" />
-                      帮助中心
+                    <button
+                      className={`toolbar-button theme-toggle-button${themeMode === "dark" ? " is-active" : ""}`}
+                      type="button"
+                      onClick={toggleThemeMode}
+                      title="切换主题"
+                    >
+                      <AppIcon name={themeMode === "dark" ? "moon" : "sun"} />
+                      {themeMode === "dark" ? "深色模式" : "浅色模式"}
                     </button>
                   </div>
                 </div>
@@ -1061,14 +1314,14 @@ function App() {
 
                     <div className="composer-footer">
                       <div className="composer-hints">
-                        <button className="hint-chip" type="button">
+                        <span className="hint-chip">
                           <AppIcon name="database" />
                           数据分析
-                        </button>
-                        <button className="hint-chip" type="button">
+                        </span>
+                        <span className="hint-chip">
                           <AppIcon name="bolt" />
                           快捷指令
-                        </button>
+                        </span>
                       </div>
 
                       <div className="composer-submit-row">
@@ -1204,23 +1457,34 @@ function AdminView(props: {
   pending: boolean;
   error: string;
   runtimeStatus: RuntimeStatus | null;
+  adminMetrics: AdminMetricsSummary | null;
   metadataOverview: MetadataOverview | null;
-  adminUsers: UserContext[];
+  adminUsers: AdminUserRecord[];
+  adminUserCount: number;
+  adminUserPage: number;
   adminSessions: ChatSession[];
+  adminSessionCount: number;
   adminRoles: RoleRecord[];
   adminLogs: RuntimeQueryLogRecord[];
+  adminLogCount: number;
+  adminLogPage: number;
+  currentUserId: string;
   feedbackSummary: FeedbackSummary | null;
   evaluationSummary: EvaluationSummary | null;
   replayPendingTraceId: string | null;
   replayResult: EvaluationReplayResult | null;
   indexActionPending: "" | "reload" | "prewarm" | "reload_prewarm";
   indexActionMessage: string;
+  themeMode: ThemeMode;
   userForm: UserUpsertPayload;
   onUserFormChange: (value: UserUpsertPayload) => void;
+  onThemeToggle: () => void;
   onSaveUser: () => void;
   onToggleUser: (user: UserContext) => void;
   onResetPassword: (user: UserContext) => void;
   onDeleteUser: (user: UserContext) => void;
+  onUserPageChange: (page: number) => void;
+  onLogPageChange: (page: number) => void;
   onReplayLog: (log: RuntimeQueryLogRecord) => void;
   onReloadMetadata: () => void;
   onPrewarmVector: () => void;
@@ -1248,37 +1512,45 @@ function AdminView(props: {
     return normalized.includes("已") || normalized.includes("就绪") || normalized.includes("连接") || normalized.includes("ok");
   }).length;
   const healthPercent = runtimeEntries.length ? Math.round((healthyRuntimeCount / runtimeEntries.length) * 100) : 0;
+  const userDelta = formatMetricDelta(props.adminMetrics?.users.delta);
+  const sessionDelta = formatMetricDelta(props.adminMetrics?.sessions.delta);
+  const queryLogDelta = formatMetricDelta(props.adminMetrics?.query_logs.delta);
+  const feedbackDelta = formatMetricDelta(props.adminMetrics?.feedbacks.delta);
   const adminMetricCards = [
     {
       icon: "users",
       title: "用户总数",
-      value: String(props.adminUsers.length),
+      value: String(props.adminMetrics?.users.total ?? props.adminUserCount),
       note: "较昨日",
-      delta: "+2 ↑",
+      delta: userDelta.text,
+      deltaTone: userDelta.tone,
       tone: "blue",
     },
     {
       icon: "chat",
       title: "运行会话",
-      value: String(props.adminSessions.length),
+      value: String(props.adminMetrics?.sessions.total ?? props.adminSessionCount),
       note: "较昨日",
-      delta: "-1 ↓",
+      delta: sessionDelta.text,
+      deltaTone: sessionDelta.tone,
       tone: "purple",
     },
     {
       icon: "document",
       title: "查询日志",
-      value: String(props.adminLogs.length),
+      value: String(props.adminMetrics?.query_logs.total ?? props.adminLogCount),
       note: "较昨日",
-      delta: "+5 ↑",
+      delta: queryLogDelta.text,
+      deltaTone: queryLogDelta.tone,
       tone: "blue",
     },
     {
       icon: "feedback",
       title: "反馈",
-      value: String(props.feedbackSummary?.total || 0),
+      value: String(props.adminMetrics?.feedbacks.total ?? props.feedbackSummary?.total ?? 0),
       note: "较昨日",
-      delta: "0 -",
+      delta: feedbackDelta.text,
+      deltaTone: feedbackDelta.tone,
       tone: "orange",
     },
     {
@@ -1286,12 +1558,13 @@ function AdminView(props: {
       title: "系统健康",
       value: `${healthPercent || 100}%`,
       note: "状态良好",
-      delta: "●",
+      delta: `${healthyRuntimeCount}/${runtimeEntries.length || 6}`,
+      deltaTone: "status",
       tone: "green",
     },
   ];
-  const visibleUsers = props.adminUsers.slice(0, 5);
-  const visibleLogs = props.adminLogs.slice(0, 5);
+  const visibleUsers = props.adminUsers;
+  const visibleLogs = props.adminLogs;
 
   return (
     <div className="admin-dashboard">
@@ -1307,20 +1580,21 @@ function AdminView(props: {
             <AppIcon name="refresh" />
             {props.pending ? "刷新中" : "刷新数据"}
           </button>
-          <button className="toolbar-button is-active" type="button">
-            <AppIcon name="sun" />
-            浅色
-          </button>
-          <button className="toolbar-button" type="button">
-            <AppIcon name="moon" />
-            深色
+          <button
+            className={`toolbar-button theme-toggle-button${props.themeMode === "dark" ? " is-active" : ""}`}
+            type="button"
+            onClick={props.onThemeToggle}
+            title="切换主题"
+          >
+            <AppIcon name={props.themeMode === "dark" ? "moon" : "sun"} />
+            {props.themeMode === "dark" ? "深色模式" : "浅色模式"}
           </button>
         </div>
       </section>
 
       {props.error ? <div className="detail-card accent-card">{props.error}</div> : null}
 
-      <section className="admin-metric-grid">
+      <section id="admin-overview" className="admin-metric-grid">
         {adminMetricCards.map((metric) => (
           <article className={`admin-metric-card is-${metric.tone}`} key={metric.title}>
             <div className="admin-metric-icon">
@@ -1331,7 +1605,7 @@ function AdminView(props: {
               <div className="admin-metric-value">{metric.value}</div>
               <div className="admin-metric-note">
                 <span>{metric.note}</span>
-                <strong>{metric.delta}</strong>
+                <strong className={`is-${metric.deltaTone}`}>{metric.delta}</strong>
               </div>
             </div>
           </article>
@@ -1339,7 +1613,7 @@ function AdminView(props: {
       </section>
 
       <section className="admin-overview-grid">
-        <article className="admin-panel admin-runtime-panel">
+        <article id="admin-runtime" className="admin-panel admin-runtime-panel">
           <div className="admin-panel-title">
             <AppIcon name="server" />
             运行状态
@@ -1360,7 +1634,7 @@ function AdminView(props: {
           </div>
         </article>
 
-        <article className="admin-panel">
+        <article id="admin-metadata" className="admin-panel">
           <div className="admin-panel-title">
             <AppIcon name="pie" />
             元数据概览
@@ -1379,7 +1653,7 @@ function AdminView(props: {
           </div>
         </article>
 
-        <article className="admin-panel admin-index-panel">
+        <article id="admin-index" className="admin-panel admin-index-panel">
           <div className="admin-panel-head">
             <div className="admin-panel-title">
               <AppIcon name="search" />
@@ -1419,7 +1693,7 @@ function AdminView(props: {
       </section>
 
       <section className="admin-bottom-grid">
-        <article className="admin-panel admin-users-panel">
+        <article id="admin-users" className="admin-panel admin-users-panel">
           <div className="admin-panel-title">
             <AppIcon name="users" />
             用户管理
@@ -1458,29 +1732,54 @@ function AdminView(props: {
                 <tr>
                   <th>用户名</th>
                   <th>角色</th>
-                  <th>邮箱</th>
                   <th>状态</th>
-                  <th>最近登录</th>
+                  <th>用户 ID</th>
+                  <th>更新时间</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleUsers.length ? (
-                  visibleUsers.map((user) => (
-                    <tr key={user.user_id}>
-                      <td>{user.username || user.user_id}</td>
-                      <td>{(user.roles || []).includes("admin") ? "超级管理员" : (user.roles || []).join(", ") || "viewer"}</td>
-                      <td>{`${user.username || user.user_id}@company.com`}</td>
-                      <td><span className={`admin-status-chip${user.is_active ? " is-ok" : ""}`}>{user.is_active ? "活跃" : "离线"}</span></td>
-                      <td>-</td>
-                      <td>
-                        <div className="admin-row-actions">
-                          <button type="button" onClick={() => props.onResetPassword(user)} aria-label="重置密码">•••</button>
-                          <button type="button" onClick={() => props.onToggleUser(user)}>{user.is_active ? "禁用" : "启用"}</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  visibleUsers.map((user) => {
+                    const isCurrentUser = user.user_id === props.currentUserId;
+                    const isAdminAccount = (user.roles || []).includes("admin");
+                    const deleteDisabledReason = isAdminAccount
+                      ? "管理员账号不能删除"
+                      : isCurrentUser
+                        ? "不能删除当前登录用户"
+                        : undefined;
+                    return (
+                      <tr key={user.user_id}>
+                        <td>{user.username || user.user_id}</td>
+                        <td>{formatUserRoles(user.roles)}</td>
+                        <td><span className={`admin-status-chip${user.is_active ? " is-ok" : ""}`}>{user.is_active ? "活跃" : "离线"}</span></td>
+                        <td className="admin-cell-muted">{user.user_id}</td>
+                        <td>{formatDate(user.updated_at || user.created_at)}</td>
+                        <td>
+                          <div className="admin-row-actions">
+                            <button type="button" onClick={() => props.onResetPassword(user)} aria-label="重置密码">•••</button>
+                            <button
+                              type="button"
+                              disabled={isCurrentUser}
+                              onClick={() => props.onToggleUser(user)}
+                              title={isCurrentUser ? "不能禁用当前登录用户" : undefined}
+                            >
+                              {user.is_active ? "禁用" : "启用"}
+                            </button>
+                            <button
+                              className="is-danger"
+                              type="button"
+                              disabled={Boolean(deleteDisabledReason)}
+                              onClick={() => props.onDeleteUser(user)}
+                              title={deleteDisabledReason}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td colSpan={6}>暂无用户。</td>
@@ -1489,10 +1788,19 @@ function AdminView(props: {
               </tbody>
             </table>
           </div>
-          <div className="admin-table-foot">共 {props.adminUsers.length} 人</div>
+          <PaginationControls
+            className="admin-table-foot"
+            page={props.adminUserPage}
+            pageSize={ADMIN_TABLE_PAGE_SIZE}
+            total={props.adminUserCount}
+            currentCount={visibleUsers.length}
+            itemLabel="人"
+            disabled={props.pending}
+            onPageChange={props.onUserPageChange}
+          />
         </article>
 
-        <article className="admin-panel admin-logs-panel">
+        <article id="admin-logs" className="admin-panel admin-logs-panel">
           <div className="admin-panel-title">
             <AppIcon name="document" />
             日志 / 审计
@@ -1526,7 +1834,16 @@ function AdminView(props: {
               </tbody>
             </table>
           </div>
-          <div className="admin-table-foot">共 {props.adminLogs.length} 条</div>
+	          <PaginationControls
+	            className="admin-table-foot"
+	            page={props.adminLogPage}
+	            pageSize={ADMIN_TABLE_PAGE_SIZE}
+	            total={props.adminLogCount}
+	            currentCount={visibleLogs.length}
+	            itemLabel="条"
+	            disabled={props.pending}
+	            onPageChange={props.onLogPageChange}
+	          />
 
           {props.replayResult ? (
             <div className="admin-replay-panel">
@@ -1547,6 +1864,46 @@ function AdminView(props: {
     </div>
   );
 
+}
+
+function PaginationControls(props: {
+  className?: string;
+  page: number;
+  pageSize: number;
+  total: number;
+  currentCount: number;
+  itemLabel: string;
+  disabled?: boolean;
+  onPageChange: (page: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(props.total / props.pageSize));
+  const page = Math.min(Math.max(1, props.page), totalPages);
+  const start = props.total === 0 ? 0 : (page - 1) * props.pageSize + 1;
+  const end = props.total === 0 ? 0 : start + props.currentCount - 1;
+  return (
+    <div className={props.className || "pagination-controls"}>
+      <span>
+        {start}-{end} / 共 {props.total} {props.itemLabel}
+      </span>
+      <div className="admin-pagination">
+        <button
+          type="button"
+          disabled={props.disabled || page <= 1}
+          onClick={() => props.onPageChange(page - 1)}
+        >
+          上一页
+        </button>
+        <strong>{page} / {totalPages}</strong>
+        <button
+          type="button"
+          disabled={props.disabled || page >= totalPages}
+          onClick={() => props.onPageChange(page + 1)}
+        >
+          下一页
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function PendingProgressCard(props: { events: ProgressEvent[] }) {
@@ -1797,6 +2154,14 @@ function AppIcon(props: { name: string }) {
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path {...common} d="M7 10L12 15L17 10" />
+        </svg>
+      );
+    case "logout":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M10 6H6V18H10" />
+          <path {...common} d="M14 8L18 12L14 16" />
+          <path {...common} d="M18 12H9" />
         </svg>
       );
     default:
@@ -2709,6 +3074,23 @@ function describePendingRebuild(value: boolean | null | undefined) {
     return "-";
   }
   return value ? "是" : "否";
+}
+
+function formatUserRoles(roles: string[] | null | undefined) {
+  const normalized = roles || [];
+  if (normalized.includes("admin")) {
+    return "超级管理员";
+  }
+  return normalized.join(", ") || "viewer";
+}
+
+function formatMetricDelta(delta: number | null | undefined): { text: string; tone: "positive" | "negative" | "flat" } {
+  if (typeof delta !== "number" || !Number.isFinite(delta) || delta === 0) {
+    return { text: "0 -", tone: "flat" };
+  }
+  return delta > 0
+    ? { text: `+${delta} ↑`, tone: "positive" }
+    : { text: `${delta} ↓`, tone: "negative" };
 }
 
 function getRequestElapsedMs(trace: TraceRecord | null | undefined) {

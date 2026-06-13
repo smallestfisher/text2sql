@@ -24,6 +24,21 @@ class MetadataOverview(BaseModel):
     trace_count: int
 
 
+class AdminMetricChangeRecord(BaseModel):
+    total: int
+    today: int
+    yesterday: int
+    delta: int
+
+
+class AdminMetricsSummary(BaseModel):
+    users: AdminMetricChangeRecord
+    sessions: AdminMetricChangeRecord
+    query_logs: AdminMetricChangeRecord
+    feedbacks: AdminMetricChangeRecord
+    generated_at: datetime
+
+
 class ExampleCollectionResponse(BaseModel):
     examples: list[ExampleRecord]
     count: int

@@ -20,9 +20,12 @@ class RuntimeAdminService:
         self.session_repository = session_repository
         self.runtime_log_repository = runtime_log_repository
 
-    def list_sessions(self, limit: int = 50) -> RuntimeSessionCollectionResponse:
-        sessions = self.session_repository.list_sessions(limit=limit)
-        return RuntimeSessionCollectionResponse(sessions=sessions, count=len(sessions))
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> RuntimeSessionCollectionResponse:
+        sessions = self.session_repository.list_sessions(limit=limit, offset=offset)
+        return RuntimeSessionCollectionResponse(
+            sessions=sessions,
+            count=self.session_repository.count_sessions(),
+        )
 
     def get_session_history(self, session_id: str) -> SessionHistoryResponse | None:
         session = self.session_repository.get_session(session_id)
@@ -37,6 +40,7 @@ class RuntimeAdminService:
     def list_query_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         session_id: str | None = None,
         user_id: str | None = None,
         sql_risk_level: str | None = None,
@@ -45,13 +49,23 @@ class RuntimeAdminService:
     ) -> RuntimeQueryLogCollectionResponse:
         query_logs = self.runtime_log_repository.list_query_logs(
             limit=limit,
+            offset=offset,
             session_id=session_id,
             user_id=user_id,
             sql_risk_level=sql_risk_level,
             subject_domain=subject_domain,
             risk_flag=risk_flag,
         )
-        return RuntimeQueryLogCollectionResponse(query_logs=query_logs, count=len(query_logs))
+        return RuntimeQueryLogCollectionResponse(
+            query_logs=query_logs,
+            count=self.runtime_log_repository.count_query_logs(
+                session_id=session_id,
+                user_id=user_id,
+                sql_risk_level=sql_risk_level,
+                subject_domain=subject_domain,
+                risk_flag=risk_flag,
+            ),
+        )
 
     def get_query_log(self, trace_id: str) -> RuntimeQueryLogRecord | None:
         return self.runtime_log_repository.get_query_log(trace_id)

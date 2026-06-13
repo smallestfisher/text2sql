@@ -13,15 +13,38 @@ class DbAuthRepository:
     def __init__(self, database_connector: DatabaseConnector) -> None:
         self.database_connector = database_connector
 
-    def list_users(self) -> list[AuthUserRecord]:
+    def list_users(self, limit: int | None = None, offset: int = 0) -> list[AuthUserRecord]:
+        params: dict[str, object] = {}
+        paging_sql = ""
+        if limit is not None:
+            params["limit"] = max(1, limit)
+            params["offset"] = max(0, offset)
+            paging_sql = "LIMIT :limit OFFSET :offset"
         rows = self.database_connector.fetch_all(
-            """
+            f"""
             SELECT user_id, username, password_hash, is_active, created_at, updated_at
             FROM users
             ORDER BY username
-            """
+            {paging_sql}
+            """,
+            params,
         )
         return [self._hydrate_user(row) for row in rows]
+
+    def count_users(self) -> int:
+        row = self.database_connector.fetch_one("SELECT COUNT(*) AS total FROM users")
+        return int(row["total"]) if row else 0
+
+    def count_users_created_between(self, start: datetime, end: datetime) -> int:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM users
+            WHERE created_at >= :start AND created_at < :end
+            """,
+            {"start": start, "end": end},
+        )
+        return int(row["total"]) if row else 0
 
     def list_roles(self) -> list[RoleRecord]:
         rows = self.database_connector.fetch_all(
