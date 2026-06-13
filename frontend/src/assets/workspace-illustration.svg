@@ -1,0 +1,70 @@
+<svg width="560" height="300" viewBox="0 0 560 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="panelA" x1="155" y1="44" x2="318" y2="211" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#AFC4FF" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#657CFF" stop-opacity="0.54"/>
+    </linearGradient>
+    <linearGradient id="panelB" x1="320" y1="58" x2="437" y2="202" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#9CAEFF" stop-opacity="0.62"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#6B55FF"/>
+      <stop offset="1" stop-color="#4F8DFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(280 166) rotate(90) scale(116 260)">
+      <stop stop-color="#6F8DFF" stop-opacity="0.28"/>
+      <stop offset="0.56" stop-color="#8DA7FF" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="80" y="12" width="405" height="270" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="16"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.28 0 0 0 0 0.38 0 0 0 0 0.95 0 0 0 0.18 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="560" height="300" fill="none"/>
+  <ellipse cx="280" cy="162" rx="262" ry="116" fill="url(#glow)"/>
+  <path d="M79 145C135 99 207 82 296 95C392 109 463 93 514 48" stroke="#AFC1FF" stroke-width="1.4" opacity="0.5"/>
+  <path d="M52 202C135 152 217 143 297 174C386 209 467 191 532 128" stroke="#A5B8FF" stroke-width="1.4" opacity="0.48"/>
+  <ellipse cx="282" cy="244" rx="196" ry="28" fill="#809BFF" opacity="0.1"/>
+  <ellipse cx="282" cy="230" rx="184" ry="31" fill="#F9FBFF" opacity="0.86"/>
+  <ellipse cx="282" cy="220" rx="151" ry="23" stroke="#B8C7FF" stroke-width="2" opacity="0.6"/>
+
+  <g filter="url(#shadow)">
+    <rect x="172" y="31" width="148" height="164" rx="16" fill="#EAF1FF" opacity="0.58" stroke="#FFFFFF" stroke-width="2"/>
+    <rect x="150" y="59" width="148" height="164" rx="16" fill="url(#panelA)" stroke="#E9EFFF" stroke-width="2"/>
+    <rect x="170" y="84" width="98" height="13" rx="6.5" fill="#FFFFFF" opacity="0.72"/>
+    <rect x="170" y="113" width="104" height="12" rx="6" fill="#FFFFFF" opacity="0.6"/>
+    <rect x="170" y="138" width="88" height="12" rx="6" fill="#FFFFFF" opacity="0.52"/>
+    <rect x="170" y="163" width="68" height="12" rx="6" fill="#FFFFFF" opacity="0.42"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="330" y="53" width="126" height="165" rx="17" fill="url(#panelB)" stroke="#FFFFFF" stroke-width="2"/>
+    <rect x="351" y="79" width="44" height="9" rx="4.5" fill="#DDE6FF"/>
+    <rect x="351" y="98" width="34" height="8" rx="4" fill="#E3EAFF"/>
+    <rect x="351" y="151" width="15" height="48" rx="7.5" fill="url(#bar)" opacity="0.75"/>
+    <rect x="379" y="130" width="15" height="69" rx="7.5" fill="url(#bar)" opacity="0.75"/>
+    <rect x="407" y="103" width="15" height="96" rx="7.5" fill="url(#bar)" opacity="0.75"/>
+    <rect x="435" y="84" width="15" height="115" rx="7.5" fill="url(#bar)" opacity="0.75"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <path d="M228 120C228 108.954 236.954 100 248 100H338C349.046 100 358 108.954 358 120V185C358 196.046 349.046 205 338 205H315L293 227L271 205H248C236.954 205 228 196.046 228 185V120Z" fill="#F5F8FF" fill-opacity="0.82" stroke="#FFFFFF" stroke-width="2"/>
+    <circle cx="293" cy="165" r="31" fill="#E0E7FF"/>
+    <path d="M293 139C307.359 139 319 150.641 319 165H293V139Z" fill="#4D72FF"/>
+    <path d="M293 191C278.641 191 267 179.359 267 165C267 150.641 278.641 139 293 139V165H319C319 179.359 307.359 191 293 191Z" fill="#6D84FF" opacity="0.86"/>
+  </g>
+
+  <circle cx="82" cy="148" r="6" fill="#6F84FF" opacity="0.58"/>
+  <circle cx="82" cy="148" r="13" stroke="#B3C4FF" stroke-width="2" opacity="0.58"/>
+  <circle cx="499" cy="48" r="5" fill="#EEF3FF"/>
+  <circle cx="499" cy="48" r="12" stroke="#B3C4FF" stroke-width="2" opacity="0.58"/>
+</svg>

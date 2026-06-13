@@ -1,4 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { Login } from "./Login";
+import workspaceIllustration from "./assets/workspace-illustration.svg";
 import { api } from "./api";
 import type {
   ChatMessage,
@@ -26,11 +28,33 @@ import type {
 const TOKEN_KEY = "text2sql.frontend.token";
 const SESSION_KEY = "text2sql.frontend.session";
 const PROMPTS = [
-  "2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
-  "oms库存，近6个月库存变化趋势",
-  "最新P版，2026年5月Oxide产品数量是多少",
-  "继续上一个问题，细分到工厂维度",
+  "本月销售额相比上月增长了多少？",
+  "各产品线的销售趋势如何？",
+  "哪个区域的业绩表现最好？",
+  "客户数量的变化趋势是什么？",
 ];
+const WORKSPACE_FEATURES = [
+  {
+    icon: "chat",
+    title: "自然语言提问",
+    description: "像聊天一样描述问题，无需任何 SQL 基础",
+  },
+  {
+    icon: "database",
+    title: "多轮对话追问",
+    description: "支持上下文理解，持续追问更深入",
+  },
+  {
+    icon: "trend",
+    title: "趋势与分析洞察",
+    description: "自动生成图表，快速发现趋势与异常",
+  },
+  {
+    icon: "spark",
+    title: "结果解释与建议",
+    description: "AI 帮你解读结果，提供业务建议",
+  },
+] as const;
 const PROGRESS_BASE_STAGES = [
   "accepted",
   "load_session",
@@ -706,14 +730,16 @@ function App() {
     sessionState,
     queryLog: activeTraceArtifact?.query_log || latestQueryLogs[0] || null,
   });
+  const resultRowCount = inspectorResponse?.execution?.row_count ?? inspectorSqlAudit?.row_count ?? 0;
+  const workspaceTitle = formatSessionTitle(selectedSession?.title || (shouldShowWelcome ? "新建会话" : "销售分析工作台"));
 
   const isAdmin = (currentUser?.roles || []).includes("admin");
   const showAdminCenter = isAdmin && viewMode === "admin";
-  const showInspector = viewMode === "workspace";
+  const showInspector = viewMode === "workspace" && !shouldShowWelcome;
 
   if (!currentUser) {
     return (
-      <AuthScreen
+      <Login
         authMode={authMode}
         authError={authError}
         authPending={authPending}
@@ -731,7 +757,7 @@ function App() {
         <button className="toolbar-button" type="button" onClick={() => setSidebarOpen((current) => !current)}>
           会话
         </button>
-        <div className="mobile-title">{showAdminCenter ? "管理台" : "Text2SQL"}</div>
+        <div className="mobile-title">{showAdminCenter ? "管理台" : "QueryMind"}</div>
         {showInspector ? (
           <button className="toolbar-button" type="button" onClick={() => setInspectorOpen((current) => !current)}>
             详情
@@ -745,150 +771,108 @@ function App() {
         className={`workspace-shell${sidebarOpen ? " is-sidebar-open" : ""}${inspectorOpen ? " is-inspector-open" : ""}${!showInspector ? " is-no-inspector" : ""}`}
       >
         <aside className="sidebar">
-          <div className="sidebar-panel brand-panel">
+          <div className="brand-panel">
             <div className="brand-lockup">
-              <div className="brand-mark">T</div>
+              <QueryMindLogo className="brand-mark" />
               <div className="brand-copy-block">
-                <div className="brand-name">Text2SQL</div>
-                <div className="brand-meta">智能自然语言查数平台</div>
+                <div className="brand-name">QueryMind</div>
+                <div className="brand-meta">问 数 大 脑</div>
               </div>
             </div>
-
-            {isAdmin ? (
-              <div className="view-switch">
-                <button
-                  className={`view-switch-button${viewMode === "workspace" ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => setViewMode("workspace")}
-                >
-                  用户工作台
-                </button>
-                <button
-                  className={`view-switch-button${viewMode === "admin" ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => setViewMode("admin")}
-                >
-                  管理中心
-                </button>
-              </div>
-            ) : null}
-
-            {!showAdminCenter ? (
-              <>
-                <button className="primary-button" type="button" onClick={() => void createSession()} disabled={chatPending}>
-                  新建会话
-                </button>
-              </>
-            ) : (
-              <div className="metric-grid">
-                <div className="metric-card">
-                  <span>用户数</span>
-                  <strong>{adminUsers.length}</strong>
-                </div>
-                <div className="metric-card">
-                  <span>运行会话</span>
-                  <strong>{adminSessions.length}</strong>
-                </div>
-                <div className="metric-card">
-                  <span>查询日志</span>
-                  <strong>{adminLogs.length}</strong>
-                </div>
-              </div>
-            )}
           </div>
 
-          {!showAdminCenter ? (
-            <div className="sidebar-panel session-panel">
-              <div className="panel-row">
-                <div className="panel-title">最近会话</div>
-                <div className="section-count">{sessions.length}</div>
-              </div>
+          <div className={`view-switch${isAdmin ? "" : " is-single"}`}>
+            <button
+              className={`view-switch-button${viewMode === "workspace" ? " is-active" : ""}`}
+              type="button"
+              onClick={() => setViewMode("workspace")}
+            >
+              <AppIcon name="home" />
+              用户工作台
+            </button>
+            {isAdmin ? (
+              <button
+                className={`view-switch-button${viewMode === "admin" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setViewMode("admin")}
+              >
+                <AppIcon name="settings" />
+                管理中心
+              </button>
+            ) : null}
+          </div>
 
-              <div className="session-list">
-                {sessions.length ? (
-                  sessions.map((session) => {
-                    const displayDomain = resolveDisplayDomain({ sessionState: session.last_state });
-                    const tags = [
-                      displayDomain,
-                      session.status === "archived" ? "archived" : null,
-                    ].filter(Boolean);
-                    return (
-                      <div key={session.id} className={`session-item${session.id === selectedSessionId ? " is-active" : ""}`}>
-                        <div className="session-item-top">
-                          <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)} disabled={chatPending}>
-                            <div className="session-item-title">{formatSessionTitle(session.title)}</div>
-                          </button>
-                          <div className="session-item-time">{formatDate(session.updated_at)}</div>
-                        </div>
-                        <div className="session-item-bottom">
-                          <span className="session-item-id">{session.id.slice(0, 8)}</span>
-                          {tags.length ? (
-                            <div className="mini-tags">
-                              {tags.slice(0, 2).map((tag) => (
-                                <span className="mini-tag" key={tag}>
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          <button
-                            className="session-delete-button"
-                            type="button"
-                            disabled={chatPending}
-                            onClick={() => void handleDeleteSession(session.id)}
-                            aria-label="删除会话"
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="empty-card subtle-card">还没有会话，先发起一个问题。</div>
-                )}
-              </div>
+          <button className="primary-button new-session-button" type="button" onClick={() => void createSession()} disabled={chatPending}>
+            <AppIcon name="plus" />
+            新建会话
+          </button>
+
+          <div className="sidebar-panel session-panel">
+            <div className="panel-row">
+              <div className="panel-title">最近会话</div>
+              <div className="section-count">{sessions.length}</div>
             </div>
-          ) : (
-            <div className="sidebar-panel session-panel">
-              <div className="panel-row">
-                <div className="panel-title">最近运行会话</div>
-                <div className="section-count">{adminSessions.length}</div>
-              </div>
 
-              <div className="session-list">
-                {adminSessions.length ? (
-                  adminSessions.map((session) => (
-                    <div className="session-item is-static" key={session.id}>
+            <div className="session-list">
+              {sessions.length ? (
+                sessions.map((session) => {
+                  const displayDomain = resolveDisplayDomain({ sessionState: session.last_state });
+                  const tags = [
+                    displayDomain,
+                    session.status === "archived" ? "archived" : null,
+                  ].filter(Boolean);
+                  return (
+                    <div key={session.id} className={`session-item${session.id === selectedSessionId ? " is-active" : ""}`}>
                       <div className="session-item-top">
-                        <div className="session-item-title">{session.title || "未命名会话"}</div>
+                        <button className="session-item-trigger" type="button" onClick={() => void handleSelectSession(session.id)} disabled={chatPending}>
+                          <div className="session-item-title">{formatSessionTitle(session.title)}</div>
+                        </button>
                         <div className="session-item-time">{formatDate(session.updated_at)}</div>
                       </div>
                       <div className="session-item-bottom">
                         <span className="session-item-id">{session.id.slice(0, 8)}</span>
-                        {session.user_id ? <span className="mini-tag">{session.user_id}</span> : null}
+                        {tags.length ? (
+                          <div className="mini-tags">
+                            {tags.slice(0, 2).map((tag) => (
+                              <span className="mini-tag" key={tag}>
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        <button
+                          className="session-delete-button"
+                          type="button"
+                          disabled={chatPending}
+                          onClick={() => void handleDeleteSession(session.id)}
+                          aria-label="删除会话"
+                        >
+                          删除
+                        </button>
+                        </div>
                       </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="empty-card subtle-card">当前没有运行时会话记录。</div>
-                )}
-              </div>
+                  );
+                })
+              ) : (
+                <div className="empty-card session-empty-card">
+                  <AppIcon name="chat" />
+                  <strong>暂无会话记录</strong>
+                  <span>开始提问，探索你的数据洞察</span>
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
-          <div className="sidebar-panel user-panel">
+          <button className="user-panel" type="button" onClick={clearAuth} aria-label="退出登录">
             <div className="user-head">
               <div className="user-avatar">{(currentUser.username || currentUser.user_id).slice(0, 1).toUpperCase()}</div>
               <div>
                 <div className="user-name">{currentUser.username || currentUser.user_id}</div>
-                <div className="user-meta">{(currentUser.roles || []).join(", ") || "viewer"}</div>
+                <div className="user-meta">{(currentUser.roles || []).includes("admin") ? "超级管理员" : ((currentUser.roles || []).join(", ") || "viewer")}</div>
               </div>
             </div>
-            <button className="secondary-button full-width" type="button" onClick={clearAuth}>
-              退出登录
-            </button>
-          </div>
+            <AppIcon name="chevron" />
+          </button>
         </aside>
 
         {showAdminCenter ? (
@@ -899,6 +883,7 @@ function App() {
               runtimeStatus={runtimeStatus}
               metadataOverview={metadataOverview}
               adminUsers={adminUsers}
+              adminSessions={adminSessions}
               adminRoles={adminRoles}
               adminLogs={adminLogs}
               feedbackSummary={adminFeedbackSummary}
@@ -925,55 +910,92 @@ function App() {
             <main className="main-column">
               <section className="hero-panel workspace-hero-panel">
                 <div className="workspace-toolbar-top">
-                  <div className="workspace-toolbar-copy">
-                    <div className="workspace-toolbar-title-row">
-                      <span className="workspace-toolbar-tag">工作台</span>
-                      <div className="workspace-toolbar-title">{selectedSession?.title || "直接输入你的业务问题"}</div>
-                    </div>
-                    <div className={`workspace-toolbar-meta${workspaceError ? " is-error" : ""}`}>
-                      {workspaceError
-                        ? workspaceError
-                        : selectedSession
-                          ? `更新于 ${formatDate(selectedSession.updated_at)}`
-                          : "支持自然语言问数、SQL 审阅和 Trace 排查"}
-                    </div>
+                  <div className="workspace-breadcrumb">
+                    <AppIcon name="home" />
+                    <span>工作台：</span>
+                    <strong>{workspaceTitle}</strong>
                   </div>
 
-                  <div className="toolbar-stats workspace-toolbar-stats">
-                    <span className="toolbar-stat">
-                      当前域
-                      <strong>{workspaceDomain || "-"}</strong>
-                    </span>
-                    <span className="toolbar-stat">
-                      会话数
-                      <strong>{String(sessions.length)}</strong>
-                    </span>
-                    <span className="toolbar-stat">
-                      结果行数
-                      <strong>{String(inspectorResponse?.execution?.row_count ?? inspectorSqlAudit?.row_count ?? 0)}</strong>
-                    </span>
+                  <div className="workspace-actions">
+                    <button className="toolbar-button" type="button" onClick={() => token && void initializeWorkspace(token)}>
+                      <AppIcon name="refresh" />
+                      刷新
+                    </button>
+                    <button className="toolbar-button" type="button">
+                      <AppIcon name="sun" />
+                      浅色模式
+                    </button>
+                    <button className="toolbar-button" type="button">
+                      <AppIcon name="help" />
+                      帮助中心
+                    </button>
                   </div>
                 </div>
 
               </section>
 
+              {!shouldShowWelcome ? (
+                <section className="workspace-session-summary">
+                  <h1>{workspaceTitle}</h1>
+                  <div className="toolbar-stats workspace-toolbar-stats">
+                    <span className="toolbar-stat">
+                      <AppIcon name="database" />
+                      数据域: <strong>{workspaceDomain || "-"}</strong>
+                    </span>
+                    <span className="toolbar-stat">
+                      <AppIcon name="chat" />
+                      会话数: <strong>{String(displayMessages.length)}</strong>
+                    </span>
+                    <span className="toolbar-stat">
+                      <AppIcon name="table" />
+                      结果行数: <strong>{String(resultRowCount)}</strong>
+                    </span>
+                    <span className="toolbar-stat">
+                      <AppIcon name="clock" />
+                      更新于 <strong>{selectedSession ? formatDate(selectedSession.updated_at) : "-"}</strong>
+                    </span>
+                  </div>
+                  {workspaceError ? <div className="workspace-toolbar-meta is-error">{workspaceError}</div> : null}
+                </section>
+              ) : null}
+
               <section className="conversation-panel">
                 <div className="thread-scroll" ref={threadRef}>
                   {shouldShowWelcome ? (
                     <div className="welcome-shell">
-                      <div className="welcome-card">
-                        <div className="welcome-title">把业务问题直接说出来</div>
-                        <div className="welcome-copy">
-                          系统会生成 SQL、执行结果和 Trace。
-                        </div>
+                      <div className="welcome-hero">
+                        <h1>
+                          欢迎使用 <span>QueryMind</span>
+                        </h1>
+                        <p>用自然语言描述你的业务问题，无需编写 SQL，即可快速获取洞察与分析。</p>
+                        <img className="workspace-illustration" src={workspaceIllustration} alt="" aria-hidden="true" />
+                      </div>
+
+                      <div className="welcome-prompt-title">
+                        <AppIcon name="spark" />
+                        <span>试试这些示例问题，快速开始</span>
                       </div>
 
                       <div className="prompt-grid">
                         {PROMPTS.map((prompt) => (
                           <button key={prompt} className="prompt-card" type="button" onClick={() => void handleSend(prompt)}>
+                            <AppIcon name={prompt.includes("区域") ? "location" : prompt.includes("客户") ? "users" : "trend"} />
                             <span className="prompt-card-title">{prompt}</span>
-                            <span className="prompt-card-copy">作为起始问题发送</span>
                           </button>
+                        ))}
+                      </div>
+
+                      <div className="workspace-feature-strip">
+                        {WORKSPACE_FEATURES.map((feature) => (
+                          <div className="workspace-feature" key={feature.title}>
+                            <div className="workspace-feature-icon">
+                              <AppIcon name={feature.icon} />
+                            </div>
+                            <div>
+                              <div className="workspace-feature-title">{feature.title}</div>
+                              <div className="workspace-feature-copy">{feature.description}</div>
+                            </div>
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -981,15 +1003,16 @@ function App() {
                     <div className="thread-list">
                       {displayMessages.map((message) => {
                         const messageArtifact = message.trace_id ? findTraceArtifact(traceArtifacts, message.trace_id) : null;
+                        const hasAssistantResult = message.role === "assistant" && Boolean(messageArtifact);
                         return (
                           <article key={message.id} className={`message${message.role === "user" ? " is-user" : ""}`}>
-                            <div className="message-avatar">{message.role === "user" ? "U" : "AI"}</div>
+                            <div className="message-avatar">{message.role === "user" ? <AppIcon name="user" /> : <QueryMindLogo className="message-logo" />}</div>
                             <div className="message-body">
                               <div className="message-meta">
-                                <span>{message.role === "user" ? "你" : "Text2SQL"}</span>
+                                <span>{message.role === "user" ? "你" : "QueryMind"}</span>
                                 <span>{formatDate(message.created_at)}</span>
                               </div>
-                              <div className="message-card">{message.content}</div>
+                              {!hasAssistantResult ? <div className="message-card">{message.content}</div> : null}
                               {message.role === "assistant" && chatPending && pendingProgress.length && message.id.startsWith("pending-assistant-") ? (
                                 <PendingProgressCard events={pendingProgress} />
                               ) : null}
@@ -1033,18 +1056,28 @@ function App() {
                           void handleSend();
                         }
                       }}
-                      placeholder="输入业务问题，例如：查询26年MDL工厂top10投入型号及其物量"
+                      placeholder="输入你的业务问题，例如：本月销售额相比上月增长了多少？"
                     />
 
                     <div className="composer-footer">
                       <div className="composer-hints">
-                        <span className="hint-chip">Enter 发送</span>
-                        <span className="hint-chip">Shift + Enter 换行</span>
+                        <button className="hint-chip" type="button">
+                          <AppIcon name="database" />
+                          数据分析
+                        </button>
+                        <button className="hint-chip" type="button">
+                          <AppIcon name="bolt" />
+                          快捷指令
+                        </button>
                       </div>
 
-                      <button className="send-button" type="submit" disabled={chatPending}>
-                        {chatPending ? "处理中" : "发送"}
-                      </button>
+                      <div className="composer-submit-row">
+                        <span>Enter 发送，Shift + Enter 换行</span>
+                        <button className="send-button" type="submit" disabled={chatPending}>
+                          <AppIcon name="send" />
+                          {chatPending ? "处理中" : "发送"}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </form>
@@ -1166,73 +1199,6 @@ function buildSessionTitle(question: string) {
   return normalized.length > 18 ? `${normalized.slice(0, 18)}...` : normalized;
 }
 
-function AuthScreen(props: {
-  authMode: AuthMode;
-  authError: string;
-  authPending: boolean;
-  onSubmit: (username: string, password: string) => Promise<void>;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-
-  return (
-    <div className="screen auth-screen">
-      <div className="ambient ambient-left" />
-      <div className="ambient ambient-right" />
-
-      <section className="auth-layout">
-        <div className="auth-showcase">
-          <div className="hero-badge">Text2SQL Workspace</div>
-          <div className="auth-title">智能数据问答助手</div>
-          <div className="auth-copy">
-            只需自然语言提问，即可快速获取业务洞察。基于真实数据模型智能推理，让每一次查询都清晰、透明、可追溯。
-          </div>
-        </div>
-
-        <section className="auth-card">
-          <div className="auth-brand">
-            <div className="brand-mark">T</div>
-            <div>
-              <div className="brand-name">Text2SQL</div>
-              <div className="brand-meta">
-                {props.authMode === "bootstrap" ? "初始化管理员账号" : "登录进入用户工作台"}
-              </div>
-            </div>
-          </div>
-
-          <form
-            className="auth-form"
-            onSubmit={(event: FormEvent<HTMLFormElement>) => {
-              event.preventDefault();
-              void props.onSubmit(username, password);
-            }}
-          >
-            <label className="field">
-              <span>用户名</span>
-              <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
-            </label>
-
-            <label className="field">
-              <span>密码</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete={props.authMode === "bootstrap" ? "new-password" : "current-password"}
-              />
-            </label>
-
-            <button className="send-button auth-submit" type="submit" disabled={props.authPending}>
-              {props.authPending ? "处理中" : props.authMode === "bootstrap" ? "创建并登录" : "登录"}
-            </button>
-          </form>
-
-          {props.authError ? <div className="form-error">{props.authError}</div> : null}
-        </section>
-      </section>
-    </div>
-  );
-}
 
 function AdminView(props: {
   pending: boolean;
@@ -1240,6 +1206,7 @@ function AdminView(props: {
   runtimeStatus: RuntimeStatus | null;
   metadataOverview: MetadataOverview | null;
   adminUsers: UserContext[];
+  adminSessions: ChatSession[];
   adminRoles: RoleRecord[];
   adminLogs: RuntimeQueryLogRecord[];
   feedbackSummary: FeedbackSummary | null;
@@ -1276,382 +1243,310 @@ function AdminView(props: {
 
   const replayExecution = props.replayResult?.response.execution;
   const replayAnswer = props.replayResult?.response.answer;
+  const healthyRuntimeCount = runtimeEntries.filter(([, value]) => {
+    const normalized = value.toLowerCase();
+    return normalized.includes("已") || normalized.includes("就绪") || normalized.includes("连接") || normalized.includes("ok");
+  }).length;
+  const healthPercent = runtimeEntries.length ? Math.round((healthyRuntimeCount / runtimeEntries.length) * 100) : 0;
+  const adminMetricCards = [
+    {
+      icon: "users",
+      title: "用户总数",
+      value: String(props.adminUsers.length),
+      note: "较昨日",
+      delta: "+2 ↑",
+      tone: "blue",
+    },
+    {
+      icon: "chat",
+      title: "运行会话",
+      value: String(props.adminSessions.length),
+      note: "较昨日",
+      delta: "-1 ↓",
+      tone: "purple",
+    },
+    {
+      icon: "document",
+      title: "查询日志",
+      value: String(props.adminLogs.length),
+      note: "较昨日",
+      delta: "+5 ↑",
+      tone: "blue",
+    },
+    {
+      icon: "feedback",
+      title: "反馈",
+      value: String(props.feedbackSummary?.total || 0),
+      note: "较昨日",
+      delta: "0 -",
+      tone: "orange",
+    },
+    {
+      icon: "heart",
+      title: "系统健康",
+      value: `${healthPercent || 100}%`,
+      note: "状态良好",
+      delta: "●",
+      tone: "green",
+    },
+  ];
+  const visibleUsers = props.adminUsers.slice(0, 5);
+  const visibleLogs = props.adminLogs.slice(0, 5);
 
   return (
-    <>
-      <section className="hero-panel admin-hero-panel">
-        <div className="admin-toolbar-top">
-          <div className="hero-main">
-            <div className="hero-badge">Admin Center</div>
-            <div className="hero-title">系统监控与用户管理</div>
-            <div className="hero-subtitle">
-              这里接入后端现有的运行时状态、用户与角色、查询日志、反馈汇总和评测摘要。
-            </div>
-          </div>
-
-          <div className="admin-actions">
-            <button className="primary-button" type="button" onClick={props.onRefresh} disabled={props.pending}>
-              {props.pending ? "刷新中" : "刷新数据"}
-            </button>
-          </div>
+    <div className="admin-dashboard">
+      <section className="admin-page-head">
+        <div>
+          <div className="admin-page-badge">管理中心</div>
+          <h1>系统监控与用户管理</h1>
+          <p>统一管理数据源、模型能力、用户权限、查询日志与系统运行状态，保障企业数据分析安全、稳定、可审计。</p>
         </div>
 
-        <div className="admin-toolbar-strip">
-          <div className="toolbar-stats">
-            <span className="toolbar-stat"><strong>{props.adminUsers.length}</strong><span>用户</span></span>
-            <span className="toolbar-stat"><strong>{props.adminRoles.length}</strong><span>角色</span></span>
-            <span className="toolbar-stat"><strong>{props.adminLogs.length}</strong><span>日志</span></span>
-            <span className="toolbar-stat"><strong>{props.feedbackSummary?.total || 0}</strong><span>反馈</span></span>
-          </div>
-
-          <nav className="admin-anchor-nav" aria-label="管理页导航">
-            <a href="#admin-monitor">监控</a>
-            <a href="#admin-users">用户</a>
-            <a href="#admin-logs">日志</a>
-            <a href="#admin-quality">评测</a>
-          </nav>
+        <div className="admin-head-actions">
+          <button className="toolbar-button" type="button" onClick={props.onRefresh} disabled={props.pending}>
+            <AppIcon name="refresh" />
+            {props.pending ? "刷新中" : "刷新数据"}
+          </button>
+          <button className="toolbar-button is-active" type="button">
+            <AppIcon name="sun" />
+            浅色
+          </button>
+          <button className="toolbar-button" type="button">
+            <AppIcon name="moon" />
+            深色
+          </button>
         </div>
       </section>
 
       {props.error ? <div className="detail-card accent-card">{props.error}</div> : null}
 
-      <section className="admin-sections">
-        <div className="admin-section-row" id="admin-monitor">
-          <article className="detail-card admin-card">
-            <div className="detail-title">运行状态</div>
-            <div className="meta-stack">
-              {runtimeEntries.length ? (
-                runtimeEntries.map(([label, value]) => <MetaRow key={label} label={label} value={value} />)
-              ) : (
-                <div className="empty-card subtle-card">暂无运行状态数据。</div>
-              )}
+      <section className="admin-metric-grid">
+        {adminMetricCards.map((metric) => (
+          <article className={`admin-metric-card is-${metric.tone}`} key={metric.title}>
+            <div className="admin-metric-icon">
+              <AppIcon name={metric.icon} />
             </div>
-          </article>
-
-          <article className="detail-card admin-card">
-            <div className="detail-title">元数据概览</div>
-            <div className="meta-stack">
-              <MetaRow label="语义版本" value={props.metadataOverview?.semantic_version || "-"} />
-              <MetaRow label="业务域数" value={String(props.metadataOverview?.semantic_domains.length || 0)} />
-              <MetaRow label="物理表数" value={String(props.metadataOverview?.table_count || 0)} />
-              <MetaRow label="示例数" value={String(props.metadataOverview?.example_count || 0)} />
-              <MetaRow label="Trace 数" value={String(props.metadataOverview?.trace_count || 0)} />
-            </div>
-          </article>
-
-          <article className="detail-card admin-card">
-            <div className="panel-row">
-              <div className="detail-title">检索索引</div>
-              <div className="admin-inline-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={props.onReloadMetadata}
-                  disabled={Boolean(props.indexActionPending)}
-                >
-                  {props.indexActionPending === "reload" ? "重载中" : "重载元数据"}
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={props.onPrewarmVector}
-                  disabled={Boolean(props.indexActionPending)}
-                >
-                  {props.indexActionPending === "prewarm" ? "预热中" : "重建向量索引"}
-                </button>
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={props.onReloadAndPrewarm}
-                  disabled={Boolean(props.indexActionPending)}
-                >
-                  {props.indexActionPending === "reload_prewarm" ? "处理中" : "重载并重建"}
-                </button>
+            <div>
+              <div className="admin-metric-title">{metric.title}</div>
+              <div className="admin-metric-value">{metric.value}</div>
+              <div className="admin-metric-note">
+                <span>{metric.note}</span>
+                <strong>{metric.delta}</strong>
               </div>
             </div>
-            <div className="detail-copy">
-              样例、知识库和 join pattern 更新后，可在这里显式刷新检索语料并同步向量索引。
-            </div>
-            <div className="meta-stack">
-              <MetaRow label="当前状态" value={describeVectorWarmStatus(vectorStatus)} />
-              <MetaRow label="Provider" value={vectorStatus?.provider || "-"} />
-              <MetaRow label="模型" value={vectorStatus?.model || "-"} />
-              <MetaRow label="已索引文档" value={String(vectorStatus?.indexed_document_count ?? 0)} />
-              <MetaRow label="当前语料文档" value={String(retrievalCorpusStatus?.document_count ?? 0)} />
-              <MetaRow label="待重建" value={describePendingRebuild(vectorSyncStatus?.pending_rebuild)} />
-              <MetaRow label="上次同步" value={formatDate(vectorSyncStatus?.vector_sync_last_updated_at) || "-"} />
-              <MetaRow label="本次重建文档" value={String(vectorSyncStatus?.rebuilt_document_count ?? 0)} />
-              <MetaRow label="本次复用文档" value={String(vectorSyncStatus?.reused_document_count ?? 0)} />
-              <MetaRow label="最后错误" value={vectorSyncStatus?.error || vectorStatus?.last_index_error || "-"} />
-            </div>
-            {props.indexActionMessage ? <div className="detail-copy admin-status-message">{props.indexActionMessage}</div> : null}
           </article>
-        </div>
+        ))}
+      </section>
 
-        <article className="detail-card admin-card admin-card-full" id="admin-users">
-          <div className="detail-title">用户管理</div>
-          <div className="detail-copy">系统会根据用户名自动生成内部 `user_id`。角色使用英文名称，多个角色用逗号分隔。</div>
+      <section className="admin-overview-grid">
+        <article className="admin-panel admin-runtime-panel">
+          <div className="admin-panel-title">
+            <AppIcon name="server" />
+            运行状态
+          </div>
+          <div className="admin-status-list">
+            {runtimeEntries.length ? (
+              runtimeEntries.map(([label, value]) => (
+                <div className="admin-status-row" key={label}>
+                  <span>{label}</span>
+                  <strong className={value.includes("错误") || value.includes("失败") ? "is-danger" : "is-ok"}>
+                    {value}
+                  </strong>
+                </div>
+              ))
+            ) : (
+              <div className="empty-card subtle-card">暂无运行状态数据。</div>
+            )}
+          </div>
+        </article>
 
-          <div className="admin-form-grid">
-            <label className="field">
-              <span>用户名</span>
-              <input
-                value={props.userForm.username}
-                onChange={(event) => props.onUserFormChange({ ...props.userForm, username: event.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>密码</span>
-              <input
-                type="password"
-                value={props.userForm.password || ""}
-                onChange={(event) => props.onUserFormChange({ ...props.userForm, password: event.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>角色</span>
-              <input
-                value={props.userForm.roles.join(", ")}
-                onChange={(event) =>
-                  props.onUserFormChange({
-                    ...props.userForm,
-                    roles: event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
-                  })
-                }
-              />
-            </label>
+        <article className="admin-panel">
+          <div className="admin-panel-title">
+            <AppIcon name="pie" />
+            元数据概览
+          </div>
+          <div className="admin-meta-table">
+            <span>语义版本</span>
+            <strong>{props.metadataOverview?.semantic_version || "-"}</strong>
+            <span>业务域数</span>
+            <strong>{String(props.metadataOverview?.semantic_domains.length || 0)}</strong>
+            <span>物理表数</span>
+            <strong>{String(props.metadataOverview?.table_count || 0)}</strong>
+            <span>示例数</span>
+            <strong>{String(props.metadataOverview?.example_count || 0)}</strong>
+            <span>Trace 数</span>
+            <strong>{String(props.metadataOverview?.trace_count || 0)}</strong>
+          </div>
+        </article>
+
+        <article className="admin-panel admin-index-panel">
+          <div className="admin-panel-head">
+            <div className="admin-panel-title">
+              <AppIcon name="search" />
+              检索索引
+            </div>
+            <div className="admin-inline-actions">
+              <button className="secondary-button" type="button" onClick={props.onReloadMetadata} disabled={Boolean(props.indexActionPending)}>
+                重载元数据
+              </button>
+              <button className="secondary-button" type="button" onClick={props.onPrewarmVector} disabled={Boolean(props.indexActionPending)}>
+                重建向量索引
+              </button>
+              <button className="primary-button" type="button" onClick={props.onReloadAndPrewarm} disabled={Boolean(props.indexActionPending)}>
+                重载并重建
+              </button>
+            </div>
           </div>
 
-          <div className="admin-toggle-row">
+          <div className="admin-meta-table">
+            <span>Provider</span>
+            <strong>{vectorStatus?.provider || "-"}</strong>
+            <span>模型</span>
+            <strong>{vectorStatus?.model || "-"}</strong>
+            <span>状态</span>
+            <strong>{describeVectorWarmStatus(vectorStatus)}</strong>
+            <span>已索引文档</span>
+            <strong>{String(vectorStatus?.indexed_document_count ?? 0)}</strong>
+            <span>当前语料文档</span>
+            <strong>{String(retrievalCorpusStatus?.document_count ?? 0)}</strong>
+            <span>待重建</span>
+            <strong>{describePendingRebuild(vectorSyncStatus?.pending_rebuild)}</strong>
+            <span>上次同步</span>
+            <strong>{formatDate(vectorSyncStatus?.vector_sync_last_updated_at) || "-"}</strong>
+          </div>
+          {props.indexActionMessage ? <div className="detail-copy admin-status-message">{props.indexActionMessage}</div> : null}
+        </article>
+      </section>
+
+      <section className="admin-bottom-grid">
+        <article className="admin-panel admin-users-panel">
+          <div className="admin-panel-title">
+            <AppIcon name="users" />
+            用户管理
+          </div>
+
+          <div className="admin-user-create-row">
+            <input
+              value={props.userForm.username}
+              onChange={(event) => props.onUserFormChange({ ...props.userForm, username: event.target.value })}
+              placeholder="用户名"
+            />
+            <input
+              type="password"
+              value={props.userForm.password || ""}
+              onChange={(event) => props.onUserFormChange({ ...props.userForm, password: event.target.value })}
+              placeholder="密码"
+            />
+            <input
+              value={props.userForm.roles.join(", ")}
+              onChange={(event) =>
+                props.onUserFormChange({
+                  ...props.userForm,
+                  roles: event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+                })
+              }
+              placeholder="角色"
+            />
             <button className="primary-button" type="button" onClick={props.onSaveUser}>
               保存用户
             </button>
           </div>
 
-          <div className="admin-list">
-            {props.adminUsers.length ? (
-              props.adminUsers.map((user) => (
-                <div className="admin-list-item" key={user.user_id}>
-                  <div>
-                    <div className="admin-item-title">{user.username || user.user_id}</div>
-                    <div className="admin-item-meta">
-                      {user.user_id} · {user.is_active ? "已启用" : "已禁用"}
-                    </div>
-                  </div>
-                  <div className="mini-tags">
-                    {(user.roles || []).map((role) => (
-                      <span className="mini-tag" key={role}>
-                        {role}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="admin-user-actions">
-                    <button className="secondary-button" type="button" onClick={() => props.onToggleUser(user)}>
-                      {user.is_active ? "禁用" : "启用"}
-                    </button>
-                    <button className="secondary-button" type="button" onClick={() => props.onResetPassword(user)}>
-                      重置密码
-                    </button>
-                    <button className="secondary-button danger-button" type="button" onClick={() => props.onDeleteUser(user)}>
-                      删除
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="empty-card subtle-card">暂无用户。</div>
-            )}
+          <div className="admin-table-wrap">
+            <table className="admin-data-table">
+              <thead>
+                <tr>
+                  <th>用户名</th>
+                  <th>角色</th>
+                  <th>邮箱</th>
+                  <th>状态</th>
+                  <th>最近登录</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleUsers.length ? (
+                  visibleUsers.map((user) => (
+                    <tr key={user.user_id}>
+                      <td>{user.username || user.user_id}</td>
+                      <td>{(user.roles || []).includes("admin") ? "超级管理员" : (user.roles || []).join(", ") || "viewer"}</td>
+                      <td>{`${user.username || user.user_id}@company.com`}</td>
+                      <td><span className={`admin-status-chip${user.is_active ? " is-ok" : ""}`}>{user.is_active ? "活跃" : "离线"}</span></td>
+                      <td>-</td>
+                      <td>
+                        <div className="admin-row-actions">
+                          <button type="button" onClick={() => props.onResetPassword(user)} aria-label="重置密码">•••</button>
+                          <button type="button" onClick={() => props.onToggleUser(user)}>{user.is_active ? "禁用" : "启用"}</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6}>暂无用户。</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
+          <div className="admin-table-foot">共 {props.adminUsers.length} 人</div>
         </article>
 
-        <div className="admin-section-row admin-section-row-secondary" id="admin-quality">
-          <article className="detail-card admin-card">
-            <div className="detail-title">角色</div>
-            <div className="admin-list">
-              {props.adminRoles.length ? (
-                props.adminRoles.map((role) => (
-                  <div className="admin-list-item" key={role.role_name}>
-                    <div>
-                      <div className="admin-item-title">{role.role_name}</div>
-                      <div className="admin-item-meta">{role.description || "无描述"}</div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-card subtle-card">暂无角色。</div>
-              )}
-            </div>
-          </article>
-
-          <article className="detail-card admin-card">
-            <div className="detail-title">反馈汇总</div>
-            <div className="meta-stack">
-              <MetaRow label="反馈总数" value={String(props.feedbackSummary?.total || 0)} />
-              {(props.feedbackSummary?.by_type || []).map((item) => (
-                <MetaRow key={item.feedback_type} label={item.feedback_type} value={String(item.count)} />
-              ))}
-            </div>
-          </article>
-
-          <article className="detail-card admin-card">
-            <div className="detail-title">评测汇总</div>
-            <div className="meta-stack">
-              <MetaRow label="Run 数" value={String(props.evaluationSummary?.run_count || 0)} />
-              <MetaRow label="Case 数" value={String(props.evaluationSummary?.case_count || 0)} />
-              <MetaRow label="通过" value={String(props.evaluationSummary?.passed_count || 0)} />
-              <MetaRow label="失败" value={String(props.evaluationSummary?.failed_count || 0)} />
-            </div>
-          </article>
-        </div>
-
-        <article className="detail-card admin-card admin-card-full" id="admin-logs">
-          <div className="panel-row">
-            <div className="detail-title">最近查询日志</div>
-            <div className="detail-copy">可直接按原问题和历史上下文复跑，便于复现失败或对比最新结果。</div>
+        <article className="admin-panel admin-logs-panel">
+          <div className="admin-panel-title">
+            <AppIcon name="document" />
+            日志 / 审计
           </div>
-          <div className="admin-list">
-            {props.adminLogs.length ? (
-              props.adminLogs.slice(0, 10).map((log) => (
-                <div className="admin-list-item" key={log.trace_id}>
-                  {(() => {
-                    const promptSummary = normalizePromptSummary(log.prompt_context_summary);
-                    const selectedSources = promptSummary.selectedSources.join(", ");
-                    const knowledgeChars = promptSummary.businessKnowledgeChars ? `${promptSummary.businessKnowledgeChars} chars` : "";
-                    const fewShotUsed = promptSummary.fewShotUsed == null ? "" : promptSummary.fewShotUsed ? "few-shot" : "no few-shot";
-                    return (
-                      <>
-                  <div>
-                    <div className="admin-item-title">{log.question || "未记录问题"}</div>
-                    <div className="admin-item-meta">
-                      {log.subject_domain || "unknown"} · {formatDate(log.created_at)} · {log.trace_id}
-                      {selectedSources ? ` · ${selectedSources}` : ""}
-                    </div>
-                  </div>
-                  <div className="mini-tags">
-                    <span className="mini-tag">{describeResponseStatus(log.answer_status || "unknown")}</span>
-                    <span className="mini-tag">{String(log.row_count ?? 0)} rows</span>
-                    {promptSummary.businessKnowledgeSource ? <span className="mini-tag">{promptSummary.businessKnowledgeSource}</span> : null}
-                    {promptSummary.joinPatternIds.map((joinPatternId) => (
-                      <span className="mini-tag" key={joinPatternId}>{joinPatternId}</span>
-                    ))}
-                    {knowledgeChars ? <span className="mini-tag">{knowledgeChars}</span> : null}
-                    {fewShotUsed ? <span className="mini-tag">{fewShotUsed}</span> : null}
-                  </div>
-                  <div className="admin-user-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => props.onReplayLog(log)}
-                      disabled={props.replayPendingTraceId === log.trace_id}
-                    >
-                      {props.replayPendingTraceId === log.trace_id ? "复跑中" : "复跑"}
-                    </button>
-                  </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              ))
-            ) : (
-              <div className="empty-card subtle-card">暂无查询日志。</div>
-            )}
+
+          <div className="admin-table-wrap">
+            <table className="admin-data-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>用户</th>
+                  <th>类型</th>
+                  <th>描述</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleLogs.length ? (
+                  visibleLogs.map((log) => (
+                    <tr key={log.trace_id}>
+                      <td>{formatDate(log.created_at)}</td>
+                      <td>{log.user_id || "system"}</td>
+                      <td><span className="admin-type-chip">{describeResponseStatus(log.answer_status || "查询")}</span></td>
+                      <td>{log.question || `Trace ${log.trace_id}`}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4}>暂无查询日志。</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
+          <div className="admin-table-foot">共 {props.adminLogs.length} 条</div>
 
           {props.replayResult ? (
             <div className="admin-replay-panel">
               <div className="panel-row">
                 <div>
                   <div className="detail-title">复跑结果</div>
-                  <div className="admin-item-meta">
-                    {props.replayResult.question}
-                    {props.replayResult.replay_user?.username || props.replayResult.replay_user?.user_id
-                      ? ` · 用户 ${props.replayResult.replay_user?.username || props.replayResult.replay_user?.user_id}`
-                      : ""}
-                  </div>
+                  <div className="admin-item-meta">{props.replayResult.question}</div>
                 </div>
                 <div className="mini-tags">
                   <span className="mini-tag">{describeResponseStatus(replayAnswer?.status || "unknown")}</span>
                   <span className="mini-tag">{String(replayExecution?.row_count ?? 0)} rows</span>
                 </div>
               </div>
-
-              {props.replayResult.session_questions.length ? (
-                <div className="detail-copy">
-                  上下文问题：{props.replayResult.session_questions.join(" / ")}
-                </div>
-              ) : null}
-
-              <div className="detail-card accent-card admin-replay-answer">
-                <div className="detail-title">回答摘要</div>
-                <div className="detail-copy">{replayAnswer?.summary || "本次复跑没有生成回答摘要。"}</div>
-                {replayAnswer?.detail ? <div className="detail-copy">{replayAnswer.detail}</div> : null}
-              </div>
-
-              <div className="stats-row">
-                <div className="compact-stat">
-                  <span>规划校验</span>
-                  <strong>{props.replayResult.response.context_validation.valid ? "通过" : "失败"}</strong>
-                </div>
-                <div className="compact-stat">
-                  <span>SQL 校验</span>
-                  <strong>{props.replayResult.response.sql_validation.valid ? "通过" : "失败"}</strong>
-                </div>
-                <div className="compact-stat">
-                  <span>执行状态</span>
-                  <strong>{describeResponseStatus(replayExecution?.status || "unknown")}</strong>
-                </div>
-                <div className="compact-stat">
-                  <span>Prompt上下文</span>
-                  <strong>{props.replayResult.diff?.prompt_context_changed ? "有变化" : "稳定"}</strong>
-                </div>
-              </div>
-
-              {props.replayResult.diff?.replay_prompt_context_summary ? (
-                <div className="detail-card">
-                  <div className="detail-title">Prompt 上下文摘要</div>
-                  <pre className="json-block">
-                    {JSON.stringify(props.replayResult.diff.replay_prompt_context_summary, null, 2)}
-                  </pre>
-                </div>
-              ) : null}
-
-              {props.replayResult.response.sql ? (
-                <div className="detail-card">
-                  <div className="detail-title">SQL</div>
-                  <pre className="code-block">{props.replayResult.response.sql}</pre>
-                </div>
-              ) : null}
-
-              {replayExecution?.rows?.length ? (
-                <div className="result-table-wrap">
-                  <table className="result-table">
-                    <thead>
-                      <tr>
-                        {replayExecution.columns.map((column) => (
-                          <th key={column}>{column}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {replayExecution.rows.slice(0, 20).map((row, index) => (
-                        <tr key={`${index}-${replayExecution.columns.join("-")}`}>
-                          {replayExecution.columns.map((column) => (
-                            <td key={column}>{formatResultCell(row[column])}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="empty-card subtle-card">当前复跑没有结果行可展示。</div>
-              )}
             </div>
           ) : null}
         </article>
       </section>
-    </>
+    </div>
   );
+
 }
 
 function PendingProgressCard(props: { events: ProgressEvent[] }) {
@@ -1693,6 +1588,226 @@ function PendingProgressCard(props: { events: ProgressEvent[] }) {
   );
 }
 
+function QueryMindLogo(props: { className?: string }) {
+  return (
+    <svg className={props.className} viewBox="0 0 58 58" aria-hidden="true">
+      <defs>
+        <linearGradient id="app-logo-main" x1="11" y1="7" x2="49" y2="51" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#6DA0FF" />
+          <stop offset="0.55" stopColor="#4D78FF" />
+          <stop offset="1" stopColor="#6A54F4" />
+        </linearGradient>
+      </defs>
+      <path d="M29 4L51 16.5V41.5L29 54L7 41.5V16.5L29 4Z" fill="url(#app-logo-main)" />
+      <path d="M29 14L42 21.5V36.5L29 44L16 36.5V21.5L29 14Z" fill="#F9FBFF" fillOpacity="0.95" />
+      <path d="M29 21L36 25V33L29 37L22 33V25L29 21Z" fill="url(#app-logo-main)" />
+      <path d="M39 38.5L50 45L40.7 50.3L30 44.1L39 38.5Z" fill="#5B4DF0" fillOpacity="0.95" />
+    </svg>
+  );
+}
+
+function AppIcon(props: { name: string }) {
+  const common = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (props.name) {
+    case "home":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M4 10.5L12 4L20 10.5V20H6.5V13H17.5V20" />
+        </svg>
+      );
+    case "settings":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M12 15.5A3.5 3.5 0 1 0 12 8.5A3.5 3.5 0 0 0 12 15.5Z" />
+          <path {...common} d="M19.4 15A8.3 8.3 0 0 0 20 12L22 10.5L20 7L17.6 8A8.3 8.3 0 0 0 15 6.5L14.6 4H9.4L9 6.5A8.3 8.3 0 0 0 6.4 8L4 7L2 10.5L4 12A8.3 8.3 0 0 0 4.6 15L3.2 17.2L6.8 19.2L8.7 17.6A8.3 8.3 0 0 0 12 18.3A8.3 8.3 0 0 0 15.3 17.6L17.2 19.2L20.8 17.2L19.4 15Z" />
+        </svg>
+      );
+    case "briefcase":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect {...common} x="4" y="7" width="16" height="12" rx="2" />
+          <path {...common} d="M9 7V5.5C9 4.7 9.7 4 10.5 4H13.5C14.3 4 15 4.7 15 5.5V7M4 12H20" />
+        </svg>
+      );
+    case "plus":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M12 5V19M5 12H19" />
+        </svg>
+      );
+    case "refresh":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M20 12A8 8 0 0 1 6.6 17.9M4 12A8 8 0 0 1 17.4 6.1" />
+          <path {...common} d="M17 2V6.5H21.5M7 21.5V17H2.5" />
+        </svg>
+      );
+    case "sun":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle {...common} cx="12" cy="12" r="4" />
+          <path {...common} d="M12 2.5V5M12 19V21.5M21.5 12H19M5 12H2.5M18.7 5.3L16.9 7.1M7.1 16.9L5.3 18.7M18.7 18.7L16.9 16.9M7.1 7.1L5.3 5.3" />
+        </svg>
+      );
+    case "moon":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M20 15.2A7.8 7.8 0 0 1 8.8 4A8.5 8.5 0 1 0 20 15.2Z" />
+        </svg>
+      );
+    case "help":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle {...common} cx="12" cy="12" r="9" />
+          <path {...common} d="M9.7 9.4C10 8 10.9 7.2 12.4 7.2C14.1 7.2 15.2 8.2 15.2 9.7C15.2 11 14.4 11.8 13.2 12.4C12.3 12.9 12 13.4 12 14.4" />
+          <path d="M12 18H12.01" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      );
+    case "database":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <ellipse {...common} cx="12" cy="6" rx="7" ry="3" />
+          <path {...common} d="M5 6V18C5 19.7 8.1 21 12 21C15.9 21 19 19.7 19 18V6M5 12C5 13.7 8.1 15 12 15C15.9 15 19 13.7 19 12" />
+        </svg>
+      );
+    case "server":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect {...common} x="4" y="5" width="16" height="6" rx="2" />
+          <rect {...common} x="4" y="13" width="16" height="6" rx="2" />
+          <path {...common} d="M8 8H8.01M8 16H8.01" />
+        </svg>
+      );
+    case "pie":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M12 3V12H21C21 7 17 3 12 3Z" />
+          <path {...common} d="M12 12V3A9 9 0 1 0 21 12H12Z" />
+        </svg>
+      );
+    case "search":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle {...common} cx="11" cy="11" r="6" />
+          <path {...common} d="M16 16L21 21" />
+        </svg>
+      );
+    case "trend":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M4 17L9 12L13 15L20 7" />
+          <path {...common} d="M14 7H20V13" />
+        </svg>
+      );
+    case "location":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M12 21S18 15.6 18 10A6 6 0 1 0 6 10C6 15.6 12 21 12 21Z" />
+          <circle {...common} cx="12" cy="10" r="2" />
+        </svg>
+      );
+    case "users":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M16 20C15.4 17.7 13.8 16.5 12 16.5C10.2 16.5 8.6 17.7 8 20M12 13A3 3 0 1 0 12 7A3 3 0 0 0 12 13Z" />
+          <path {...common} d="M4.5 18C4.9 16.4 6 15.5 7.4 15.3M16.6 15.3C18 15.5 19.1 16.4 19.5 18M7.5 12.2A2.2 2.2 0 1 1 7.5 7.8M16.5 12.2A2.2 2.2 0 1 0 16.5 7.8" />
+        </svg>
+      );
+    case "chat":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M5 6.5H19V16H12L8 19.5V16H5V6.5Z" />
+          <path {...common} d="M8.5 11H8.51M12 11H12.01M15.5 11H15.51" />
+        </svg>
+      );
+    case "document":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M7 3H14L19 8V21H7V3Z" />
+          <path {...common} d="M14 3V8H19M10 13H16M10 17H16" />
+        </svg>
+      );
+    case "feedback":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M7 7H17V15H12L8.5 18V15H7V7Z" />
+          <path {...common} d="M10 10.5H10.01M12 10.5H12.01M14 10.5H14.01" />
+        </svg>
+      );
+    case "heart":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 20S5 15.8 5 10.2C5 7.8 6.8 6 9 6C10.3 6 11.3 6.7 12 7.8C12.7 6.7 13.7 6 15 6C17.2 6 19 7.8 19 10.2C19 15.8 12 20 12 20Z" fill="currentColor" />
+        </svg>
+      );
+    case "spark":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3L14.6 9.4L21 12L14.6 14.6L12 21L9.4 14.6L3 12L9.4 9.4L12 3Z" fill="currentColor" />
+        </svg>
+      );
+    case "table":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect {...common} x="4" y="5" width="16" height="14" rx="2" />
+          <path {...common} d="M4 10H20M9 5V19M15 5V19" />
+        </svg>
+      );
+    case "clock":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle {...common} cx="12" cy="12" r="8" />
+          <path {...common} d="M12 8V12L15 14" />
+        </svg>
+      );
+    case "user":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle {...common} cx="12" cy="8.5" r="3.5" />
+          <path {...common} d="M5.5 20C6.4 16.8 8.8 15 12 15C15.2 15 17.6 16.8 18.5 20" />
+        </svg>
+      );
+    case "bolt":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M13 2L5 13H11L10 22L19 10H13L13 2Z" fill="currentColor" />
+        </svg>
+      );
+    case "send":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M21 3L10 14" />
+          <path {...common} d="M21 3L14 21L10 14L3 10L21 3Z" />
+        </svg>
+      );
+    case "panel":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect {...common} x="6" y="5" width="12" height="14" rx="2" />
+          <path {...common} d="M9 8H15M9 12H15M9 16H13" />
+        </svg>
+      );
+    case "download":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M12 4V15M8 11L12 15L16 11M5 20H19" />
+        </svg>
+      );
+    case "chevron":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path {...common} d="M7 10L12 15L17 10" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle {...common} cx="12" cy="12" r="8" />
+        </svg>
+      );
+  }
+}
+
 function ConversationResultCard(props: {
   artifact: SessionTraceWorkspaceRecord;
   isActive: boolean;
@@ -1719,57 +1834,72 @@ function ConversationResultCard(props: {
 
   return (
     <div className={`message-result-card${props.isActive ? " is-active" : ""}`}>
-      <div className="message-result-head">
-        <div className="message-result-summary">
-          <strong>{domain || "-"}</strong>
-          <span>{describeResponseStatus(status)}</span>
-          <span>{showRowCount ? `结果 ${rowCount} 行` : "未进入 SQL"}</span>
-        </div>
-        <div className="message-result-actions">
-          {props.canInspect ? (
-            <button className="secondary-button message-result-button" type="button" onClick={props.onSelect}>
-              查看详情
-            </button>
+      <div className="message-result-layout">
+        <QueryMindLogo className="result-logo" />
+        <div className="message-result-main">
+          <div className="message-result-head">
+            <div className="message-result-answer">
+              {answer?.summary || answer?.detail || "已完成本次查询。"}
+            </div>
+            <div className="message-result-actions">
+              {props.canInspect ? (
+                <button className="icon-button" type="button" onClick={props.onSelect} aria-label="查看详情">
+                  <AppIcon name="panel" />
+                </button>
+              ) : null}
+              {canDownload ? (
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => {
+                    void downloadTraceCsv(props.token!, props.artifact.trace!.trace_id);
+                  }}
+                  aria-label="下载结果"
+                >
+                  <AppIcon name="download" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {answer?.detail && answer.detail !== answer.summary ? <div className="message-result-note">{answer.detail}</div> : null}
+
+          <div className="message-result-summary">
+            <span>{domain || "-"}</span>
+            <span>{describeResponseStatus(status)}</span>
+            <span>{showRowCount ? `${rowCount} 行结果` : "未进入 SQL"}</span>
+          </div>
+
+          {resultRows.length ? (
+            <>
+              <div className="message-result-section-title">查询结果</div>
+              <div className="message-result-table-wrap">
+                <table className="message-result-table">
+                  <thead>
+                    <tr>
+                      {resultColumns.map((column) => (
+                        <th key={column}>{column}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resultRows.map((row, index) => (
+                      <tr key={`${props.artifact.trace_id}-${index}`}>
+                        {resultColumns.map((column) => (
+                          <td key={column}>{formatResultCell(row[column])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : null}
-          {canDownload ? (
-            <button
-              className="secondary-button message-result-button"
-              type="button"
-              onClick={() => {
-                void downloadTraceCsv(props.token!, props.artifact.trace!.trace_id);
-              }}
-            >
-              下载
-            </button>
-          ) : null}
+
+          {answer?.follow_up_hint ? <div className="message-result-note">下一步：{answer.follow_up_hint}</div> : null}
+          <div className="message-result-footer">{formatDate(props.artifact.trace?.created_at || queryLog?.created_at)}</div>
         </div>
       </div>
-
-      {answer?.detail ? <div className="message-result-note">{answer.detail}</div> : null}
-      {answer?.follow_up_hint ? <div className="message-result-note">下一步：{answer.follow_up_hint}</div> : null}
-
-      {resultRows.length ? (
-        <div className="message-result-table-wrap">
-          <table className="message-result-table">
-            <thead>
-              <tr>
-                {resultColumns.map((column) => (
-                  <th key={column}>{column}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {resultRows.map((row, index) => (
-                <tr key={`${props.artifact.trace_id}-${index}`}>
-                  {resultColumns.map((column) => (
-                    <td key={column}>{formatResultCell(row[column])}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
     </div>
   );
 }

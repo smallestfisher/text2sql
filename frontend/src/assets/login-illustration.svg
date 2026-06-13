@@ -1,0 +1,85 @@
+<svg width="620" height="520" viewBox="0 0 620 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="screen" x1="250" y1="94" x2="383" y2="363" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8FB0FF" stop-opacity="0.74"/>
+      <stop offset="1" stop-color="#5D72F6" stop-opacity="0.58"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="139" y1="170" x2="341" y2="336" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9DB9FF" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#7188F7" stop-opacity="0.54"/>
+    </linearGradient>
+    <linearGradient id="chart" x1="400" y1="274" x2="514" y2="404" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EDF3FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#96A7FF" stop-opacity="0.62"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#6754FF"/>
+      <stop offset="1" stop-color="#5B9AFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(317 288) rotate(90) scale(225 268)">
+      <stop stop-color="#82A5FF" stop-opacity="0.34"/>
+      <stop offset="0.52" stop-color="#8EA9FF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#C5D4FF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft-shadow" x="64" y="65" width="501" height="424" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="20"/>
+      <feGaussianBlur stdDeviation="24"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.266667 0 0 0 0 0.384314 0 0 0 0 0.933333 0 0 0 0.22 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1" result="shape"/>
+    </filter>
+    <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect x="66" y="72" width="488" height="398" rx="199" fill="url(#glow)"/>
+  <g opacity="0.46">
+    <path d="M98 352C158 300 240 280 343 291C456 303 530 273 562 217" stroke="#87A3FF" stroke-width="2"/>
+    <path d="M84 388C163 330 248 314 341 337C445 363 524 341 587 270" stroke="#A2B7FF" stroke-width="1.5"/>
+    <path d="M174 412C253 371 362 361 475 383" stroke="#9FB6FF" stroke-width="1.5"/>
+  </g>
+
+  <g opacity="0.58">
+    <circle cx="89" cy="350" r="5" fill="#E6EEFF"/>
+    <circle cx="101" cy="350" r="12" stroke="#A9BEFF" stroke-width="2"/>
+    <circle cx="230" cy="414" r="7" fill="#F7FAFF"/>
+    <circle cx="230" cy="414" r="14" stroke="#B7C8FF" stroke-width="2"/>
+    <circle cx="528" cy="226" r="7" fill="#F7FAFF"/>
+    <circle cx="528" cy="226" r="14" stroke="#B7C8FF" stroke-width="2"/>
+  </g>
+
+  <ellipse cx="322" cy="428" rx="206" ry="46" fill="#8EA9FF" opacity="0.12" filter="url(#blur)"/>
+  <ellipse cx="322" cy="416" rx="194" ry="44" fill="#F8FBFF" opacity="0.78"/>
+  <ellipse cx="322" cy="407" rx="178" ry="37" stroke="#B7C7FF" stroke-width="2" opacity="0.62"/>
+  <ellipse cx="322" cy="396" rx="122" ry="25" fill="#9BB3FF" opacity="0.14"/>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="269" y="77" width="160" height="250" rx="22" fill="#EEF4FF" opacity="0.44" stroke="#FFFFFF" stroke-width="2"/>
+    <rect x="236" y="103" width="160" height="250" rx="22" fill="#DCE7FF" opacity="0.58" stroke="#FFFFFF" stroke-width="2"/>
+    <rect x="205" y="128" width="158" height="250" rx="24" fill="url(#screen)" stroke="#DDE7FF" stroke-width="2.5"/>
+    <rect x="226" y="156" width="116" height="20" rx="10" fill="#F8FBFF" opacity="0.54"/>
+    <rect x="226" y="190" width="96" height="14" rx="7" fill="#F8FBFF" opacity="0.45"/>
+    <rect x="226" y="217" width="70" height="14" rx="7" fill="#F8FBFF" opacity="0.42"/>
+    <circle cx="284" cy="340" r="9" fill="#F8FBFF" opacity="0.48"/>
+    <circle cx="284" cy="340" r="16" stroke="#FFFFFF" stroke-opacity="0.28" stroke-width="2"/>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <path d="M119 153C119 136.984 131.984 124 148 124H307C323.016 124 336 136.984 336 153V236C336 252.016 323.016 265 307 265H189L153 301V265H148C131.984 265 119 252.016 119 236V153Z" fill="url(#panel)" stroke="#E7EEFF" stroke-width="2.4"/>
+    <rect x="151" y="158" width="144" height="16" rx="8" fill="#FFFFFF" opacity="0.58"/>
+    <rect x="151" y="192" width="102" height="14" rx="7" fill="#FFFFFF" opacity="0.42"/>
+    <rect x="151" y="222" width="76" height="14" rx="7" fill="#FFFFFF" opacity="0.34"/>
+  </g>
+
+  <g filter="url(#soft-shadow)">
+    <path d="M408 273L510 292C526.687 295.105 539 309.665 539 326.639V404.778C539 421.946 523.438 434.912 506.574 431.801L405 413.067C388.299 409.988 376 395.417 376 378.442V300.223C376 283.045 391.127 269.854 408 273Z" fill="url(#chart)" stroke="#FFFFFF" stroke-width="2"/>
+    <rect x="405" y="354" width="16" height="45" rx="8" fill="url(#bar)" opacity="0.72"/>
+    <rect x="434" y="331" width="16" height="75" rx="8" fill="url(#bar)" opacity="0.72"/>
+    <rect x="464" y="303" width="16" height="110" rx="8" fill="url(#bar)" opacity="0.72"/>
+    <rect x="493" y="279" width="16" height="139" rx="8" fill="url(#bar)" opacity="0.72"/>
+  </g>
+</svg>
