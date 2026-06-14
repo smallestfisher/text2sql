@@ -40,6 +40,7 @@ export interface AdminDashboardResponse {
   feedback_summary: FeedbackSummary;
   evaluation_summary: EvaluationSummary;
   runtime_sessions: RuntimeSessionCollectionResponse;
+  section_errors?: Record<string, string>;
 }
 
 export interface LoginResponse {

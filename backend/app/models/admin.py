@@ -111,6 +111,7 @@ class AdminDashboardResponse(BaseModel):
     feedback_summary: FeedbackSummary
     evaluation_summary: EvaluationSummary
     runtime_sessions: RuntimeSessionCollectionResponse
+    section_errors: dict[str, str] = Field(default_factory=dict)
 
 
 class RuntimeRiskSummaryResponse(BaseModel):

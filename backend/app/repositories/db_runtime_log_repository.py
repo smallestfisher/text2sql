@@ -180,7 +180,7 @@ class DbRuntimeLogRepository:
     def summarize_query_risks(self, limit: int = 200) -> dict:
         rows = self.database_connector.fetch_all(
             """
-            SELECT subject_domain, context_risk_level, context_risk_flags_json, sql_risk_level, sql_risk_flags_json
+            SELECT trace_id, subject_domain, context_risk_level, sql_risk_level
             FROM query_logs
             ORDER BY created_at DESC, trace_id DESC
             LIMIT :limit
@@ -195,8 +195,23 @@ class DbRuntimeLogRepository:
             by_risk_level[risk_level] = by_risk_level.get(risk_level, 0) + 1
             subject_domain = row.get("subject_domain") or "unknown"
             by_subject_domain[subject_domain] = by_subject_domain.get(subject_domain, 0) + 1
-            for flag in json_loads(row.get("context_risk_flags_json"), []) + json_loads(row.get("sql_risk_flags_json"), []):
-                by_risk_flag[flag] = by_risk_flag.get(flag, 0) + 1
+        trace_ids = [row["trace_id"] for row in rows if row.get("trace_id")]
+        if trace_ids:
+            where_sql, params = self._trace_id_filter(trace_ids)
+            flag_rows = self.database_connector.fetch_all(
+                f"""
+                SELECT flag, COUNT(DISTINCT trace_id) AS total
+                FROM query_risk_flags
+                WHERE trace_id IN ({where_sql})
+                GROUP BY flag
+                """,
+                params,
+            )
+            by_risk_flag = {
+                row["flag"]: int(row.get("total") or 0)
+                for row in flag_rows
+                if row.get("flag")
+            }
         return {
             "total_queries": len(rows),
             "by_risk_level": by_risk_level,

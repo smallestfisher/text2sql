@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
@@ -53,6 +56,9 @@ router = APIRouter(
     dependencies=[Depends(require_admin_user)],
 )
 
+logger = logging.getLogger(__name__)
+MAX_DASHBOARD_WORKERS = 6
+
 
 class MetadataUpdateRequest(BaseModel):
     content: dict | list | str
@@ -99,17 +105,90 @@ def admin_dashboard(
     log_offset: int = 0,
     container: AppContainer = Depends(get_container),
 ) -> AdminDashboardResponse:
+    section_errors: dict[str, str] = {}
+    sections: dict[str, tuple[Callable[[], object], object]] = {
+        "runtime_status": (
+            lambda: _build_runtime_status(container),
+            _empty_runtime_status(),
+        ),
+        "metrics": (
+            lambda: _build_admin_metrics_summary(container),
+            _empty_admin_metrics_summary(),
+        ),
+        "metadata_overview": (
+            container.metadata_service.overview,
+            MetadataOverview(
+                semantic_version=None,
+                semantic_domains=[],
+                table_count=0,
+                example_count=0,
+                trace_count=0,
+            ),
+        ),
+        "users": (
+            lambda: container.auth_service.list_admin_users(limit=user_limit, offset=user_offset),
+            UserCollectionResponse(users=[], count=0),
+        ),
+        "roles": (
+            container.auth_service.list_roles,
+            [],
+        ),
+        "query_logs": (
+            lambda: container.runtime_admin_service.list_query_logs(limit=log_limit, offset=log_offset),
+            RuntimeQueryLogCollectionResponse(query_logs=[], count=0),
+        ),
+        "feedback_summary": (
+            lambda: container.feedback_service.summarize(limit=100),
+            FeedbackSummary(),
+        ),
+        "evaluation_summary": (
+            lambda: container.evaluation_service.summarize_runs(limit=50),
+            EvaluationSummary(run_count=0, case_count=0, passed_count=0, failed_count=0),
+        ),
+        "runtime_sessions": (
+            lambda: container.runtime_admin_service.list_sessions(limit=1, offset=0),
+            RuntimeSessionCollectionResponse(sessions=[], count=0),
+        ),
+    }
+    dashboard_data = _dashboard_sections(section_errors, sections)
     return AdminDashboardResponse(
-        runtime_status=_build_runtime_status(container),
-        metrics=_build_admin_metrics_summary(container),
-        metadata_overview=container.metadata_service.overview(),
-        users=container.auth_service.list_admin_users(limit=user_limit, offset=user_offset),
-        roles=container.auth_service.list_roles(),
-        query_logs=container.runtime_admin_service.list_query_logs(limit=log_limit, offset=log_offset),
-        feedback_summary=container.feedback_service.summarize(limit=100),
-        evaluation_summary=container.evaluation_service.summarize_runs(limit=50),
-        runtime_sessions=container.runtime_admin_service.list_sessions(limit=1, offset=0),
+        runtime_status=dashboard_data["runtime_status"],
+        metrics=dashboard_data["metrics"],
+        metadata_overview=dashboard_data["metadata_overview"],
+        users=dashboard_data["users"],
+        roles=dashboard_data["roles"],
+        query_logs=dashboard_data["query_logs"],
+        feedback_summary=dashboard_data["feedback_summary"],
+        evaluation_summary=dashboard_data["evaluation_summary"],
+        runtime_sessions=dashboard_data["runtime_sessions"],
+        section_errors=section_errors,
     )
+
+
+def _dashboard_sections(
+    section_errors: dict[str, str],
+    sections: dict[str, tuple[Callable[[], object], object]],
+) -> dict[str, object]:
+    results: dict[str, object] = {}
+    with ThreadPoolExecutor(max_workers=min(MAX_DASHBOARD_WORKERS, len(sections))) as executor:
+        futures = {
+            executor.submit(builder): (section_name, fallback)
+            for section_name, (builder, fallback) in sections.items()
+        }
+        for future in as_completed(futures):
+            section_name, fallback = futures[future]
+            try:
+                results[section_name] = future.result()
+            except Exception as exc:
+                logger.warning(
+                    "admin dashboard section failed section=%s error=%s",
+                    section_name,
+                    exc,
+                    exc_info=True,
+                )
+                section_errors[section_name] = f"{type(exc).__name__}: {exc}"
+                results[section_name] = fallback
+    return results
 
 
 def _build_admin_metrics_summary(container: AppContainer) -> AdminMetricsSummary:
@@ -198,13 +277,129 @@ def _repository_count_summary(
 
 
 def _build_runtime_status(container: AppContainer) -> dict:
+    probes: dict[str, tuple[Callable[[], dict], dict | None]] = {
+        "business_database": (
+            container.business_database_connector.test_connection,
+            None,
+        ),
+        "runtime_database": (
+            container.runtime_database_connector.test_connection,
+            None,
+        ),
+        "llm": (container.llm_client.health, None),
+        "vector_retrieval": (
+            container.vector_retriever.health,
+            _empty_vector_retrieval_status(),
+        ),
+        "retrieval_corpus": (
+            container.retrieval_service.health,
+            _empty_retrieval_corpus_status(),
+        ),
+        "sql_ast": (container.sql_ast_validator.health, None),
+    }
+    results = _runtime_probes(probes)
+    return {probe_name: results[probe_name] for probe_name in probes}
+
+
+def _runtime_probes(probes: dict[str, tuple[Callable[[], dict], dict | None]]) -> dict[str, dict]:
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=len(probes)) as executor:
+        futures = {
+            executor.submit(builder): (probe_name, fallback)
+            for probe_name, (builder, fallback) in probes.items()
+        }
+        for future in as_completed(futures):
+            probe_name, fallback = futures[future]
+            try:
+                results[probe_name] = future.result()
+            except Exception as exc:
+                results[probe_name] = _runtime_probe_error(probe_name, exc, fallback)
+    return results
+
+
+def _runtime_probe_error(probe_name: str, exc: Exception, fallback: dict | None) -> dict:
+    logger.warning(
+        "admin dashboard runtime probe failed probe=%s error=%s",
+        probe_name,
+        exc,
+        exc_info=True,
+    )
+    if fallback is None:
+        fallback = {"connected": False}
     return {
-        "business_database": container.business_database_connector.test_connection(),
-        "runtime_database": container.runtime_database_connector.test_connection(),
-        "llm": container.llm_client.health(),
-        "vector_retrieval": container.vector_retriever.health(),
-        "retrieval_corpus": container.retrieval_service.health(),
-        "sql_ast": container.sql_ast_validator.health(),
+        **fallback,
+        "status": "error",
+        "error": str(exc),
+    }
+
+
+def _empty_admin_metrics_summary() -> AdminMetricsSummary:
+    empty = AdminMetricChangeRecord(total=0, today=0, yesterday=0, delta=0)
+    return AdminMetricsSummary(
+        users=empty,
+        sessions=empty,
+        query_logs=empty,
+        feedbacks=empty,
+        generated_at=datetime.utcnow(),
+    )
+
+
+def _empty_runtime_status(error: str | None = None) -> dict:
+    return {
+        "business_database": _unavailable_health(error),
+        "runtime_database": _unavailable_health(error),
+        "llm": _unavailable_health(error),
+        "vector_retrieval": _empty_vector_retrieval_status(error),
+        "retrieval_corpus": _empty_retrieval_corpus_status(error),
+        "sql_ast": _unavailable_health(error),
+    }
+
+
+def _unavailable_health(error: str | None = None) -> dict:
+    status = {"connected": False, "status": "error"}
+    if error:
+        status["error"] = error
+    return status
+
+
+def _empty_vector_retrieval_status(error: str | None = None) -> dict:
+    status = {
+        "enabled": False,
+        "provider": "unknown",
+        "model": None,
+        "api_base": None,
+        "ready": False,
+        "indexing": False,
+        "indexed_document_count": 0,
+        "last_index_error": error,
+        "last_search_error": None,
+        "loaded_embedding_signature": None,
+        "configured_embedding_signature": None,
+    }
+    return status
+
+
+def _empty_retrieval_corpus_status(error: str | None = None) -> dict:
+    return {
+        "vector_enabled": False,
+        "vector_provider": "unknown",
+        "vector_ready": False,
+        "vector_indexing": False,
+        "document_count": 0,
+        "document_count_by_source": {},
+        "example_count": 0,
+        "join_pattern_count": 0,
+        "vector_sync": {
+            "persisted_document_count": 0,
+            "reused_document_count": 0,
+            "rebuilt_document_count": 0,
+            "deleted_document_count": 0,
+            "upserted_document_count": 0,
+            "vector_sync_last_updated_at": None,
+            "embedding_signature": None,
+            "error": error,
+            "pending_rebuild": False,
+        },
     }
 
 

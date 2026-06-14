@@ -10,20 +10,21 @@ class DbAuditRepository:
         self.database_connector = database_connector
 
     def append(self, record: TraceRecord) -> TraceRecord:
-        self.database_connector.execute_write(
+        updated = self.database_connector.execute_write(
             """
-            DELETE FROM query_risk_flags
+            UPDATE query_logs
+            SET trace_json = :trace_json,
+                created_at = :created_at
             WHERE trace_id = :trace_id
             """,
-            {"trace_id": record.trace_id},
+            {
+                "trace_id": record.trace_id,
+                "trace_json": json_dumps(record.model_dump(mode="json")),
+                "created_at": record.created_at,
+            },
         )
-        self.database_connector.execute_write(
-            """
-            DELETE FROM query_logs
-            WHERE trace_id = :trace_id
-            """,
-            {"trace_id": record.trace_id},
-        )
+        if updated > 0:
+            return record
         self.database_connector.execute_write(
             """
             INSERT INTO query_logs (trace_id, trace_json, created_at)

@@ -385,7 +385,7 @@ class LLMClient:
             )
             raise
 
-    def _complete_once(self, messages: list[dict], *, stream: bool, task_name: str) -> str:
+    def _complete_once(self, messages: list[dict], *, stream: bool, task_name: str = "unknown") -> str:
         try:
             response = self.client.chat.completions.create(
                 **self._completion_kwargs(messages=messages, stream=stream),
@@ -413,7 +413,7 @@ class LLMClient:
             kwargs["extra_body"] = {"cache_prompt": cache_prompt}
         return kwargs
 
-    def _response_content(self, response, *, task_name: str) -> str:
+    def _response_content(self, response, *, task_name: str = "unknown") -> str:
         choices = getattr(response, "choices", None)
         if choices:
             message = getattr(choices[0], "message", None)
@@ -536,25 +536,18 @@ class LLMClient:
     def _question_context_retry_messages(self, base_messages: list[dict], invalid_content: str) -> list[dict]:
         messages = [dict(message) for message in base_messages]
         cleaned_json = self._clean_json_retry_reference(invalid_content)
+        retry_instruction = "上一次输出不是合法 JSON。请重新只返回一个合法 JSON 对象，并且只保留 prompt 要求的字段。"
         if cleaned_json:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "上一次输出不是可接受的 JSON。下面是已清理的候选 JSON 片段，仅作为字段和值的参考，"
-                        "不要照抄缺失或错误字段："
-                        f"{cleaned_json}\n"
-                        "请重新只返回一个合法 JSON 对象，并且只保留 prompt 要求的字段。"
-                    ),
-                }
+            retry_instruction = (
+                "上一次输出不是可接受的 JSON。下面是已清理的候选 JSON 片段，仅作为字段和值的参考，"
+                "不要照抄缺失或错误字段："
+                f"{cleaned_json}\n"
+                "请重新只返回一个合法 JSON 对象，并且只保留 prompt 要求的字段。"
             )
+        if messages and messages[-1].get("role") == "user":
+            messages[-1]["content"] = f"{messages[-1].get('content')}\n\n{retry_instruction}"
             return messages
-        messages.append(
-            {
-                "role": "user",
-                "content": "上一次输出不是合法 JSON。请重新只返回一个合法 JSON 对象，并且只保留 prompt 要求的字段。",
-            }
-        )
+        messages.append({"role": "user", "content": retry_instruction})
         return messages
 
     def _clean_json_retry_reference(self, content: str) -> str:

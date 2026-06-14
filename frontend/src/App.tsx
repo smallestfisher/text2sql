@@ -67,6 +67,17 @@ const ADMIN_SIDEBAR_LINKS = [
   { href: "#admin-users", icon: "users", label: "用户管理" },
   { href: "#admin-logs", icon: "document", label: "日志审计" },
 ] as const;
+const ADMIN_DASHBOARD_SECTION_LABELS: Record<string, string> = {
+  runtime_status: "运行状态",
+  metrics: "指标汇总",
+  metadata_overview: "元数据概览",
+  users: "用户列表",
+  roles: "角色列表",
+  query_logs: "日志审计",
+  feedback_summary: "反馈汇总",
+  evaluation_summary: "评测汇总",
+  runtime_sessions: "会话列表",
+};
 const PROGRESS_BASE_STAGES = [
   "accepted",
   "load_session",
@@ -749,6 +760,7 @@ function App() {
       setAdminEvalSummary(dashboard.evaluation_summary);
       setAdminSessions(dashboard.runtime_sessions.sessions);
       setAdminSessionCount(dashboard.runtime_sessions.count);
+      setAdminError(formatAdminDashboardSectionErrors(dashboard.section_errors));
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
@@ -3240,6 +3252,16 @@ async function downloadTraceCsv(token: string, traceId: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "请求失败";
+}
+
+function formatAdminDashboardSectionErrors(sectionErrors?: Record<string, string>) {
+  const entries = Object.entries(sectionErrors ?? {}).filter(([, message]) => Boolean(message));
+  if (!entries.length) {
+    return "";
+  }
+  return `部分管理数据加载失败：${entries
+    .map(([key, message]) => `${ADMIN_DASHBOARD_SECTION_LABELS[key] ?? key} ${message}`)
+    .join("；")}`;
 }
 
 function buildUserId(username: string) {

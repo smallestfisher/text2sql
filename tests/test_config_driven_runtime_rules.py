@@ -249,7 +249,7 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             '<|channel|>final <|constrain|>json<|message|>{"decision":"invalid","reason":"No question provided."}',
         )
 
-        self.assertEqual([message["role"] for message in retry_messages], ["system", "user", "user"])
+        self.assertEqual([message["role"] for message in retry_messages], ["system", "user"])
         retry_content = str(retry_messages[-1]["content"])
         self.assertNotIn("<|channel|>", retry_content)
         self.assertNotIn("<|constrain|>", retry_content)
