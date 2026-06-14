@@ -2348,7 +2348,7 @@ input:focus {
 
 .workspace-session-summary {
   display: grid;
-  gap: 16px;
+  gap: 10px;
   margin-top: 24px;
 }
 
@@ -2356,13 +2356,26 @@ input:focus {
   margin: 0;
   max-width: 100%;
   color: #0a163a;
-  font-size: clamp(28px, 2.32vw, 34px);
+  font-size: 28px;
   font-weight: 800;
-  line-height: 1.35;
+  line-height: 1.25;
   letter-spacing: 0;
-  white-space: nowrap;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.workspace-session-subtitle {
+  max-width: min(980px, 100%);
+  color: #66708a;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbar-stats {
@@ -3536,9 +3549,11 @@ input:focus {
 }
 
 :root[data-theme="dark"] .sidebar-panel,
+:root[data-theme="dark"] .view-switch,
 :root[data-theme="dark"] .admin-sidebar-nav a,
 :root[data-theme="dark"] .admin-sidebar-stats div,
 :root[data-theme="dark"] .user-panel,
+:root[data-theme="dark"] .session-item,
 :root[data-theme="dark"] .workspace-breadcrumb,
 :root[data-theme="dark"] .toolbar-button,
 :root[data-theme="dark"] .toolbar-stat,
@@ -3549,6 +3564,10 @@ input:focus {
 :root[data-theme="dark"] .composer-dock,
 :root[data-theme="dark"] .inspector,
 :root[data-theme="dark"] .tab-rail,
+:root[data-theme="dark"] .detail-card,
+:root[data-theme="dark"] .trace-step,
+:root[data-theme="dark"] .empty-card,
+:root[data-theme="dark"] .compact-stat,
 :root[data-theme="dark"] .hint-chip,
 :root[data-theme="dark"] .admin-metric-card,
 :root[data-theme="dark"] .admin-panel,
@@ -3561,8 +3580,60 @@ input:focus {
   box-shadow: var(--shadow);
 }
 
+:root[data-theme="dark"] .view-switch {
+  border-color: var(--border);
+  background: var(--panel-strong);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .view-switch-button {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+:root[data-theme="dark"] .view-switch-button.is-active {
+  border-color: var(--border-strong);
+  background: var(--panel-soft);
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .detail-card,
+:root[data-theme="dark"] .trace-step,
+:root[data-theme="dark"] .empty-card,
+:root[data-theme="dark"] .compact-stat,
+:root[data-theme="dark"] .accent-card,
+:root[data-theme="dark"] .subtle-card {
+  border-color: var(--border);
+  background: var(--panel-strong);
+  color: var(--text);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .session-item {
+  background: var(--panel-strong);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .session-item.is-active {
+  border-color: var(--border-strong);
+  background: var(--panel-soft);
+}
+
+:root[data-theme="dark"] .tab-button {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+:root[data-theme="dark"] .tab-button.is-active {
+  border-color: #53627a;
+  background: #26334a;
+  color: var(--text);
+}
+
 :root[data-theme="dark"] .toolbar-button:hover,
 :root[data-theme="dark"] .admin-sidebar-nav a:hover,
+:root[data-theme="dark"] .session-item:hover,
 :root[data-theme="dark"] .prompt-card:hover,
 :root[data-theme="dark"] .admin-pagination button:hover:not(:disabled) {
   border-color: var(--border-strong);
@@ -3577,11 +3648,16 @@ input:focus {
 
 :root[data-theme="dark"] .brand-name,
 :root[data-theme="dark"] .user-name,
+:root[data-theme="dark"] .panel-title,
+:root[data-theme="dark"] .session-item-title,
 :root[data-theme="dark"] .workspace-breadcrumb strong,
 :root[data-theme="dark"] .workspace-session-summary h1,
 :root[data-theme="dark"] .welcome-hero h1,
 :root[data-theme="dark"] .welcome-prompt-title,
 :root[data-theme="dark"] .workspace-feature-title,
+:root[data-theme="dark"] .detail-title,
+:root[data-theme="dark"] .meta-row strong,
+:root[data-theme="dark"] .compact-stat strong,
 :root[data-theme="dark"] .message-result-section-title,
 :root[data-theme="dark"] .message-result-answer,
 :root[data-theme="dark"] .toolbar-stat strong,
@@ -3596,8 +3672,14 @@ input:focus {
 
 :root[data-theme="dark"] .brand-meta,
 :root[data-theme="dark"] .user-meta,
+:root[data-theme="dark"] .session-item-time,
+:root[data-theme="dark"] .session-item-id,
 :root[data-theme="dark"] .workspace-breadcrumb,
 :root[data-theme="dark"] .toolbar-stat,
+:root[data-theme="dark"] .workspace-session-subtitle,
+:root[data-theme="dark"] .detail-copy,
+:root[data-theme="dark"] .meta-row span,
+:root[data-theme="dark"] .compact-stat span,
 :root[data-theme="dark"] .welcome-hero p,
 :root[data-theme="dark"] .workspace-feature-copy,
 :root[data-theme="dark"] .message-result-note,
@@ -3618,6 +3700,8 @@ input:focus {
 :root[data-theme="dark"] .admin-page-badge,
 :root[data-theme="dark"] .workspace-feature-icon,
 :root[data-theme="dark"] .message-result-summary span,
+:root[data-theme="dark"] .mini-tag,
+:root[data-theme="dark"] .section-count,
 :root[data-theme="dark"] .admin-type-chip,
 :root[data-theme="dark"] .admin-status-chip:not(.is-ok) {
   border-color: var(--border);

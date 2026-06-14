@@ -69,12 +69,14 @@ class LLMClient:
             "你是 Text2SQL 系统的问题上下文整理器。"
             "你只负责判断当前问题是否可回答、是否依赖上下文，并在追问时改写成完整自然语言问题。"
             "不要生成 SQL，只输出指定 JSON 字段。"
+            "除业务编码、字段名、表名和产品型号外，所有自然语言文本字段必须使用中文。"
             "只返回紧凑 JSON，不要输出 markdown 或额外解释。"
         )
-        messages = [
+        base_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
         ]
+        messages = list(base_messages)
         self._record_metric("question_context", "requests")
         cache_key = self._cache_key("question_context", messages)
         cached = self._cache_get(cache_key)
@@ -96,13 +98,7 @@ class LLMClient:
                     self._cache_put(cache_key, parsed)
                     return parsed
                 if attempt < self.max_retries:
-                    messages.append({"role": "assistant", "content": content})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "只返回合法 JSON，并且只保留 prompt 要求的字段。",
-                        }
-                    )
+                    messages = self._question_context_retry_messages(base_messages, content)
             except Exception as exc:
                 if attempt >= self.max_retries:
                     raise LLMServiceError(
@@ -361,7 +357,7 @@ class LLMClient:
         self._record_metric(task_name, "provider_calls")
         self._record_metric(task_name, "prompt_chars", prompt_chars)
         try:
-            content = self._complete_once(messages, stream=False)
+            content = self._complete_once(messages, stream=False, task_name=task_name)
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             self._record_metric(task_name, "response_chars", len(content))
             self._record_metric(task_name, "elapsed_ms", elapsed_ms)
@@ -389,12 +385,12 @@ class LLMClient:
             )
             raise
 
-    def _complete_once(self, messages: list[dict], *, stream: bool) -> str:
+    def _complete_once(self, messages: list[dict], *, stream: bool, task_name: str) -> str:
         try:
             response = self.client.chat.completions.create(
                 **self._completion_kwargs(messages=messages, stream=stream),
             )
-            return self._response_content(response)
+            return self._response_content(response, task_name=task_name)
         except TypeError:
             if stream:
                 raise
@@ -402,7 +398,7 @@ class LLMClient:
             response = self.client.chat.completions.create(
                 **self._completion_kwargs(messages=messages, stream=True),
             )
-            return self._response_content(response)
+            return self._response_content(response, task_name=task_name)
 
     def _completion_kwargs(self, *, messages: list[dict], stream: bool) -> dict:
         kwargs = {
@@ -417,23 +413,24 @@ class LLMClient:
             kwargs["extra_body"] = {"cache_prompt": cache_prompt}
         return kwargs
 
-    def _response_content(self, response) -> str:
+    def _response_content(self, response, *, task_name: str) -> str:
         choices = getattr(response, "choices", None)
         if choices:
             message = getattr(choices[0], "message", None)
+            self._log_reasoning_content(message, task_name=task_name)
             return getattr(message, "content", None) or ""
         if isinstance(response, str):
-            content = self._content_from_event_stream_text(response)
+            content = self._content_from_event_stream_text(response, task_name=task_name)
             if content:
                 return content
             if response.strip():
                 return response.strip()
-        content = self._content_from_stream_response(response)
+        content = self._content_from_stream_response(response, task_name=task_name)
         if content is not None:
             return content
         raise TypeError(f"unsupported llm response type: {type(response).__name__}")
 
-    def _content_from_stream_response(self, response) -> str | None:
+    def _content_from_stream_response(self, response, *, task_name: str) -> str | None:
         if isinstance(response, (str, bytes, dict)):
             return None
         try:
@@ -442,24 +439,29 @@ class LLMClient:
             return None
 
         chunks: list[str] = []
+        reasoning_chars = 0
         for event in iterator:
             choices = getattr(event, "choices", None)
             if not choices:
                 continue
             choice = choices[0]
             delta = getattr(choice, "delta", None)
+            reasoning_chars += len(self._reasoning_content_from_message(delta))
             delta_content = getattr(delta, "content", None)
             if isinstance(delta_content, str):
                 chunks.append(delta_content)
                 continue
             message = getattr(choice, "message", None)
+            reasoning_chars += len(self._reasoning_content_from_message(message))
             message_content = getattr(message, "content", None)
             if isinstance(message_content, str):
                 chunks.append(message_content)
+        self._log_reasoning_chars(reasoning_chars, task_name=task_name)
         return "".join(chunks)
 
-    def _content_from_event_stream_text(self, text: str) -> str:
+    def _content_from_event_stream_text(self, text: str, *, task_name: str) -> str:
         chunks: list[str] = []
+        reasoning_chars = 0
         for raw_line in text.splitlines():
             line = raw_line.strip()
             if not line.startswith("data:"):
@@ -478,16 +480,46 @@ class LLMClient:
             if not isinstance(choice, dict):
                 continue
             delta = choice.get("delta")
-            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                chunks.append(delta["content"])
-                continue
+            if isinstance(delta, dict):
+                reasoning_chars += len(self._reasoning_content_from_message(delta))
+                if isinstance(delta.get("content"), str):
+                    chunks.append(delta["content"])
+                    continue
             message = choice.get("message")
-            if isinstance(message, dict) and isinstance(message.get("content"), str):
-                chunks.append(message["content"])
+            if isinstance(message, dict):
+                reasoning_chars += len(self._reasoning_content_from_message(message))
+                if isinstance(message.get("content"), str):
+                    chunks.append(message["content"])
+        self._log_reasoning_chars(reasoning_chars, task_name=task_name)
         return "".join(chunks)
 
+    def _log_reasoning_content(self, message, *, task_name: str) -> None:
+        reasoning_content = self._reasoning_content_from_message(message)
+        self._log_reasoning_chars(len(reasoning_content), task_name=task_name)
+
+    def _log_reasoning_chars(self, char_count: int, *, task_name: str) -> None:
+        if char_count <= 0:
+            return
+        self._record_metric(task_name, "reasoning_chars", char_count)
+        logger.warning(
+            "llm reasoning emitted task=%s model=%s chars=%s",
+            task_name,
+            self.model_name,
+            char_count,
+        )
+
+    @staticmethod
+    def _reasoning_content_from_message(message) -> str:
+        if message is None:
+            return ""
+        if isinstance(message, dict):
+            value = message.get("reasoning_content")
+        else:
+            value = getattr(message, "reasoning_content", None)
+        return value if isinstance(value, str) else ""
+
     def _extract_json(self, content: str) -> dict:
-        content = content.strip()
+        content = self._strip_model_control_markup(content).strip()
         if not content:
             return {}
         try:
@@ -500,6 +532,36 @@ class LLMClient:
                 return json.loads(match.group(0))
             except json.JSONDecodeError:
                 return {}
+
+    def _question_context_retry_messages(self, base_messages: list[dict], invalid_content: str) -> list[dict]:
+        messages = [dict(message) for message in base_messages]
+        cleaned_json = self._clean_json_retry_reference(invalid_content)
+        if cleaned_json:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "上一次输出不是可接受的 JSON。下面是已清理的候选 JSON 片段，仅作为字段和值的参考，"
+                        "不要照抄缺失或错误字段："
+                        f"{cleaned_json}\n"
+                        "请重新只返回一个合法 JSON 对象，并且只保留 prompt 要求的字段。"
+                    ),
+                }
+            )
+            return messages
+        messages.append(
+            {
+                "role": "user",
+                "content": "上一次输出不是合法 JSON。请重新只返回一个合法 JSON 对象，并且只保留 prompt 要求的字段。",
+            }
+        )
+        return messages
+
+    def _clean_json_retry_reference(self, content: str) -> str:
+        parsed = self._extract_json(content)
+        if not parsed:
+            return ""
+        return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     def _extract_sql(self, content: str) -> str | None:
         if not content:
@@ -620,6 +682,13 @@ class LLMClient:
     def _strip_reasoning_markup(self, content: str) -> str:
         cleaned = re.sub(r"<think>.*?</think>", " ", content, flags=re.DOTALL | re.IGNORECASE)
         cleaned = re.sub(r"<analysis>.*?</analysis>", " ", cleaned, flags=re.DOTALL | re.IGNORECASE)
+        return cleaned.strip()
+
+    def _strip_model_control_markup(self, content: str) -> str:
+        cleaned = self._strip_reasoning_markup(content)
+        cleaned = re.sub(r"<\|channel\|>\w+\s*", " ", cleaned)
+        cleaned = re.sub(r"<\|constrain\|>\w+\s*", " ", cleaned)
+        cleaned = cleaned.replace("<|message|>", " ")
         return cleaned.strip()
 
     def _strip_sql_comments(self, sql: str) -> str:

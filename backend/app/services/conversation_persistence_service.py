@@ -311,6 +311,13 @@ class ConversationPersistenceService:
             params,
         )
         if int(updated.rowcount or 0) > 0:
+            self._replace_query_risk_flags(
+                connection,
+                trace_id=trace.trace_id,
+                context_flags=final_context_validation.risk_flags if final_context_validation is not None else [],
+                sql_flags=final_sql_validation.risk_flags if final_sql_validation is not None else [],
+                created_at=trace.created_at,
+            )
             return
         connection.execute(
             text(
@@ -334,6 +341,43 @@ class ConversationPersistenceService:
             ),
             params,
         )
+        self._replace_query_risk_flags(
+            connection,
+            trace_id=trace.trace_id,
+            context_flags=final_context_validation.risk_flags if final_context_validation is not None else [],
+            sql_flags=final_sql_validation.risk_flags if final_sql_validation is not None else [],
+            created_at=trace.created_at,
+        )
+
+    def _replace_query_risk_flags(
+        self,
+        connection,
+        *,
+        trace_id: str,
+        context_flags: list[str],
+        sql_flags: list[str],
+        created_at: datetime,
+    ) -> None:
+        connection.execute(
+            text("DELETE FROM query_risk_flags WHERE trace_id = :trace_id"),
+            {"trace_id": trace_id},
+        )
+        for source, flags in (("context", context_flags), ("sql", sql_flags)):
+            for flag in dict.fromkeys(item for item in flags if item):
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO query_risk_flags (trace_id, source, flag, created_at)
+                        VALUES (:trace_id, :source, :flag, :created_at)
+                        """
+                    ),
+                    {
+                        "trace_id": trace_id,
+                        "source": source,
+                        "flag": flag,
+                        "created_at": created_at,
+                    },
+                )
 
     def _replace_retrieval_logs(self, connection, *, trace_id: str, retrieval) -> None:
         connection.execute(

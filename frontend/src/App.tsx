@@ -221,6 +221,8 @@ function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorAttention, setInspectorAttention] = useState(false);
   const bootRunRef = useRef(0);
+  const adminLoadRunRef = useRef(0);
+  const adminLoadAbortRef = useRef<AbortController | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const inspectorRef = useRef<HTMLElement | null>(null);
 
@@ -268,7 +270,11 @@ function App() {
   useEffect(() => {
     if (token && viewMode === "admin" && (currentUser?.roles || []).includes("admin")) {
       void loadAdminData(token);
+      return () => {
+        adminLoadAbortRef.current?.abort();
+      };
     }
+    return undefined;
   }, [token, viewMode, currentUser, adminUserPage, adminLogPage]);
 
   useEffect(() => {
@@ -702,30 +708,27 @@ function App() {
   }
 
   async function loadAdminData(authToken: string) {
+    const runId = ++adminLoadRunRef.current;
+    adminLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    adminLoadAbortRef.current = controller;
     setAdminPending(true);
     setAdminError("");
     const userPage = Math.max(1, adminUserPage);
     const logPage = Math.max(1, adminLogPage);
     try {
-      const [status, metrics, overview, users, roles, logs, feedbacks, evalSummary, runtimeSessions] = await Promise.all([
-        api.adminRuntimeStatus(authToken),
-        api.adminMetricsSummary(authToken),
-        api.adminMetadataOverview(authToken),
-        api.adminUsers(authToken, {
-          limit: ADMIN_TABLE_PAGE_SIZE,
-          offset: (userPage - 1) * ADMIN_TABLE_PAGE_SIZE,
-        }),
-        api.adminRoles(authToken),
-        api.adminQueryLogs(authToken, {
-          limit: ADMIN_TABLE_PAGE_SIZE,
-          offset: (logPage - 1) * ADMIN_TABLE_PAGE_SIZE,
-        }),
-        api.adminFeedbackSummary(authToken),
-        api.adminEvaluationSummary(authToken),
-        api.adminRuntimeSessions(authToken, { limit: 1, offset: 0 }),
-      ]);
-      const maxUserPage = Math.max(1, Math.ceil(users.count / ADMIN_TABLE_PAGE_SIZE));
-      const maxLogPage = Math.max(1, Math.ceil(logs.count / ADMIN_TABLE_PAGE_SIZE));
+      const dashboard = await api.adminDashboard(authToken, {
+        userLimit: ADMIN_TABLE_PAGE_SIZE,
+        userOffset: (userPage - 1) * ADMIN_TABLE_PAGE_SIZE,
+        logLimit: ADMIN_TABLE_PAGE_SIZE,
+        logOffset: (logPage - 1) * ADMIN_TABLE_PAGE_SIZE,
+        signal: controller.signal,
+      });
+      if (runId !== adminLoadRunRef.current) {
+        return;
+      }
+      const maxUserPage = Math.max(1, Math.ceil(dashboard.users.count / ADMIN_TABLE_PAGE_SIZE));
+      const maxLogPage = Math.max(1, Math.ceil(dashboard.query_logs.count / ADMIN_TABLE_PAGE_SIZE));
       if (userPage > maxUserPage) {
         setAdminUserPage(maxUserPage);
         return;
@@ -734,22 +737,27 @@ function App() {
         setAdminLogPage(maxLogPage);
         return;
       }
-      setRuntimeStatus(status);
-      setAdminMetrics(metrics);
-      setMetadataOverview(overview);
-      setAdminUsers(users.users);
-      setAdminUserCount(metrics.users.total);
-      setAdminRoles(roles);
-      setAdminLogs(logs.query_logs);
-      setAdminLogCount(metrics.query_logs.total);
-      setAdminFeedbackSummary(feedbacks);
-      setAdminEvalSummary(evalSummary);
-      setAdminSessions(runtimeSessions.sessions);
-      setAdminSessionCount(metrics.sessions.total);
+      setRuntimeStatus(dashboard.runtime_status);
+      setAdminMetrics(dashboard.metrics);
+      setMetadataOverview(dashboard.metadata_overview);
+      setAdminUsers(dashboard.users.users);
+      setAdminUserCount(dashboard.users.count);
+      setAdminRoles(dashboard.roles);
+      setAdminLogs(dashboard.query_logs.query_logs);
+      setAdminLogCount(dashboard.query_logs.count);
+      setAdminFeedbackSummary(dashboard.feedback_summary);
+      setAdminEvalSummary(dashboard.evaluation_summary);
+      setAdminSessions(dashboard.runtime_sessions.sessions);
+      setAdminSessionCount(dashboard.runtime_sessions.count);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
       setAdminError(errorMessage(error));
     } finally {
-      setAdminPending(false);
+      if (runId === adminLoadRunRef.current) {
+        setAdminPending(false);
+      }
     }
   }
 
@@ -893,7 +901,13 @@ function App() {
     queryLog: activeTraceArtifact?.query_log || latestQueryLogs[0] || null,
   });
   const resultRowCount = inspectorResponse?.execution?.row_count ?? inspectorSqlAudit?.row_count ?? 0;
-  const workspaceTitle = formatSessionTitle(selectedSession?.title || (shouldShowWelcome ? "新建会话" : "销售分析工作台"));
+  const workspaceHeading = buildWorkspaceHeading({
+    domain: workspaceDomain,
+    response: inspectorResponse,
+    queryLog: activeTraceArtifact?.query_log || latestQueryLogs[0] || null,
+    sessionTitle: selectedSession?.title,
+    fallbackTitle: shouldShowWelcome ? "新建会话" : "工作台",
+  });
 
   const isAdmin = (currentUser?.roles || []).includes("admin");
   const showAdminCenter = isAdmin && viewMode === "admin";
@@ -1189,7 +1203,12 @@ function App() {
 
               {!shouldShowWelcome ? (
                 <section className="workspace-session-summary">
-                  <h1>{workspaceTitle}</h1>
+                  <h1 title={workspaceHeading.title}>{workspaceHeading.title}</h1>
+                  {workspaceHeading.subtitle ? (
+                    <div className="workspace-session-subtitle" title={workspaceHeading.subtitle}>
+                      {workspaceHeading.subtitle}
+                    </div>
+                  ) : null}
                   <div className="toolbar-stats workspace-toolbar-stats">
                     <span className="toolbar-stat">
                       <AppIcon name="database" />
@@ -2648,6 +2667,67 @@ function resolveDisplayDomain(input: {
     input.queryLog?.subject_domain,
     inferDomainFromTables(input.response?.context_summary?.tables || input.sessionState?.tables || []),
   ]);
+}
+
+function buildWorkspaceHeading(input: {
+  domain?: string | null;
+  response?: ChatResponse | null;
+  queryLog?: RuntimeQueryLogRecord | null;
+  sessionTitle?: string | null;
+  fallbackTitle: string;
+}) {
+  const domainLabel = formatDomainLabel(input.domain);
+  const title = domainLabel ? `${domainLabel}分析` : input.fallbackTitle;
+  const subtitleCandidates = [
+    input.response?.question_context?.semantic_brief,
+    input.response?.context_summary?.semantic_brief,
+    input.queryLog?.semantic_brief,
+    input.response?.question_context?.effective_question,
+    input.queryLog?.effective_question,
+    input.queryLog?.question,
+    input.sessionTitle,
+  ];
+  const subtitle = firstChineseText(subtitleCandidates) || firstText(subtitleCandidates);
+  return {
+    title,
+    subtitle: subtitle && subtitle !== title ? subtitle : "",
+  };
+}
+
+function formatDomainLabel(domain?: string | null) {
+  const normalized = (domain || "").trim();
+  const labels: Record<string, string> = {
+    demand: "需求",
+    inventory: "库存",
+    plan_actual: "计划实绩",
+    sales_financial: "销售财务",
+    dimension: "维度",
+  };
+  return labels[normalized] || normalized;
+}
+
+function firstText(values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalized = (value || "").trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function firstChineseText(values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalized = (value || "").trim();
+    if (normalized && containsChineseText(normalized)) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function containsChineseText(value: string) {
+  return /[\u3400-\u9fff]/.test(value);
 }
 
 function firstKnownDomain(values: Array<string | null | undefined>) {

@@ -30,12 +30,10 @@ class DbRuntimeLogRepository:
             user_id=user_id,
             sql_risk_level=sql_risk_level,
             subject_domain=subject_domain,
+            risk_flag=risk_flag,
         )
-        fetch_all_for_risk_filter = bool(risk_flag)
-        paging_sql = "" if fetch_all_for_risk_filter else "LIMIT :limit OFFSET :offset"
-        if not fetch_all_for_risk_filter:
-            params["limit"] = max(1, limit)
-            params["offset"] = max(0, offset)
+        params["limit"] = max(1, limit)
+        params["offset"] = max(0, offset)
         rows = self.database_connector.fetch_all(
             f"""
             SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
@@ -47,19 +45,11 @@ class DbRuntimeLogRepository:
             FROM query_logs
             {where_sql}
             ORDER BY created_at DESC, trace_id DESC
-            {paging_sql}
+            LIMIT :limit OFFSET :offset
             """,
             params,
         )
-        records = [self._hydrate_query_log(row) for row in rows]
-        if risk_flag:
-            records = [
-                record
-                for record in records
-                if risk_flag in record.context_risk_flags or risk_flag in record.sql_risk_flags
-            ]
-            return records[max(0, offset):max(0, offset) + max(1, limit)]
-        return records
+        return [self._hydrate_query_log(row) for row in rows]
 
     def count_query_logs(
         self,
@@ -74,27 +64,13 @@ class DbRuntimeLogRepository:
             user_id=user_id,
             sql_risk_level=sql_risk_level,
             subject_domain=subject_domain,
+            risk_flag=risk_flag,
         )
-        if not risk_flag:
-            row = self.database_connector.fetch_one(
-                f"SELECT COUNT(*) AS total FROM query_logs {where_sql}",
-                params,
-            )
-            return int(row["total"]) if row else 0
-        rows = self.database_connector.fetch_all(
-            f"""
-            SELECT context_risk_flags_json, sql_risk_flags_json
-            FROM query_logs
-            {where_sql}
-            """,
+        row = self.database_connector.fetch_one(
+            f"SELECT COUNT(*) AS total FROM query_logs {where_sql}",
             params,
         )
-        return sum(
-            1
-            for row in rows
-            if risk_flag in json_loads(row.get("context_risk_flags_json"), [])
-            or risk_flag in json_loads(row.get("sql_risk_flags_json"), [])
-        )
+        return int(row["total"]) if row else 0
 
     def count_query_logs_created_between(self, start: datetime, end: datetime) -> int:
         row = self.database_connector.fetch_one(
@@ -107,6 +83,28 @@ class DbRuntimeLogRepository:
         )
         return int(row["total"]) if row else 0
 
+    def count_query_logs_created_summary(
+        self,
+        today_start: datetime,
+        yesterday_start: datetime,
+        tomorrow_start: datetime,
+    ) -> dict[str, int]:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN 1 ELSE 0 END) AS today,
+                SUM(CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN 1 ELSE 0 END) AS yesterday
+            FROM query_logs
+            """,
+            {
+                "today_start": today_start,
+                "yesterday_start": yesterday_start,
+                "tomorrow_start": tomorrow_start,
+            },
+        )
+        return self._count_summary(row)
+
     @staticmethod
     def _query_log_filters(
         *,
@@ -114,6 +112,7 @@ class DbRuntimeLogRepository:
         user_id: str | None = None,
         sql_risk_level: str | None = None,
         subject_domain: str | None = None,
+        risk_flag: str | None = None,
     ) -> tuple[str, dict[str, object]]:
         clauses: list[str] = []
         params: dict[str, object] = {}
@@ -129,6 +128,18 @@ class DbRuntimeLogRepository:
         if subject_domain:
             clauses.append("subject_domain = :subject_domain")
             params["subject_domain"] = subject_domain
+        if risk_flag:
+            clauses.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM query_risk_flags
+                    WHERE query_risk_flags.trace_id = query_logs.trace_id
+                      AND query_risk_flags.flag = :risk_flag
+                )
+                """
+            )
+            params["risk_flag"] = risk_flag
         return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
 
     def get_query_log(self, trace_id: str) -> RuntimeQueryLogRecord | None:
@@ -146,6 +157,25 @@ class DbRuntimeLogRepository:
             {"trace_id": trace_id},
         )
         return None if row is None else self._hydrate_query_log(row)
+
+    def get_query_logs_by_trace_ids(self, trace_ids: list[str]) -> dict[str, RuntimeQueryLogRecord]:
+        if not trace_ids:
+            return {}
+        where_sql, params = self._trace_id_filter(trace_ids)
+        rows = self.database_connector.fetch_all(
+            f"""
+            SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+                   effective_question, context_relation, question_decision,
+                   conversation_summary, semantic_brief, question_context_json,
+                   answer_status, context_valid, context_risk_level, context_risk_flags_json,
+                   sql_valid, sql_risk_level, sql_risk_flags_json,
+                   executed, row_count, warnings_json, trace_json, created_at
+            FROM query_logs
+            WHERE trace_id IN ({where_sql})
+            """,
+            params,
+        )
+        return {record.trace_id: record for record in (self._hydrate_query_log(row) for row in rows)}
 
     def summarize_query_risks(self, limit: int = 200) -> dict:
         rows = self.database_connector.fetch_all(
@@ -179,6 +209,7 @@ class DbRuntimeLogRepository:
         deletion_order = [
             ("retrieval_logs", "DELETE FROM retrieval_logs WHERE created_at < :cutoff"),
             ("sql_audit_logs", "DELETE FROM sql_audit_logs WHERE created_at < :cutoff"),
+            ("query_risk_flags", "DELETE FROM query_risk_flags WHERE created_at < :cutoff"),
             ("feedback_logs", "DELETE FROM feedback_logs WHERE created_at < :cutoff"),
             ("session_state_snapshots", "DELETE FROM session_state_snapshots WHERE created_at < :cutoff"),
             ("chat_messages", "DELETE FROM chat_messages WHERE created_at < :cutoff"),
@@ -241,6 +272,32 @@ class DbRuntimeLogRepository:
         )
         if row is None:
             return None
+        return self._hydrate_sql_audit(row)
+
+    def get_sql_audits_by_trace_ids(self, trace_ids: list[str]) -> dict[str, RuntimeSqlAuditRecord]:
+        if not trace_ids:
+            return {}
+        where_sql, params = self._trace_id_filter(trace_ids)
+        rows = self.database_connector.fetch_all(
+            f"""
+            SELECT sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
+                   sql_valid,
+                   sql_risk_level, sql_risk_flags_json, executed,
+                   row_count, warnings_json, errors_json, created_at
+            FROM sql_audit_logs
+            WHERE trace_id IN ({where_sql})
+            ORDER BY created_at DESC
+            """,
+            params,
+        )
+        audits: dict[str, RuntimeSqlAuditRecord] = {}
+        for row in rows:
+            trace_id = row["trace_id"]
+            if trace_id not in audits:
+                audits[trace_id] = self._hydrate_sql_audit(row)
+        return audits
+
+    def _hydrate_sql_audit(self, row: dict) -> RuntimeSqlAuditRecord:
         return RuntimeSqlAuditRecord(
             sql_audit_id=row["sql_audit_id"],
             trace_id=row["trace_id"],
@@ -317,6 +374,12 @@ class DbRuntimeLogRepository:
                     ensure_ascii=False,
                 ),
             },
+        )
+        self._replace_query_risk_flags(
+            trace_id=trace_id,
+            context_flags=context_validation.risk_flags,
+            sql_flags=sql_validation.risk_flags,
+            created_at=datetime.utcnow(),
         )
 
     def log_retrieval(self, trace_id: str, retrieval: RetrievalContext) -> None:
@@ -398,6 +461,33 @@ class DbRuntimeLogRepository:
             },
         )
 
+    def _replace_query_risk_flags(
+        self,
+        *,
+        trace_id: str,
+        context_flags: list[str],
+        sql_flags: list[str],
+        created_at: datetime,
+    ) -> None:
+        self.database_connector.execute_write(
+            "DELETE FROM query_risk_flags WHERE trace_id = :trace_id",
+            {"trace_id": trace_id},
+        )
+        for source, flags in (("context", context_flags), ("sql", sql_flags)):
+            for flag in dict.fromkeys(item for item in flags if item):
+                self.database_connector.execute_write(
+                    """
+                    INSERT INTO query_risk_flags (trace_id, source, flag, created_at)
+                    VALUES (:trace_id, :source, :flag, :created_at)
+                    """,
+                    {
+                        "trace_id": trace_id,
+                        "source": source,
+                        "flag": flag,
+                        "created_at": created_at,
+                    },
+                )
+
     def _hydrate_query_log(self, row: dict) -> RuntimeQueryLogRecord:
         trace_payload = json_loads(row.get("trace_json"), {})
         question_context = json_loads(row.get("question_context_json"), {})
@@ -465,3 +555,23 @@ class DbRuntimeLogRepository:
             if isinstance(elapsed_ms, (int, float)):
                 return int(elapsed_ms)
         return None
+
+    @staticmethod
+    def _trace_id_filter(trace_ids: list[str]) -> tuple[str, dict[str, object]]:
+        params: dict[str, object] = {}
+        placeholders: list[str] = []
+        for index, trace_id in enumerate(dict.fromkeys(trace_ids)):
+            key = f"trace_id_{index}"
+            placeholders.append(f":{key}")
+            params[key] = trace_id
+        return ", ".join(placeholders), params
+
+    @staticmethod
+    def _count_summary(row: dict | None) -> dict[str, int]:
+        if row is None:
+            return {"total": 0, "today": 0, "yesterday": 0}
+        return {
+            "total": int(row.get("total") or 0),
+            "today": int(row.get("today") or 0),
+            "yesterday": int(row.get("yesterday") or 0),
+        }

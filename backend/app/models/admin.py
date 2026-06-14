@@ -5,8 +5,11 @@ from datetime import datetime
 from pydantic import BaseModel
 from pydantic import Field
 
+from .auth import RoleRecord, UserCollectionResponse
 from .conversation import ChatSession
+from .evaluation import EvaluationSummary
 from .example_library import ExampleRecord, ExampleTemplateRecord
+from .feedback import FeedbackSummary
 from .session_state import SessionState
 
 
@@ -96,6 +99,18 @@ class RuntimeQueryLogRecord(BaseModel):
 class RuntimeQueryLogCollectionResponse(BaseModel):
     query_logs: list[RuntimeQueryLogRecord]
     count: int
+
+
+class AdminDashboardResponse(BaseModel):
+    runtime_status: dict
+    metrics: AdminMetricsSummary
+    metadata_overview: MetadataOverview
+    users: UserCollectionResponse
+    roles: list[RoleRecord]
+    query_logs: RuntimeQueryLogCollectionResponse
+    feedback_summary: FeedbackSummary
+    evaluation_summary: EvaluationSummary
+    runtime_sessions: RuntimeSessionCollectionResponse
 
 
 class RuntimeRiskSummaryResponse(BaseModel):

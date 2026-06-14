@@ -36,3 +36,13 @@ class AuditService:
 
     def get_trace(self, trace_id: str) -> TraceRecord | None:
         return self.repository.get_record(trace_id)
+
+    def get_traces(self, trace_ids: list[str]) -> dict[str, TraceRecord]:
+        if hasattr(self.repository, "get_records_by_trace_ids"):
+            return self.repository.get_records_by_trace_ids(trace_ids)
+        records: dict[str, TraceRecord] = {}
+        for trace_id in trace_ids:
+            record = self.repository.get_record(trace_id)
+            if record is not None:
+                records[trace_id] = record
+        return records

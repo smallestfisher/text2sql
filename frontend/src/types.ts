@@ -30,6 +30,18 @@ export interface AdminMetricsSummary {
   generated_at: string;
 }
 
+export interface AdminDashboardResponse {
+  runtime_status: RuntimeStatus;
+  metrics: AdminMetricsSummary;
+  metadata_overview: MetadataOverview;
+  users: UserCollectionResponse;
+  roles: RoleRecord[];
+  query_logs: RuntimeQueryLogCollectionResponse;
+  feedback_summary: FeedbackSummary;
+  evaluation_summary: EvaluationSummary;
+  runtime_sessions: RuntimeSessionCollectionResponse;
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: string;
@@ -283,6 +295,12 @@ export interface RuntimeQueryLogRecord {
   session_id?: string | null;
   user_id?: string | null;
   question?: string | null;
+  effective_question?: string | null;
+  context_relation?: string | null;
+  question_decision?: string | null;
+  conversation_summary?: string | null;
+  semantic_brief?: string | null;
+  question_context?: Record<string, unknown>;
   question_type?: string | null;
   subject_domain?: string | null;
   answer_status?: string | null;

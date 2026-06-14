@@ -37,12 +37,17 @@ class SessionWorkspaceService:
         state = self.session_service.resolve_state(session_id)
         trace_ids = self._message_trace_ids(messages)
         query_logs = self.runtime_log_repository.list_query_logs(limit=max(len(trace_ids), 5), session_id=session_id)
-        query_log_by_trace = {record.trace_id: record for record in query_logs}
+        query_log_by_trace = self._get_query_logs_by_trace_ids(trace_ids)
+        query_log_by_trace.update({record.trace_id: record for record in query_logs})
+        trace_by_id = self._get_traces(trace_ids)
+        sql_audit_by_trace = self._get_sql_audits_by_trace_ids(trace_ids)
         latest_query_logs = query_logs[:5]
         latest_trace_id = latest_query_logs[0].trace_id if latest_query_logs else (trace_ids[-1] if trace_ids else None)
         trace_artifacts = self._build_trace_artifacts(
             trace_ids=trace_ids,
             query_log_by_trace=query_log_by_trace,
+            trace_by_id=trace_by_id,
+            sql_audit_by_trace=sql_audit_by_trace,
             latest_trace_id=latest_trace_id,
             state=state,
             messages=messages,
@@ -66,6 +71,8 @@ class SessionWorkspaceService:
         *,
         trace_ids: list[str],
         query_log_by_trace: dict,
+        trace_by_id: dict,
+        sql_audit_by_trace: dict,
         latest_trace_id: str | None,
         state,
         messages,
@@ -76,10 +83,10 @@ class SessionWorkspaceService:
             query_log = query_log_by_trace.get(trace_id) or self.runtime_log_repository.get_query_log(trace_id)
             if query_log is None:
                 raise RuntimeError(f"workspace restoration missing query log for trace_id={trace_id}")
-            trace = self.audit_service.get_trace(trace_id)
+            trace = trace_by_id.get(trace_id) or self.audit_service.get_trace(trace_id)
             if trace is None:
                 raise RuntimeError(f"workspace restoration missing trace for trace_id={trace_id}")
-            sql_audit = self.runtime_log_repository.get_sql_audit(trace_id)
+            sql_audit = sql_audit_by_trace.get(trace_id) or self.runtime_log_repository.get_sql_audit(trace_id)
             if sql_audit is None:
                 raise RuntimeError(f"workspace restoration missing sql audit for trace_id={trace_id}")
             response = self.response_restore_service.build_from_trace_id(
@@ -122,3 +129,33 @@ class SessionWorkspaceService:
             if artifact.trace_id == trace_id:
                 return artifact
         return None
+
+    def _get_query_logs_by_trace_ids(self, trace_ids: list[str]) -> dict:
+        if hasattr(self.runtime_log_repository, "get_query_logs_by_trace_ids"):
+            return self.runtime_log_repository.get_query_logs_by_trace_ids(trace_ids)
+        records = {}
+        for trace_id in trace_ids:
+            record = self.runtime_log_repository.get_query_log(trace_id)
+            if record is not None:
+                records[trace_id] = record
+        return records
+
+    def _get_sql_audits_by_trace_ids(self, trace_ids: list[str]) -> dict:
+        if hasattr(self.runtime_log_repository, "get_sql_audits_by_trace_ids"):
+            return self.runtime_log_repository.get_sql_audits_by_trace_ids(trace_ids)
+        records = {}
+        for trace_id in trace_ids:
+            record = self.runtime_log_repository.get_sql_audit(trace_id)
+            if record is not None:
+                records[trace_id] = record
+        return records
+
+    def _get_traces(self, trace_ids: list[str]) -> dict:
+        if hasattr(self.audit_service, "get_traces"):
+            return self.audit_service.get_traces(trace_ids)
+        records = {}
+        for trace_id in trace_ids:
+            record = self.audit_service.get_trace(trace_id)
+            if record is not None:
+                records[trace_id] = record
+        return records

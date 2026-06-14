@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 from backend.app.api.dependencies import get_container, get_current_user, require_admin_user, reset_container
 from backend.app.core.container import AppContainer
 from backend.app.models.admin import (
+    AdminDashboardResponse,
     AdminMetricChangeRecord,
     AdminMetricsSummary,
     ExampleCollectionResponse,
@@ -87,13 +88,40 @@ class RuntimeQueryLogMaterializeExampleRequest(BaseModel):
 
 @router.get("/metrics/summary", response_model=AdminMetricsSummary)
 def admin_metrics_summary(container: AppContainer = Depends(get_container)) -> AdminMetricsSummary:
+    return _build_admin_metrics_summary(container)
+
+
+@router.get("/dashboard", response_model=AdminDashboardResponse)
+def admin_dashboard(
+    user_limit: int = 20,
+    user_offset: int = 0,
+    log_limit: int = 20,
+    log_offset: int = 0,
+    container: AppContainer = Depends(get_container),
+) -> AdminDashboardResponse:
+    return AdminDashboardResponse(
+        runtime_status=_build_runtime_status(container),
+        metrics=_build_admin_metrics_summary(container),
+        metadata_overview=container.metadata_service.overview(),
+        users=container.auth_service.list_admin_users(limit=user_limit, offset=user_offset),
+        roles=container.auth_service.list_roles(),
+        query_logs=container.runtime_admin_service.list_query_logs(limit=log_limit, offset=log_offset),
+        feedback_summary=container.feedback_service.summarize(limit=100),
+        evaluation_summary=container.evaluation_service.summarize_runs(limit=50),
+        runtime_sessions=container.runtime_admin_service.list_sessions(limit=1, offset=0),
+    )
+
+
+def _build_admin_metrics_summary(container: AppContainer) -> AdminMetricsSummary:
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_start - timedelta(days=1)
     tomorrow_start = today_start + timedelta(days=1)
 
-    def build_metric(total: int, today: int, yesterday: int) -> AdminMetricChangeRecord:
+    def build_metric(summary: dict[str, int]) -> AdminMetricChangeRecord:
+        today = int(summary.get("today") or 0)
+        yesterday = int(summary.get("yesterday") or 0)
         return AdminMetricChangeRecord(
-            total=total,
+            total=int(summary.get("total") or 0),
             today=today,
             yesterday=yesterday,
             delta=today - yesterday,
@@ -101,27 +129,83 @@ def admin_metrics_summary(container: AppContainer = Depends(get_container)) -> A
 
     return AdminMetricsSummary(
         users=build_metric(
-            container.auth_repository.count_users(),
-            container.auth_repository.count_users_created_between(today_start, tomorrow_start),
-            container.auth_repository.count_users_created_between(yesterday_start, today_start),
+            _repository_count_summary(
+                container.auth_repository,
+                "count_users_created_summary",
+                "count_users",
+                "count_users_created_between",
+                today_start,
+                yesterday_start,
+                tomorrow_start,
+            )
         ),
         sessions=build_metric(
-            container.session_repository.count_sessions(),
-            container.session_repository.count_sessions_created_between(today_start, tomorrow_start),
-            container.session_repository.count_sessions_created_between(yesterday_start, today_start),
+            _repository_count_summary(
+                container.session_repository,
+                "count_sessions_created_summary",
+                "count_sessions",
+                "count_sessions_created_between",
+                today_start,
+                yesterday_start,
+                tomorrow_start,
+            )
         ),
         query_logs=build_metric(
-            container.runtime_log_repository.count_query_logs(),
-            container.runtime_log_repository.count_query_logs_created_between(today_start, tomorrow_start),
-            container.runtime_log_repository.count_query_logs_created_between(yesterday_start, today_start),
+            _repository_count_summary(
+                container.runtime_log_repository,
+                "count_query_logs_created_summary",
+                "count_query_logs",
+                "count_query_logs_created_between",
+                today_start,
+                yesterday_start,
+                tomorrow_start,
+            )
         ),
         feedbacks=build_metric(
-            container.feedback_repository.count_records(),
-            container.feedback_repository.count_records_created_between(today_start, tomorrow_start),
-            container.feedback_repository.count_records_created_between(yesterday_start, today_start),
+            _repository_count_summary(
+                container.feedback_repository,
+                "count_records_created_summary",
+                "count_records",
+                "count_records_created_between",
+                today_start,
+                yesterday_start,
+                tomorrow_start,
+            )
         ),
         generated_at=datetime.utcnow(),
     )
+
+
+def _repository_count_summary(
+    repository,
+    summary_method_name: str,
+    total_method_name: str,
+    range_method_name: str,
+    today_start: datetime,
+    yesterday_start: datetime,
+    tomorrow_start: datetime,
+) -> dict[str, int]:
+    summary_method = getattr(repository, summary_method_name, None)
+    if callable(summary_method):
+        return summary_method(today_start, yesterday_start, tomorrow_start)
+    total_method = getattr(repository, total_method_name)
+    range_method = getattr(repository, range_method_name)
+    return {
+        "total": total_method(),
+        "today": range_method(today_start, tomorrow_start),
+        "yesterday": range_method(yesterday_start, today_start),
+    }
+
+
+def _build_runtime_status(container: AppContainer) -> dict:
+    return {
+        "business_database": container.business_database_connector.test_connection(),
+        "runtime_database": container.runtime_database_connector.test_connection(),
+        "llm": container.llm_client.health(),
+        "vector_retrieval": container.vector_retriever.health(),
+        "retrieval_corpus": container.retrieval_service.health(),
+        "sql_ast": container.sql_ast_validator.health(),
+    }
 
 
 @router.get("/metadata/overview", response_model=MetadataOverview)
@@ -271,14 +355,7 @@ def summarize_feedbacks(
 
 @router.get("/runtime/status")
 def runtime_status(container: AppContainer = Depends(get_container)) -> dict:
-    return {
-        "business_database": container.business_database_connector.test_connection(),
-        "runtime_database": container.runtime_database_connector.test_connection(),
-        "llm": container.llm_client.health(),
-        "vector_retrieval": container.vector_retriever.health(),
-        "retrieval_corpus": container.retrieval_service.health(),
-        "sql_ast": container.sql_ast_validator.health(),
-    }
+    return _build_runtime_status(container)
 
 
 @router.post("/runtime/vector/prewarm")

@@ -88,3 +88,35 @@ class DbFeedbackRepository:
             {"start": start, "end": end},
         )
         return int(row["total"]) if row else 0
+
+    def count_records_created_summary(
+        self,
+        today_start: datetime,
+        yesterday_start: datetime,
+        tomorrow_start: datetime,
+    ) -> dict[str, int]:
+        row = self.database_connector.fetch_one(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN 1 ELSE 0 END) AS today,
+                SUM(CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN 1 ELSE 0 END) AS yesterday
+            FROM feedback_logs
+            """,
+            {
+                "today_start": today_start,
+                "yesterday_start": yesterday_start,
+                "tomorrow_start": tomorrow_start,
+            },
+        )
+        return self._count_summary(row)
+
+    @staticmethod
+    def _count_summary(row: dict | None) -> dict[str, int]:
+        if row is None:
+            return {"total": 0, "today": 0, "yesterday": 0}
+        return {
+            "total": int(row.get("total") or 0),
+            "today": int(row.get("today") or 0),
+            "yesterday": int(row.get("yesterday") or 0),
+        }

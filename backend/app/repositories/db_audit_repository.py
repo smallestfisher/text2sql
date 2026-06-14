@@ -12,6 +12,13 @@ class DbAuditRepository:
     def append(self, record: TraceRecord) -> TraceRecord:
         self.database_connector.execute_write(
             """
+            DELETE FROM query_risk_flags
+            WHERE trace_id = :trace_id
+            """,
+            {"trace_id": record.trace_id},
+        )
+        self.database_connector.execute_write(
+            """
             DELETE FROM query_logs
             WHERE trace_id = :trace_id
             """,
@@ -55,3 +62,28 @@ class DbAuditRepository:
         if payload.get("created_at") is not None:
             payload["created_at"] = as_datetime(payload["created_at"])
         return TraceRecord(**payload)
+
+    def get_records_by_trace_ids(self, trace_ids: list[str]) -> dict[str, TraceRecord]:
+        if not trace_ids:
+            return {}
+        placeholders: list[str] = []
+        params: dict[str, object] = {}
+        for index, trace_id in enumerate(dict.fromkeys(trace_ids)):
+            key = f"trace_id_{index}"
+            placeholders.append(f":{key}")
+            params[key] = trace_id
+        rows = self.database_connector.fetch_all(
+            f"""
+            SELECT trace_id, trace_json
+            FROM query_logs
+            WHERE trace_id IN ({", ".join(placeholders)})
+            """,
+            params,
+        )
+        records: dict[str, TraceRecord] = {}
+        for row in rows:
+            payload = json_loads(row["trace_json"], {})
+            if payload.get("created_at") is not None:
+                payload["created_at"] = as_datetime(payload["created_at"])
+            records[row["trace_id"]] = TraceRecord(**payload)
+        return records

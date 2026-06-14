@@ -2,6 +2,7 @@ import type {
   BootstrapStatus,
   ChatResponse,
   ProgressEvent,
+  AdminDashboardResponse,
   AdminMetricsSummary,
   EvaluationReplayRequest,
   EvaluationReplayResult,
@@ -32,11 +33,20 @@ type RequestOptions = {
   method?: string;
   token?: string | null;
   body?: unknown;
+  signal?: AbortSignal;
 };
 
 type PageOptions = {
   limit?: number;
   offset?: number;
+};
+
+type AdminDashboardOptions = {
+  userLimit?: number;
+  userOffset?: number;
+  logLimit?: number;
+  logOffset?: number;
+  signal?: AbortSignal;
 };
 
 function pageQuery(options: PageOptions = {}) {
@@ -46,6 +56,24 @@ function pageQuery(options: PageOptions = {}) {
   }
   if (typeof options.offset === "number") {
     params.set("offset", String(options.offset));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function adminDashboardQuery(options: AdminDashboardOptions = {}) {
+  const params = new URLSearchParams();
+  if (typeof options.userLimit === "number") {
+    params.set("user_limit", String(options.userLimit));
+  }
+  if (typeof options.userOffset === "number") {
+    params.set("user_offset", String(options.userOffset));
+  }
+  if (typeof options.logLimit === "number") {
+    params.set("log_limit", String(options.logLimit));
+  }
+  if (typeof options.logOffset === "number") {
+    params.set("log_offset", String(options.logOffset));
   }
   const query = params.toString();
   return query ? `?${query}` : "";
@@ -76,6 +104,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     method: options.method || "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -127,6 +156,7 @@ async function requestEventStream(
     method: options.method || "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal,
   });
 
   if (!response.ok || !response.body) {
@@ -271,6 +301,12 @@ export const api = {
         session_id: sessionId,
       },
     }, onEvent);
+  },
+  adminDashboard(token: string, options: AdminDashboardOptions = {}): Promise<AdminDashboardResponse> {
+    return request(`/api/admin/dashboard${adminDashboardQuery(options)}`, {
+      token,
+      signal: options.signal,
+    });
   },
   adminRuntimeStatus(token: string): Promise<RuntimeStatus> {
     return request("/api/admin/runtime/status", { token });

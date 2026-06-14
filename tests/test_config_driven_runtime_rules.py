@@ -143,6 +143,25 @@ class FakeChatCompletionResponse:
     choices = [type("Choice", (), {"message": type("Message", (), {"content": "SELECT 1"})()})()]
 
 
+class FakeReasoningChatCompletionResponse:
+    choices = [
+        type(
+            "Choice",
+            (),
+            {
+                "message": type(
+                    "Message",
+                    (),
+                    {
+                        "content": '{"ok":true}',
+                        "reasoning_content": "internal reasoning text",
+                    },
+                )()
+            },
+        )()
+    ]
+
+
 class FakeOpenAIClient:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -218,6 +237,34 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(health["metrics"]["question_context"]["requests"], 2)
         self.assertEqual(health["metrics"]["question_context"]["provider_calls"], 2)
         self.assertEqual(health["metrics"]["question_context"].get("cache_hits", 0), 0)
+
+    def test_question_context_retry_does_not_replay_model_control_tokens(self) -> None:
+        client = StubCachedLLMClient()
+        base_messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "{}"},
+        ]
+        retry_messages = client._question_context_retry_messages(
+            base_messages,
+            '<|channel|>final <|constrain|>json<|message|>{"decision":"invalid","reason":"No question provided."}',
+        )
+
+        self.assertEqual([message["role"] for message in retry_messages], ["system", "user", "user"])
+        retry_content = str(retry_messages[-1]["content"])
+        self.assertNotIn("<|channel|>", retry_content)
+        self.assertNotIn("<|constrain|>", retry_content)
+        self.assertNotIn("<|message|>", retry_content)
+        self.assertIn('"decision":"invalid"', retry_content)
+
+    def test_llm_response_records_reasoning_content_length_only(self) -> None:
+        client = StubCachedLLMClient()
+        content = client._response_content(FakeReasoningChatCompletionResponse(), task_name="question_context")
+
+        self.assertEqual(content, '{"ok":true}')
+        self.assertEqual(
+            client.health()["metrics"]["question_context"]["reasoning_chars"],
+            len("internal reasoning text"),
+        )
 
     def test_complete_question_context_admission_does_not_expose_history(self) -> None:
         question = "202604月销售业绩对202604月份最后一版P版中202605需求量覆盖不足的客户有哪些？"

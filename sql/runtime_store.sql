@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS query_logs (
   created_at DATETIME NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS query_risk_flags (
+  trace_id VARCHAR(64) NOT NULL,
+  source VARCHAR(16) NOT NULL,
+  flag VARCHAR(64) NOT NULL,
+  created_at DATETIME NOT NULL,
+  PRIMARY KEY (trace_id, source, flag)
+);
+
 CREATE TABLE IF NOT EXISTS retrieval_logs (
   retrieval_log_id VARCHAR(64) PRIMARY KEY,
   trace_id VARCHAR(64) NOT NULL,

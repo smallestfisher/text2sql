@@ -84,6 +84,7 @@ class QuestionContextPromptBuilder:
                 "subject_domain_values": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"],
                 "constraints": [
                     "只做问题上下文整理，不生成 SQL。",
+                    "除业务编码、字段名、表名、产品型号和专有缩写外，effective_question、semantic_brief、clarification_question、reason 等自然语言文本字段必须使用中文。",
                     "subject_domain 只能输出 subject_domain_values 中的一个值；如果不能稳定判断标准业务域，输出 unknown，不要自造新的业务域名称。",
                     "当 context_policy.history_included=false 时，只能根据当前 question 判断；如果当前问题本身完整，必须返回 context_relation=new，并保持 effective_question 等于原问题。",
                     "当 context_policy.history_included=false 且当前 question 明显依赖历史、省略了查询对象或使用指代时，返回 context_relation=ambiguous 或 follow_up，不要猜测历史内容。",

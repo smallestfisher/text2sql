@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from backend.app.config import RUNTIME_STORE_SCHEMA_PATH
 from backend.app.services.database_connector import DatabaseConnector
 
@@ -168,6 +170,8 @@ class RuntimeStoreInitializer:
         self._ensure_index("query_logs", "idx_query_logs_domain_created", "subject_domain, created_at", migration_errors)
         self._ensure_index("query_logs", "idx_query_logs_decision_created", "question_decision, created_at", migration_errors)
         self._ensure_index("query_logs", "idx_query_logs_sql_risk_created", "sql_risk_level, created_at", migration_errors)
+        self._ensure_index("query_risk_flags", "idx_query_risk_flags_flag_created", "flag, created_at", migration_errors)
+        self._ensure_index("query_risk_flags", "idx_query_risk_flags_trace", "trace_id", migration_errors)
         self._ensure_index("retrieval_logs", "idx_retrieval_logs_trace_rank", "trace_id, rank_position", migration_errors)
         self._ensure_index("retrieval_logs", "idx_retrieval_logs_channel_created", "retrieval_channel, created_at", migration_errors)
         self._ensure_index("sql_audit_logs", "idx_sql_audit_logs_trace_created", "trace_id, created_at", migration_errors)
@@ -181,6 +185,7 @@ class RuntimeStoreInitializer:
             "source_type, source_id",
             migration_errors,
         )
+        self._sync_query_risk_flag_index(migration_errors)
 
         schema_result["database"] = database_result.get("database")
         if migration_errors:
@@ -266,6 +271,73 @@ class RuntimeStoreInitializer:
                 "index_name": index_name,
             },
         )
+
+    def _sync_query_risk_flag_index(self, errors: list[str]) -> None:
+        try:
+            rows = self.database_connector.fetch_all(
+                """
+                SELECT trace_id, context_risk_flags_json, sql_risk_flags_json, created_at
+                FROM query_logs q
+                WHERE (
+                    (context_risk_flags_json IS NOT NULL AND context_risk_flags_json <> '[]')
+                    OR (sql_risk_flags_json IS NOT NULL AND sql_risk_flags_json <> '[]')
+                )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM query_risk_flags f
+                    WHERE f.trace_id = q.trace_id
+                  )
+                """
+            )
+            for row in rows:
+                self._insert_query_risk_flags(
+                    trace_id=row["trace_id"],
+                    source="context",
+                    flags=self._decode_flags(row.get("context_risk_flags_json")),
+                    created_at=row["created_at"],
+                )
+                self._insert_query_risk_flags(
+                    trace_id=row["trace_id"],
+                    source="sql",
+                    flags=self._decode_flags(row.get("sql_risk_flags_json")),
+                    created_at=row["created_at"],
+                )
+        except Exception as exc:
+            errors.append(f"sync query_risk_flags failed: {exc}")
+
+    def _insert_query_risk_flags(
+        self,
+        *,
+        trace_id: str,
+        source: str,
+        flags: list[str],
+        created_at,
+    ) -> None:
+        for flag in dict.fromkeys(item for item in flags if item):
+            self.database_connector.execute_write(
+                """
+                INSERT IGNORE INTO query_risk_flags (trace_id, source, flag, created_at)
+                VALUES (:trace_id, :source, :flag, :created_at)
+                """,
+                {
+                    "trace_id": trace_id,
+                    "source": source,
+                    "flag": flag,
+                    "created_at": created_at,
+                },
+            )
+
+    @staticmethod
+    def _decode_flags(payload: str | None) -> list[str]:
+        if not payload:
+            return []
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
 
     def _text_column_definition(self) -> str:
         return "LONGTEXT NULL"
