@@ -204,8 +204,10 @@ Chat / Workspace：
 
 Admin：
 
+- `GET /api/admin/dashboard`：管理中心聚合入口，一次性返回 runtime 状态、metrics、metadata、用户、角色、查询日志、反馈和评测汇总；任一子区异常仅降级该区，不影响其它区。
 - `GET /api/admin/runtime/status`
 - `GET /api/admin/runtime/query-logs`
+- `GET /api/admin/runtime/query-logs/risk-summary`
 - `GET /api/admin/runtime/query-logs/{trace_id}`
 - `GET /api/admin/runtime/query-logs/{trace_id}/retrieval`
 - `GET /api/admin/runtime/query-logs/{trace_id}/sql-audit`
@@ -235,7 +237,7 @@ Admin：
 - 宽表扫描、超大结果等风险标记。
 - SQL 质量警告，例如未保护零分母的除法、多表聚合不显式分层、位置排序。
 
-errors 是执行前硬阻断；warnings 不会单独阻断执行，但会进入 `sql_validation`、trace、query log 和 SQL audit，并汇总为 `risk_level` 与 `risk_flags`。
+errors 是执行前硬阻断；warnings 不会单独阻断执行，但会进入 `sql_validation`、trace、query log 和 SQL audit，并汇总为 `risk_level` 与 `risk_flags`。`risk_flags` 在写 query log 的 json 列时同步写入 `query_risk_flags` 索引表（`trace_id, source, flag`），启动时按 json 列回填缺失行；管理中心按 flag 过滤查询日志（`list_query_logs`/`count_query_logs`）和风险汇总（`summarize_query_risks`）都基于该表查询，json 列只作落库和调试观察。
 
 SQL repair 只处理 validator 或执行错误反馈出来的问题。业务正确性主要依赖语义资产、检索命中、prompt 质量和样例质量。
 
