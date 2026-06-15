@@ -3,11 +3,15 @@ from __future__ import annotations
 from collections import OrderedDict
 import unittest
 
+from backend.app.models.api import ChatRequest, ChatResponse, ExecutionResponse, ValidationResponse
+from backend.app.models.context_summary import ContextSummary
 from backend.app.models.semantic_types import FilterItem
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
+from backend.app.models.trace import TraceRecord
+from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.orchestrator import ConversationOrchestrator
@@ -137,6 +141,28 @@ class RecordingQuestionContextLLMClient:
         if not self.responses:
             raise AssertionError("unexpected question context call")
         return self.responses.pop(0)
+
+
+class RecordingProgressService:
+    def __init__(self) -> None:
+        self.events = []
+
+    def publish(self, event) -> None:
+        self.events.append(event)
+
+
+class FailingPersistenceService:
+    def persist_success(self, **kwargs) -> None:
+        raise RuntimeError("persist failed")
+
+
+class RecordingAuditService:
+    def append_step(self, trace, name, status, detail=None, metadata=None) -> None:
+        from backend.app.models.trace import TraceStep
+
+        trace.steps.append(
+            TraceStep(name=name, status=status, detail=detail, metadata=metadata or {})
+        )
 
 
 class FakeChatCompletionResponse:
@@ -1013,6 +1039,94 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
             state.pending_clarification.effective_question,
             "2026年3月Array工厂审批版投入物量与实际物量Gap和达成率",
         )
+
+    def test_terminal_response_does_not_emit_completed_before_persistence_succeeds(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        progress_service = RecordingProgressService()
+        orchestrator.progress_service = progress_service
+        orchestrator.answer_builder = AnswerBuilder()
+        orchestrator.audit_service = RecordingAuditService()
+        orchestrator.conversation_persistence_service = FailingPersistenceService()
+        trace = TraceRecord(trace_id="trace_terminal_persist_failure")
+        classification = QuestionClassification(
+            question_type="clarification_needed",
+            subject_domain="inventory",
+            need_clarification=True,
+            clarification_question="请补充查询对象。",
+        )
+        sql_context_value = SqlGenerationContext(
+            question_type="clarification_needed",
+            subject_domain="inventory",
+            need_clarification=True,
+            clarification_question="请补充查询对象。",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "persist failed"):
+            orchestrator._finalize_terminal_response(
+                trace=trace,
+                request=ChatRequest(question="库存"),
+                session_state=None,
+                question_context=None,
+                classification=classification,
+                sql_context=sql_context_value,
+                warnings=[],
+                retrieval=None,
+                terminal_reason="terminal gate: clarification required",
+            )
+
+        self.assertEqual([event.type for event in progress_service.events], [])
+
+    def test_response_snapshot_is_kept_out_of_public_response_trace_and_omits_rows(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        orchestrator.audit_service = RecordingAuditService()
+        trace = TraceRecord(trace_id="trace_snapshot_public")
+        classification = QuestionClassification(question_type="new", subject_domain="inventory")
+        context_summary = ContextSummary(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+        )
+        response = ChatResponse(
+            classification=classification,
+            context_summary=context_summary,
+            trace=trace,
+            answer=None,
+            sql="SELECT * FROM oms_inventory FETCH FIRST 2 ROWS ONLY",
+            context_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+            sql_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+            execution=ExecutionResponse(
+                executed=True,
+                status="ok",
+                sql="SELECT * FROM oms_inventory FETCH FIRST 2 ROWS ONLY",
+                row_count=2,
+                columns=["product_ID"],
+                rows=[{"product_ID": "A"}, {"product_ID": "B"}],
+                errors=[],
+                warnings=[],
+            ),
+            next_session_state=SessionState(session_id="sess_snapshot"),
+        )
+
+        orchestrator._append_response_snapshot(trace, response)
+
+        self.assertEqual([step.name for step in trace.steps], ["response_snapshot"])
+        self.assertEqual([step.name for step in response.trace.steps], [])
+        snapshot_response = trace.steps[0].metadata["response"]
+        self.assertNotIn("rows", snapshot_response["execution"])
+
+    def test_sql_context_validation_rejects_missing_physical_tables(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="unknown",
+            tables=[],
+            semantic_brief="查询没有稳定物理表证据的问题。",
+        )
+
+        context_errors, context_warnings = orchestrator._validate_sql_context(sql_context_value)
+
+        self.assertIn("no physical tables selected for SQL generation", context_errors)
+        self.assertEqual(context_warnings, [])
 
 if __name__ == "__main__":
     unittest.main()

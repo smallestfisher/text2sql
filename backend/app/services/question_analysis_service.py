@@ -139,40 +139,6 @@ class QuestionAnalysisService:
             return subject_domain
         return "unknown"
 
-    def classify_question(
-        self,
-        question: str,
-        session_state: SessionState | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> tuple[QuestionClassification, list[str]]:
-        analysis_trace = self.analyze_question(
-            question=question,
-            session_state=session_state,
-            cancellation_token=cancellation_token,
-        )
-        return analysis_trace["classification"], analysis_trace["warnings"]
-
-    def create_sql_context(
-        self,
-        question: str,
-        session_state: SessionState | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> tuple[QuestionClassification, SqlGenerationContext, list[str]]:
-        analysis_trace = self.analyze_question(
-            question=question,
-            session_state=session_state,
-            cancellation_token=cancellation_token,
-        )
-        classification = analysis_trace["classification"]
-        warnings = analysis_trace["warnings"]
-
-        sql_context = self.build_sql_context(
-            classification=classification,
-            session_state=session_state,
-            question_context=analysis_trace.get("question_context"),
-        )
-        return classification, sql_context, warnings
-
     def build_sql_context(
         self,
         *,

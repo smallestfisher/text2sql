@@ -118,7 +118,7 @@ class PromptBuilder:
                         selected.append(table_name)
         if selected:
             return selected[:8]
-        return list(self._tables_metadata.keys())[:8]
+        return []
 
     def _expand_sources_with_join_patterns(
         self,

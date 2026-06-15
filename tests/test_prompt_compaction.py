@@ -46,6 +46,16 @@ class StaticExampleRegistry:
         return []
 
 
+class StaticTableRegistry(StaticExampleRegistry):
+    def __init__(self, tables_metadata: dict) -> None:
+        super().__init__([])
+        self._tables_metadata = tables_metadata
+
+    @property
+    def tables_metadata(self) -> dict:
+        return self._tables_metadata
+
+
 class MutableExampleRegistry(StaticExampleRegistry):
     @property
     def examples_template(self) -> list[dict]:
@@ -943,8 +953,13 @@ class PromptCompactionTests(unittest.TestCase):
             semantic_runtime=self.semantic_runtime,
         )
 
-        classification, sql_context_value, _warnings = analysis_service.create_sql_context(
+        analysis_trace = analysis_service.analyze_question(
             "最新P版，2026年5月Oxide产品数量是多少"
+        )
+        classification = analysis_trace["classification"]
+        sql_context_value = analysis_service.build_sql_context(
+            classification=classification,
+            question_context=analysis_trace["question_context"],
         )
 
         self.assertEqual(classification.question_type, "new")
@@ -1489,6 +1504,31 @@ FETCH FIRST 200 ROWS ONLY
         self.assertIn("多表聚合对比时，优先先分别聚合到明确粒度", sql_text)
         self.assertNotIn("tables_metadata", sql_text)
         self.assertNotIn("sql_context.", sql_text)
+
+    def test_sql_prompt_does_not_fallback_to_arbitrary_tables_without_evidence(self) -> None:
+        prompt_builder = PromptBuilder(
+            semantic_runtime=self.semantic_runtime,
+            metadata_registry=StaticTableRegistry(
+                {
+                    "first_table": {"columns": ["id"]},
+                    "second_table": {"columns": ["id"]},
+                }
+            ),
+        )
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="unknown",
+            tables=[],
+            semantic_brief="没有可稳定映射到物理表的查询。",
+        )
+
+        prompt = prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="随便查一下",
+        )
+
+        self.assertEqual(prompt["available_tables"], {})
+        self.assertEqual(prompt["evidence_context"]["allowed_sources"], [])
 
 
 if __name__ == "__main__":

@@ -334,8 +334,7 @@ class ConversationOrchestrator:
                 metadata={"sql_context": sql_context.model_dump(mode="json")},
             )
 
-            context_errors: list[str] = []
-            context_warnings: list[str] = []
+            context_errors, context_warnings = self._validate_sql_context(sql_context)
             self._log_stage_io(
                 "validate_context",
                 inputs={"sql_context": self._sql_context_summary(sql_context)},
@@ -357,19 +356,19 @@ class ConversationOrchestrator:
             self.audit_service.append_step(
                 trace,
                 "validate_context",
-                "completed",
+                "completed" if not context_errors else "failed",
                 metadata={
                     "error_count": len(context_errors),
                     "warning_count": len(context_warnings),
                     "errors": context_errors,
                     "warnings": context_warnings,
-                    "reason": "SQL context packaged from retrieved evidence; SQL validator owns executable SQL safety boundaries",
+                    "reason": "SQL context must resolve to physical evidence before SQL generation",
                 },
             )
             context_validation = ValidationResponse(
-                valid=True,
-                errors=[],
-                warnings=warnings,
+                valid=not context_errors,
+                errors=context_errors,
+                warnings=warnings + context_warnings,
                 risk_level="low",
                 risk_flags=[],
             )
@@ -532,7 +531,7 @@ class ConversationOrchestrator:
                 errors=sql_errors,
                 sql=sql,
                 llm_sql=llm_sql,
-                context_errors=[],
+                context_errors=context_errors,
                 sql_prompt=sql_prompt,
             )
             if validation_repair_allowed:
@@ -1150,6 +1149,19 @@ class ConversationOrchestrator:
         )
 
     @staticmethod
+    def _validate_sql_context(sql_context) -> tuple[list[str], list[str]]:
+        if sql_context is None:
+            return ["sql context is missing"], []
+        tables = [
+            table_name
+            for table_name in list(getattr(sql_context, "tables", []) or [])
+            if isinstance(table_name, str) and table_name.strip()
+        ]
+        if not tables:
+            return ["no physical tables selected for SQL generation"], []
+        return [], []
+
+    @staticmethod
     def _question_context_summary(question_context) -> dict | None:
         if question_context is None:
             return None
@@ -1536,6 +1548,13 @@ class ConversationOrchestrator:
             execution=None,
             next_session_state=next_session_state,
         )
+        self._append_response_snapshot(trace, response)
+        self._persist_success_artifacts(
+            trace=trace,
+            request=request,
+            response=response,
+            warnings=warnings + sql_validation.warnings,
+        )
         self._publish_progress(
             trace.trace_id,
             event_type="completed",
@@ -1543,13 +1562,6 @@ class ConversationOrchestrator:
             status=answer.status if answer else "ok",
             detail=answer.summary if answer else None,
             metadata={"response": response.model_dump(mode="json")},
-        )
-        self._append_response_snapshot(trace, response)
-        self._persist_success_artifacts(
-            trace=trace,
-            request=request,
-            response=response,
-            warnings=warnings + sql_validation.warnings,
         )
         logger.info(
             "chat completed trace_id=%s answer_status=%s terminal=%s",
@@ -1644,13 +1656,17 @@ class ConversationOrchestrator:
         )
 
     def _append_response_snapshot(self, trace, response: ChatResponse) -> None:
-        payload = response.model_dump(mode="json", exclude={"trace", "sql"})
-        execution_payload = payload.get("execution")
-        if isinstance(execution_payload, dict):
-            execution_payload["sql"] = None
-        state_payload = payload.get("next_session_state")
-        if isinstance(state_payload, dict):
-            state_payload["last_sql"] = None
+        if response.trace is trace:
+            response.trace = trace.model_copy(deep=True)
+        payload = response.model_dump(
+            mode="json",
+            exclude={
+                "trace": True,
+                "sql": True,
+                "execution": {"sql": True, "rows": True},
+                "next_session_state": {"last_sql": True},
+            },
+        )
         self.audit_service.append_step(
             trace,
             "response_snapshot",
