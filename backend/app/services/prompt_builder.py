@@ -208,7 +208,13 @@ class PromptBuilder:
         selected_sources: list[str] | None,
         retrieval: RetrievalContext | None = None,
     ) -> str:
-        return self._structured_business_knowledge_for_context(context, selected_sources, retrieval)
+        selected_entries = self._select_business_knowledge_entries(context, selected_sources, retrieval)
+        rendered_text, _rendered_entries = self._render_business_knowledge_entries(
+            selected_entries,
+            context,
+            selected_sources,
+        )
+        return rendered_text
 
     def _business_knowledge_source_for_context(
         self,
@@ -217,6 +223,18 @@ class PromptBuilder:
         retrieval: RetrievalContext | None = None,
     ) -> str:
         selected_entries = self._select_business_knowledge_entries(context, selected_sources, retrieval)
+        _rendered_text, rendered_entries = self._render_business_knowledge_entries(
+            selected_entries,
+            context,
+            selected_sources,
+        )
+        return self._business_knowledge_source(rendered_entries, retrieval)
+
+    def _business_knowledge_source(
+        self,
+        selected_entries: list[dict],
+        retrieval: RetrievalContext | None = None,
+    ) -> str:
         if not selected_entries:
             return "none"
         if self._retrieved_knowledge_hit_scores(retrieval):
@@ -259,7 +277,23 @@ class PromptBuilder:
         selected_entries = self._select_business_knowledge_entries(context, selected_sources, retrieval)
         if not selected_entries:
             return ""
+        rendered_text, _rendered_entries = self._render_business_knowledge_entries(
+            selected_entries,
+            context,
+            selected_sources,
+        )
+        return rendered_text
+
+    def _render_business_knowledge_entries(
+        self,
+        selected_entries: list[dict],
+        context: SqlGenerationContext,
+        selected_sources: list[str] | None,
+    ) -> tuple[str, list[dict]]:
+        if not selected_entries:
+            return "", []
         sections: list[str] = []
+        rendered_entries: list[dict] = []
         total_chars = 0
         for entry in selected_entries:
             notes = self._ranked_business_knowledge_items(entry, context, selected_sources)
@@ -278,10 +312,11 @@ class PromptBuilder:
             if projected > self.BUSINESS_KNOWLEDGE_MAX_CHARS and sections:
                 continue
             sections.append(block)
+            rendered_entries.append(entry)
             total_chars = projected
             if total_chars >= self.BUSINESS_KNOWLEDGE_MAX_CHARS:
                 break
-        return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS]
+        return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS], rendered_entries
 
     def _ranked_business_knowledge_items(
         self,
@@ -382,17 +417,8 @@ class PromptBuilder:
         selected.sort(reverse=True)
         return [entry for _score, _negative_index, entry in selected]
 
-    def _selected_business_knowledge_ids(
-        self,
-        context: SqlGenerationContext,
-        selected_sources: list[str] | None,
-        retrieval: RetrievalContext | None = None,
-    ) -> list[str]:
-        return [
-            str(entry.get("id"))
-            for entry in self._select_business_knowledge_entries(context, selected_sources, retrieval)
-            if entry.get("id")
-        ]
+    def _business_knowledge_entry_ids(self, selected_entries: list[dict]) -> list[str]:
+        return [str(entry.get("id")) for entry in selected_entries if entry.get("id")]
 
     def _score_business_knowledge_entry(
         self,
@@ -415,6 +441,18 @@ class PromptBuilder:
                 score += 4
         entry_keywords = {str(item).lower() for item in entry.get("keywords", []) if item}
         score += sum(1 for term in terms if term in entry_keywords)
+        query_text = " ".join(
+            str(item)
+            for item in [
+                context.semantic_brief or "",
+                context.reason or "",
+                *context.metrics,
+                *context.dimensions,
+                *(filter_item.field for filter_item in context.filters),
+            ]
+            if item
+        ).lower()
+        score += 2 * sum(1 for keyword in entry_keywords if keyword and keyword in query_text)
         entry_text = " ".join(
             str(item)
             for item in [
@@ -451,33 +489,6 @@ class PromptBuilder:
                 continue
             scores[entry_id] = max(scores.get(entry_id, 0.0), self._hit_fusion_score(hit))
         return scores
-
-    def _retrieved_join_pattern_blocks(
-        self,
-        retrieval: RetrievalContext | None,
-    ) -> list[str]:
-        if retrieval is None:
-            return []
-        sections: list[str] = []
-        for hit in retrieval.hits:
-            if hit.source_type != "join_pattern":
-                continue
-            lines = [f"[join_pattern:{hit.source_id}]"]
-            tables = hit.metadata.get("tables", [])
-            join_path = hit.metadata.get("join_path", [])
-            notes = hit.metadata.get("notes", [])
-            if isinstance(tables, list) and tables:
-                lines.append("相关表: " + ", ".join(str(item) for item in tables if item))
-            if isinstance(join_path, list):
-                for item in join_path:
-                    if item:
-                        lines.append(f"- join: {item}")
-            if isinstance(notes, list):
-                for item in notes:
-                    if item:
-                        lines.append(f"- {item}")
-            sections.append("\n".join(lines))
-        return sections
 
     def _select_retrieved_examples(
         self,
@@ -517,7 +528,22 @@ class PromptBuilder:
                 payload["sql_omitted_reason"] = "example SQL failed Oracle read-only prompt safety checks"
             selected.append((self._score_retrieved_example(context, selected_sources, example, hit), -index, payload))
         selected.sort(reverse=True)
-        return [payload for _score, _negative_index, payload in selected[:2]]
+        selected_payloads = [payload for _score, _negative_index, payload in selected[:2]]
+        for prompt_index, payload in enumerate(selected_payloads):
+            if prompt_index == 0:
+                continue
+            sql = payload.pop("sql", None)
+            if isinstance(sql, str) and sql.strip():
+                payload["sql_outline"] = self._sql_outline(sql)
+        return selected_payloads
+
+    def _sql_outline(self, sql: str, *, max_length: int = 220) -> str:
+        compacted = re.sub(r"/\*.*?\*/", " ", sql or "", flags=re.DOTALL)
+        compacted = re.sub(r"--.*?(?:\n|$)", " ", compacted)
+        compacted = re.sub(r"\s+", " ", compacted).strip()
+        if len(compacted) <= max_length:
+            return compacted
+        return compacted[:max_length].rsplit(" ", 1)[0]
 
     def _score_retrieved_example(
         self,
@@ -905,45 +931,20 @@ class PromptBuilder:
         start_literal, end_literal = literals
         return f"{field_expression} BETWEEN '{start_literal}' AND '{end_literal}'"
 
-    def _has_latest_n_filter(self, context: SqlGenerationContext) -> bool:
-        return any(item.op == "latest_n" for item in context.filters)
-
-    def _qualify_columns(self, context: SqlGenerationContext, columns: list[str]) -> list[str]:
-        if self.semantic_runtime is None:
-            return []
-        qualified: list[str] = []
-        for column in columns:
-            for table_name in context.tables:
-                if column in self.semantic_runtime.table_fields(table_name):
-                    candidate = f"{table_name}.{column}"
-                    if candidate not in qualified:
-                        qualified.append(candidate)
-        return qualified
-
-    def _domain_business_knowledge(self, subject_domain: str) -> str:
-        if not self._business_knowledge or subject_domain == "unknown":
-            return ""
-        sections: list[str] = []
-        total_chars = 0
-        for entry in self._business_knowledge:
-            domains = {str(item).lower() for item in entry.get("domains", []) if item}
-            if subject_domain.lower() not in domains:
-                continue
-            notes = entry.get("notes", [])
-            if not isinstance(notes, list) or not notes:
-                continue
-            block = "\n".join(f"- {note}" for note in notes if isinstance(note, str) and note.strip())
-            if not block:
-                continue
-            separator_chars = 2 if sections else 0
-            projected = total_chars + separator_chars + len(block)
-            if projected > self.BUSINESS_KNOWLEDGE_MAX_CHARS and sections:
-                continue
-            sections.append(block)
-            total_chars = projected
-            if total_chars >= self.BUSINESS_KNOWLEDGE_MAX_CHARS:
-                break
-        return "\n\n".join(sections)[: self.BUSINESS_KNOWLEDGE_MAX_CHARS]
+    def _has_latest_n_signal(self, context: SqlGenerationContext) -> bool:
+        if any(item.op == "latest_n" for item in context.filters):
+            return True
+        signal_text = " ".join(
+            str(item)
+            for item in [
+                context.semantic_brief or "",
+                context.reason or "",
+                *context.metrics,
+                *context.dimensions,
+                *(item.field for item in context.filters),
+            ]
+        ).lower()
+        return any(term in signal_text for term in ("latest", "recent", "最新", "最近"))
 
     def _question_context_business_knowledge(
         self,
@@ -1130,7 +1131,7 @@ class PromptBuilder:
                 "WHERE 条件尽量写在最早可过滤的位置，减少 join 后再过滤。",
             ]
         )
-        return constraints
+        return self._unique_strings(constraints)
 
     def _latest_n_preferences(self) -> list[str]:
         preferences = []
@@ -1147,4 +1148,14 @@ class PromptBuilder:
                 )
                 continue
             preferences.append(item)
-        return preferences
+        return self._unique_strings(preferences)
+
+    def _unique_strings(self, values: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result

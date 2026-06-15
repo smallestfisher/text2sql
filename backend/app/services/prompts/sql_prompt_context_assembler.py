@@ -44,7 +44,12 @@ class SqlPromptContextAssembler:
         selected_join_patterns = builder._selected_join_patterns(context, selected_sources, retrieval)
         selected_sources = builder._expand_sources_with_join_patterns(selected_sources, selected_join_patterns)
         selected_business_knowledge = builder._select_business_knowledge_entries(context, selected_sources, retrieval)
-        selected_sources = builder._expand_sources_with_business_knowledge(selected_sources, selected_business_knowledge)
+        business_knowledge, rendered_business_knowledge_entries = builder._render_business_knowledge_entries(
+            selected_business_knowledge,
+            context,
+            selected_sources,
+        )
+        selected_sources = builder._expand_sources_with_business_knowledge(selected_sources, rendered_business_knowledge_entries)
         prompt_context = context.model_copy(update={"tables": selected_sources})
         time_resolution = builder._time_resolution(prompt_context)
         retrieved_examples = builder._select_retrieved_examples(context, retrieval, selected_sources=selected_sources)
@@ -57,13 +62,14 @@ class SqlPromptContextAssembler:
             if table_name in builder._tables_metadata
         }
         sql_preferences = builder._prompt_asset_strings("sql_generation", "base_preferences")
-        if any(item.op == "latest_n" for item in context.filters) and not any("latest_n" in item for item in sql_preferences):
-            sql_preferences = [
-                *sql_preferences,
-                "当过滤条件使用 latest_n 时，必须保留最新排序语义，并结合真实排序字段生成 SQL，例如使用 MAX(真实排序字段) 或等价排序表达式。",
-            ]
-        business_knowledge = builder._business_knowledge_for_context(context, selected_sources, retrieval)
-        business_knowledge_source = builder._business_knowledge_source_for_context(context, selected_sources, retrieval)
+        if builder._has_latest_n_signal(context):
+            for preference in builder._latest_n_preferences():
+                if preference not in sql_preferences:
+                    sql_preferences.append(preference)
+        business_knowledge_source = builder._business_knowledge_source(
+            rendered_business_knowledge_entries,
+            retrieval,
+        )
         context_budget = {
             "business_knowledge_max_chars": builder.BUSINESS_KNOWLEDGE_MAX_CHARS,
             "business_knowledge_mode": "ranked_relevant_chunks",
@@ -114,7 +120,7 @@ class SqlPromptContextAssembler:
             "retrieved_example_count": len(retrieved_examples),
             "retrieved_example_ids": [item["id"] for item in retrieved_examples],
             "subject_domain": context.subject_domain,
-            "business_knowledge_entry_ids": builder._selected_business_knowledge_ids(context, selected_sources, retrieval),
+            "business_knowledge_entry_ids": builder._business_knowledge_entry_ids(rendered_business_knowledge_entries),
             "join_pattern_ids": builder._selected_join_pattern_ids(selected_join_patterns),
             "prompt_diagnostics": prompt_diagnostics,
         }

@@ -639,6 +639,59 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertGreater(diagnostics["prompt_payload_chars"], 0)
         self.assertGreaterEqual(diagnostics["retrieved_example_chars"], 0)
 
+    def test_sql_prompt_constraints_are_deduplicated(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            metrics=["inventory_qty"],
+            tables=["oms_inventory"],
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存",
+        )
+        constraints = prompt["instructions"]["constraints"]
+
+        self.assertEqual(len(constraints), len(set(constraints)))
+
+    def test_sql_prompt_adds_latest_n_preference_from_semantic_brief(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+            semantic_brief="查询最新 OMS 库存库龄分布。",
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存库龄分布",
+        )
+
+        self.assertTrue(
+            any("latest_n" in item or "最新" in item for item in prompt["instructions"]["sql_preferences"])
+        )
+
+    def test_sql_prompt_business_knowledge_ids_match_rendered_blocks(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+            semantic_brief="查询最新 OMS 库存库龄分布。",
+        )
+
+        prompt = self.prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            question="最新 OMS 库存库龄分布",
+        )
+        rendered_ids = [
+            line.strip()[1:-1]
+            for line in prompt["retrieval_context"]["business_knowledge"].splitlines()
+            if line.strip().startswith("[") and line.strip().endswith("]")
+        ]
+
+        self.assertEqual(prompt["context_summary"]["business_knowledge_entry_ids"], rendered_ids)
+
     def test_sql_prompt_diagnostics_are_counts_not_raw_payload(self) -> None:
         sql_context_value = SqlGenerationContext(
             question_type="new",
@@ -1034,6 +1087,84 @@ class PromptCompactionTests(unittest.TestCase):
         self.assertIn("sql", examples[0])
         self.assertLessEqual(len(examples[0]["matched_features"]), 5)
         self.assertEqual(examples[0]["semantic_shape"]["subject_domain"], "inventory")
+
+    def test_sql_prompt_omits_full_sql_for_secondary_retrieved_example(self) -> None:
+        long_sql = """
+WITH base_inventory AS (
+  SELECT report_month, product_ID, panel_qty, glass_qty
+  FROM oms_inventory
+  WHERE report_month = (SELECT MAX(report_month) FROM oms_inventory)
+), bucketed AS (
+  SELECT report_month,
+         SUM(panel_qty) AS panel_qty,
+         SUM(glass_qty) AS glass_qty
+  FROM base_inventory
+  GROUP BY report_month
+)
+SELECT report_month, panel_qty, glass_qty
+FROM bucketed
+ORDER BY report_month DESC
+FETCH FIRST 50 ROWS ONLY
+""".strip()
+        prompt_builder = PromptBuilder(
+            semantic_runtime=self.semantic_runtime,
+            metadata_registry=StaticExampleRegistry(
+                [
+                    {
+                        "id": "primary_inventory_example",
+                        "question": "最新 OMS 库存",
+                        "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 1 ROW ONLY",
+                        "subject_domain": "inventory",
+                        "metrics": ["inventory_qty"],
+                    },
+                    {
+                        "id": "secondary_inventory_example",
+                        "question": "最新 OMS 库存库龄分布",
+                        "sql": long_sql,
+                        "subject_domain": "inventory",
+                        "metrics": ["inventory_qty"],
+                    },
+                ]
+            ),
+        )
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+            metrics=["inventory_qty"],
+        )
+        retrieval = RetrievalContext(
+            hits=[
+                RetrievalHit(
+                    source_type="example",
+                    source_id="primary_inventory_example",
+                    score=4.0,
+                    fusion_score=1.0,
+                    summary="primary",
+                    matched_features=["metrics:inventory_qty"],
+                ),
+                RetrievalHit(
+                    source_type="example",
+                    source_id="secondary_inventory_example",
+                    score=3.0,
+                    fusion_score=0.8,
+                    summary="secondary",
+                    matched_features=["metrics:inventory_qty"],
+                ),
+            ]
+        )
+
+        prompt = prompt_builder.build_sql_prompt(
+            sql_context(sql_context_value),
+            retrieval=retrieval,
+            question="最新 OMS 库存",
+        )
+        examples = prompt["retrieval_context"]["examples"]
+
+        self.assertIn("sql", examples[0])
+        self.assertNotIn("sql", examples[1])
+        self.assertIn("sql_outline", examples[1])
+        self.assertLess(len(examples[1]["sql_outline"]), len(long_sql))
 
     def test_lightweight_example_can_be_normalized_from_question_and_sql(self) -> None:
         factory = ExampleFactory(self.domain_config, self.semantic_runtime)
