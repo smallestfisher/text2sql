@@ -36,6 +36,14 @@ class SqlValidator:
         "revoke",
         "execute",
     )
+    MYSQL_ONLY_PATTERNS = {
+        "LIMIT": r"\blimit\s+\d+\b",
+        "DATE_FORMAT": r"\bdate_format\s*\(",
+        "STR_TO_DATE": r"\bstr_to_date\s*\(",
+        "DATE_ADD": r"\bdate_add\s*\(",
+        "CURDATE": r"\bcurdate\s*\(",
+        "BACKTICK_IDENTIFIER": r"`",
+    }
 
     def __init__(
         self,
@@ -57,13 +65,11 @@ class SqlValidator:
         sql: str | None,
         domain_config: dict,
         sql_context: SqlGenerationContext | None = None,
-        required_filter_fields: list[str] | None = None,
     ) -> tuple[list[str], list[str]]:
         result = self.validate_detailed(
             sql,
             domain_config,
             sql_context=sql_context,
-            required_filter_fields=required_filter_fields,
         )
         return result.errors, result.warnings
 
@@ -72,7 +78,6 @@ class SqlValidator:
         sql: str | None,
         domain_config: dict,
         sql_context: SqlGenerationContext | None = None,
-        required_filter_fields: list[str] | None = None,
     ) -> SqlValidationResult:
         if sql is None:
             return SqlValidationResult(errors=["sql is empty"], warnings=[])
@@ -100,6 +105,9 @@ class SqlValidator:
         for keyword in self.FORBIDDEN_KEYWORDS:
             if re.search(rf"\b{re.escape(keyword)}\b", normalized_sql, re.IGNORECASE):
                 errors.append(f"forbidden keyword detected:{keyword}")
+        for syntax_name, pattern in self.MYSQL_ONLY_PATTERNS.items():
+            if re.search(pattern, normalized_sql, re.IGNORECASE):
+                errors.append(f"sql uses unsupported MySQL-only syntax: {syntax_name}")
 
         physical_sources = set(domain_config.get("semantic_graph", {}).get("nodes", []))
         allowed_sources = set(physical_sources)
@@ -109,6 +117,8 @@ class SqlValidator:
         unknown_sources = [source for source in used_sources if source not in allowed_sources]
         if unknown_sources:
             errors.append(f"sql references unknown sources: {', '.join(unknown_sources)}")
+        if not any(source in physical_sources for source in used_sources):
+            errors.append("sql does not reference any physical business source")
 
         if sql_context is not None:
             expected_sources = set(sql_context.tables)
@@ -183,24 +193,6 @@ class SqlValidator:
             unexpected_group_by_warnings = self._validate_unexpected_group_by_fields(sql_context, inspection)
             warnings.extend(unexpected_group_by_warnings)
 
-        if required_filter_fields:
-            if sql_context is None:
-                missing_filter_fields = list(required_filter_fields)
-            else:
-                missing_filter_fields = [
-                    field
-                    for field in required_filter_fields
-                    if not self._filter_is_covered(
-                        sql_context,
-                        field,
-                        filter_scope,
-                    )
-                ]
-            if missing_filter_fields:
-                errors.append(
-                    f"sql is missing required permission filters: {', '.join(missing_filter_fields)}"
-                )
-
         if len(used_sources) > 1:
             joins_without_condition = [join.source for join in inspection.joins if not join.has_condition]
             if joins_without_condition:
@@ -220,7 +212,7 @@ class SqlValidator:
                 f"sql result limit {inspection.limit_value} exceeds configured maximum {self.max_limit}"
             )
 
-        ast_errors, ast_warnings = self.ast_validator.validate(sql)
+        ast_errors, ast_warnings = self.ast_validator.validate(sql, inspection=inspection)
         errors.extend(ast_errors)
         warnings.extend(ast_warnings)
 
@@ -554,9 +546,11 @@ class SqlValidator:
                 flags.append("complexity_risk")
             if "sql quality" in lowered:
                 flags.append("quality_risk")
-            if "permission filters" in lowered:
-                flags.append("permission_risk")
-            if "sources outside sql context" in lowered or "unsupported fields" in lowered:
+            if (
+                "sources outside sql context" in lowered
+                or "unsupported fields" in lowered
+                or "physical business source" in lowered
+            ):
                 flags.append("context_mismatch_risk")
         deduped: list[str] = []
         for flag in flags:
@@ -565,7 +559,7 @@ class SqlValidator:
         return deduped
 
     def _risk_level_for_flags(self, risk_flags: list[str]) -> str:
-        if any(flag in risk_flags for flag in ["permission_risk", "context_mismatch_risk", "scan_risk", "join_risk"]):
+        if any(flag in risk_flags for flag in ["context_mismatch_risk", "scan_risk", "join_risk"]):
             return "high"
         if risk_flags:
             return "medium"

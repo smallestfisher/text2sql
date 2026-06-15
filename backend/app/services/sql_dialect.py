@@ -35,20 +35,22 @@ class SqlDialect:
         return f"LIMIT {int(limit)}"
 
     def has_result_limit(self, sql: str) -> bool:
-        if re.search(r"\bLIMIT\s+\d+\b", sql, re.IGNORECASE):
-            return True
+        if self.name == "mysql":
+            return re.search(r"\bLIMIT\s+\d+\b", sql, re.IGNORECASE) is not None
         return re.search(
-            r"\bFETCH\s+(?:FIRST|NEXT)\s+\d+\s+ROWS\s+ONLY\b",
+            r"\bFETCH\s+(?:FIRST|NEXT)\s+\d+\s+ROWS?\s+ONLY\b",
             sql,
             re.IGNORECASE,
         ) is not None
 
     def extract_result_limit_value(self, sql: str) -> int | None:
-        limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE)
-        if limit_match:
-            return int(limit_match.group(1))
+        if self.name == "mysql":
+            limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE)
+            if limit_match:
+                return int(limit_match.group(1))
+            return None
         fetch_match = re.search(
-            r"\bFETCH\s+(?:FIRST|NEXT)\s+(\d+)\s+ROWS\s+ONLY\b",
+            r"\bFETCH\s+(?:FIRST|NEXT)\s+(\d+)\s+ROWS?\s+ONLY\b",
             sql,
             re.IGNORECASE,
         )

@@ -110,15 +110,19 @@ class SqlAstValidator:
                 return inspection
         return self._inspect_with_regex(sql)
 
-    def validate(self, sql: str | None) -> tuple[list[str], list[str]]:
+    def validate(
+        self,
+        sql: str | None,
+        inspection: SqlInspection | None = None,
+    ) -> tuple[list[str], list[str]]:
         if sql is None:
             return ["sql is empty"], []
 
         errors: list[str] = []
         warnings: list[str] = []
-        inspection = self.inspect(sql)
+        inspection = inspection or self.inspect(sql)
 
-        warnings.extend(inspection.parse_errors)
+        errors.extend(inspection.parse_errors)
         normalized = (sql or "").strip()
 
         if not inspection.has_select:
@@ -192,7 +196,7 @@ class SqlAstValidator:
         except ParseError as exc:
             inspection = self._inspect_with_regex(normalized)
             inspection.parser_backend = "regex_after_sqlglot_parse_error"
-            inspection.parse_errors = [f"sql parse warning: {exc}"]
+            inspection.parse_errors = [f"sql parse error: {exc}"]
             return inspection
         if not statements:
             return SqlInspection(statement_count=0, normalized_sql="", parser_backend="sqlglot")
@@ -235,7 +239,12 @@ class SqlAstValidator:
             for node in root.find_all(exp.Where)
             if getattr(node, "this", None) is not None
         )
-        limit_node = root.find(exp.Limit)
+        outer_select = self._outer_select_node(root)
+        limit_node = (
+            outer_select.args.get("limit")
+            if outer_select is not None and hasattr(outer_select, "args")
+            else None
+        )
 
         return SqlInspection(
             statement_count=len(statements),
@@ -593,6 +602,13 @@ class SqlAstValidator:
         expression = getattr(limit_node, "expression", None)
         if expression is not None:
             value = getattr(expression, "this", None)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+        count = limit_node.args.get("count") if hasattr(limit_node, "args") else None
+        if count is not None:
+            value = getattr(count, "this", None)
             if isinstance(value, int):
                 return value
             if isinstance(value, str) and value.isdigit():

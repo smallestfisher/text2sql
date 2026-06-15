@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import re
 import threading
 
 from backend.app.models.api import ExecutionResponse
@@ -61,8 +62,49 @@ class ExecutionCacheService:
 
     def _cache_key(self, sql: str, user_context: UserContext | None) -> str:
         payload = {
-            "sql": sql,
+            "sql": self._normalize_sql(sql),
             "user_id": user_context.user_id if user_context else None,
         }
         normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _normalize_sql(self, sql: str) -> str:
+        normalized = sql.strip().rstrip(";").strip()
+        if not normalized:
+            return ""
+        result: list[str] = []
+        in_single_quote = False
+        in_double_quote = False
+        index = 0
+        while index < len(normalized):
+            char = normalized[index]
+            next_char = normalized[index + 1] if index + 1 < len(normalized) else ""
+
+            if char == "'" and not in_double_quote:
+                result.append(char)
+                if in_single_quote and next_char == "'":
+                    result.append(next_char)
+                    index += 2
+                    continue
+                in_single_quote = not in_single_quote
+                index += 1
+                continue
+            if char == '"' and not in_single_quote:
+                result.append(char)
+                if in_double_quote and next_char == '"':
+                    result.append(next_char)
+                    index += 2
+                    continue
+                in_double_quote = not in_double_quote
+                index += 1
+                continue
+            if not in_single_quote and not in_double_quote and char.isspace():
+                if result and result[-1] != " ":
+                    result.append(" ")
+                index += 1
+                continue
+
+            result.append(char)
+            index += 1
+
+        return re.sub(r"\s*;\s*$", "", "".join(result).strip())

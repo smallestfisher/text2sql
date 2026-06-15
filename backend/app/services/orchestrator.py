@@ -495,7 +495,6 @@ class ConversationOrchestrator:
                 status="running",
                 detail="validating sql",
             )
-            required_filter_fields: list[str] = []
             logger.info(
                 "sql validation input trace_id=%s sql_present=%s sql_preview=%s available_tables=%s",
                 trace.trace_id,
@@ -509,7 +508,6 @@ class ConversationOrchestrator:
                     sql,
                     self.domain_config,
                     sql_context=sql_context,
-                    required_filter_fields=required_filter_fields,
                 )
                 if sql is not None
                 else None
@@ -565,7 +563,6 @@ class ConversationOrchestrator:
                         repaired_sql,
                         self.domain_config,
                         sql_context=sql_context,
-                        required_filter_fields=required_filter_fields,
                     )
                     self._log_timing(trace.trace_id, "validate_repaired_sql", stage_started_at)
                     if not repaired_sql_result.errors:
@@ -674,7 +671,6 @@ class ConversationOrchestrator:
                         repaired_sql,
                         self.domain_config,
                         sql_context=sql_context,
-                        required_filter_fields=required_filter_fields,
                     )
                     self._log_timing(trace.trace_id, "validate_execution_repaired_sql", stage_started_at)
                     if not repaired_sql_result.errors:
@@ -1025,8 +1021,8 @@ class ConversationOrchestrator:
         repairable_markers = (
             "only select statements are allowed",
             "multiple sql statements are not allowed",
+            "sql parse error",
             "sql references unknown sources",
-            "sql is missing required permission filters",
             "incompatible time literals",
         )
         return any(marker in normalized for marker in repairable_markers)

@@ -75,7 +75,7 @@ class TimeFieldFormatTests(unittest.TestCase):
         )
 
         result = self.sql_validator.validate_detailed(
-            "SELECT SUM(GLS_qty) FROM production_actuals WHERE work_date = '2026-04-01' LIMIT 10;",
+            "SELECT SUM(GLS_qty) FROM production_actuals WHERE work_date = '2026-04-01' FETCH FIRST 10 ROWS ONLY;",
             self.domain_config,
             sql_context=sql_context_value,
         )
@@ -95,7 +95,7 @@ class TimeFieldFormatTests(unittest.TestCase):
         )
 
         result = self.sql_validator.validate_detailed(
-            "SELECT SUM(GLS_qty) FROM production_actuals WHERE work_date = '20260401' LIMIT 10;",
+            "SELECT SUM(GLS_qty) FROM production_actuals WHERE work_date = '20260401' FETCH FIRST 10 ROWS ONLY;",
             self.domain_config,
             sql_context=sql_context_value,
         )

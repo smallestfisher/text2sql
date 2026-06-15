@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 
 from backend.app.models.sql_generation_context import SqlGenerationContext
@@ -21,6 +22,12 @@ class SqlSafetyValidationTests(unittest.TestCase):
 
         self.assertEqual([], result.errors)
 
+    def test_validator_api_does_not_expose_dead_permission_filter_parameter(self) -> None:
+        self.assertNotIn(
+            "required_filter_fields",
+            inspect.signature(SqlValidator.validate_detailed).parameters,
+        )
+
     def test_multiple_statements_are_rejected(self) -> None:
         result = self.sql_validator.validate_detailed(
             "SELECT product_ID FROM daily_inventory FETCH FIRST 10 ROWS ONLY; SELECT product_ID FROM daily_inventory",
@@ -40,11 +47,52 @@ class SqlSafetyValidationTests(unittest.TestCase):
 
     def test_parse_warning_does_not_make_query_invalid(self) -> None:
         result = self.sql_validator.validate_detailed(
-            "SELECT SUBSTRING(work_date, 1, 6) AS biz_month FROM production_actuals LIMIT 10",
+            "SELECT SUBSTRING(work_date, 1, 6) AS biz_month FROM production_actuals FETCH FIRST 10 ROWS ONLY",
             self.domain_config,
         )
 
         self.assertEqual([], result.errors)
+
+    def test_oracle_fetch_first_limit_is_recognized(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            "SELECT product_ID FROM daily_inventory FETCH FIRST 10 ROWS ONLY",
+            self.domain_config,
+        )
+
+        self.assertEqual([], result.errors)
+        self.assertFalse(any("does not include FETCH FIRST" in item for item in result.warnings))
+        self.assertNotIn("result_size_risk", result.risk_flags)
+
+    def test_mysql_limit_is_rejected_for_business_sql(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            "SELECT product_ID FROM daily_inventory LIMIT 10",
+            self.domain_config,
+        )
+
+        self.assertIn("sql uses unsupported MySQL-only syntax: LIMIT", result.errors)
+
+    def test_sql_without_business_source_is_rejected(self) -> None:
+        sql_context = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["daily_inventory"],
+        )
+
+        result = self.sql_validator.validate_detailed(
+            "SELECT 1 FETCH FIRST 1 ROW ONLY",
+            self.domain_config,
+            sql_context=sql_context,
+        )
+
+        self.assertIn("sql does not reference any physical business source", result.errors)
+
+    def test_sql_parse_error_is_rejected_before_execution(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            "SELECT product_ID FROM daily_inventory WHERE product_ID = FETCH FIRST 10 ROWS ONLY",
+            self.domain_config,
+        )
+
+        self.assertTrue(any(error.startswith("sql parse error:") for error in result.errors))
 
     def test_quality_warning_for_unprotected_division(self) -> None:
         result = self.sql_validator.validate_detailed(

@@ -24,6 +24,16 @@ class SqlDialectTests(unittest.TestCase):
             dialect.extract_result_limit_value("SELECT * FROM t FETCH FIRST 20 ROWS ONLY"),
             20,
         )
+        self.assertFalse(dialect.has_result_limit("SELECT * FROM t LIMIT 20"))
+        self.assertIsNone(dialect.extract_result_limit_value("SELECT * FROM t LIMIT 20"))
+
+    def test_mysql_result_limit_does_not_accept_oracle_fetch(self) -> None:
+        dialect = SqlDialect.from_name("mysql")
+
+        self.assertTrue(dialect.has_result_limit("SELECT * FROM t LIMIT 20"))
+        self.assertEqual(dialect.extract_result_limit_value("SELECT * FROM t LIMIT 20"), 20)
+        self.assertFalse(dialect.has_result_limit("SELECT * FROM t FETCH FIRST 20 ROWS ONLY"))
+        self.assertIsNone(dialect.extract_result_limit_value("SELECT * FROM t FETCH FIRST 20 ROWS ONLY"))
 
     def test_connector_strips_statement_terminator_without_sql_rewrite(self) -> None:
         connector = DatabaseConnector(sql_dialect="mysql")
@@ -36,23 +46,13 @@ class SqlDialectTests(unittest.TestCase):
     def test_oracle_prompt_constraints_do_not_request_mysql_limit(self) -> None:
         builder = PromptBuilder(
             semantic_runtime=SimpleNamespace(
-                domain_config={
-                    "prompt_assets": {
-                        "sql_generation": {
-                            "base_constraints": [
-                                "优先基于真实物理表生成 MySQL 只读 SQL。",
-                                "必须包含 LIMIT。",
-                            ]
-                        }
-                    }
-                }
+                domain_config={}
             ),
         )
 
         constraints = builder._sql_generation_constraints()
 
-        self.assertIn("优先基于真实物理表生成 Oracle SQL 只读查询。", constraints)
-        self.assertIn("必须包含结果行数限制，并使用 FETCH FIRST n ROWS ONLY 语法。", constraints)
+        self.assertIn("必须使用 Oracle 语法，并包含 FETCH FIRST n ROWS ONLY 结果限制。", constraints)
         self.assertFalse(any(item == "必须包含 LIMIT。" for item in constraints))
 
 

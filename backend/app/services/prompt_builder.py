@@ -1112,14 +1112,7 @@ class PromptBuilder:
                 "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
                 "只返回 SQL，不要返回 markdown、注释或解释。",
             ]
-        for item in configured_constraints:
-            if "MySQL" in item and "基于真实物理表" in item:
-                constraints.append(f"优先基于真实物理表生成 {self.sql_dialect.label} 只读查询。")
-                continue
-            if "必须包含 LIMIT" in item:
-                constraints.append(f"必须包含结果行数限制，并使用 {self.sql_dialect.result_limit_clause_name} 语法。")
-                continue
-            constraints.append(item)
+        constraints.extend(configured_constraints)
         constraints.extend(
             [
                 "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
@@ -1141,13 +1134,7 @@ class PromptBuilder:
                 "如果语义或过滤条件包含 latest_n，必须先定位真实排序字段，再限制到最新 N 个值。",
                 "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。",
             ]
-        for item in configured_preferences:
-            if "ORDER BY 真实排序字段 DESC LIMIT N" in item:
-                preferences.append(
-                    "当 latest_n.count = 1 时，优先使用 MAX(真实排序字段) 形成单值过滤；当 latest_n.count > 1 时，可使用子查询 ORDER BY 真实排序字段 DESC FETCH FIRST N ROWS ONLY。"
-                )
-                continue
-            preferences.append(item)
+        preferences.extend(configured_preferences)
         return self._unique_strings(preferences)
 
     def _unique_strings(self, values: list[str]) -> list[str]:

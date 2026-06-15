@@ -14,7 +14,7 @@ from backend.app.api import dependencies
 from backend.app.api.routes.chat import chat_query_stream
 from backend.app.core.exceptions import ClientCancelledError
 from backend.app.models.admin import RuntimeQueryLogRecord, RuntimeSqlAuditRecord
-from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
+from backend.app.models.api import ChatResponse, ChatRequest, ExecutionResponse, ValidationResponse
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.conversation import ChatMessage, ChatSession
 
@@ -24,6 +24,7 @@ from backend.app.models.session_state import SessionState
 from backend.app.models.trace import TraceRecord
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
+from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.prompt_builder import PromptBuilder
@@ -349,6 +350,28 @@ class AtomicWriteTests(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "second\n")
 
 
+class ExecutionCacheServiceTests(unittest.TestCase):
+    def test_cache_key_normalizes_sql_whitespace_and_statement_terminator(self) -> None:
+        cache = ExecutionCacheService()
+        execution = ExecutionResponse(
+            executed=True,
+            status="ok",
+            sql="SELECT 1",
+            row_count=1,
+            columns=["value"],
+            rows=[{"value": 1}],
+            errors=[],
+            warnings=[],
+        )
+
+        cache.put("SELECT 1;", execution)
+        cached = cache.get("  SELECT   1  ")
+
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached.rows, [{"value": 1}])
+        self.assertIn("execution cache hit", cached.warnings)
+
+
 class DatabaseConnectorFailFastTests(unittest.TestCase):
     def test_execute_readonly_raises_when_not_configured(self) -> None:
         connector = DatabaseConnector()
@@ -546,7 +569,7 @@ class LLMClientSqlExtractionTests(unittest.TestCase):
 SELECT factory_code, SUM(qty) AS total_qty
 FROM inventory
 GROUP BY factory_code
-LIMIT 20;
+FETCH FIRST 20 ROWS ONLY;
 ```
 """
 
@@ -554,8 +577,20 @@ LIMIT 20;
 
         self.assertEqual(
             sql,
-            "SELECT factory_code, SUM(qty) AS total_qty\nFROM inventory\nGROUP BY factory_code\nLIMIT 20;",
+            "SELECT factory_code, SUM(qty) AS total_qty\nFROM inventory\nGROUP BY factory_code\nFETCH FIRST 20 ROWS ONLY;",
         )
+
+    def test_extract_sql_rejects_mysql_limit_for_oracle_business_sql(self) -> None:
+        if llm_sqlglot is None:
+            with self.assertRaisesRegex(RuntimeError, "sqlglot is required"):
+                LLMClient()
+            return
+
+        sql = self.client._extract_sql(
+            "SELECT product_ID FROM daily_inventory LIMIT 10;"
+        )
+
+        self.assertIsNone(sql)
 
     def test_extract_sql_ignores_prefix_and_trailing_explanation(self) -> None:
         if llm_sqlglot is None:
@@ -567,7 +602,7 @@ LIMIT 20;
 SELECT biz_month, SUM(input_qty) AS total_input
 FROM production_actuals
 GROUP BY biz_month
-LIMIT 50
+FETCH FIRST 50 ROWS ONLY
 说明：按月份汇总实际投入。
 """
 
@@ -575,7 +610,7 @@ LIMIT 50
 
         self.assertEqual(
             sql,
-            "SELECT biz_month, SUM(input_qty) AS total_input\nFROM production_actuals\nGROUP BY biz_month\nLIMIT 50;",
+            "SELECT biz_month, SUM(input_qty) AS total_input\nFROM production_actuals\nGROUP BY biz_month\nFETCH FIRST 50 ROWS ONLY;",
         )
 
     def test_response_content_accepts_event_stream_text(self) -> None:
