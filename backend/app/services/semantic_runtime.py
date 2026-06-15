@@ -6,7 +6,6 @@ import re
 
 from backend.app.models.semantic_types import FilterItem
 from backend.app.models.semantic_types import SortItem
-from backend.app.models.semantic_types import VersionContext
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.metadata_registry import MetadataRegistry
 
@@ -26,13 +25,12 @@ class SemanticRuntime:
     ) -> None:
         self.domain_config = domain_config
         self.metadata_registry = metadata_registry or MetadataRegistry()
-        self.graph_nodes = set(domain_config.get("semantic_graph", {}).get("nodes", []))
-        self.graph_edges = domain_config.get("semantic_graph", {}).get("edges", [])
+        self.reload()
+
+    def reload(self) -> None:
         self.tables_metadata = self._load_tables_metadata()
-        if not self.graph_nodes:
-            self.graph_nodes = set(self.tables_metadata.keys())
-        if not self.graph_edges:
-            self.graph_edges = self._relationship_edges(self.tables_metadata)
+        self.graph_nodes = set(self.tables_metadata.keys())
+        self.graph_edges = self._relationship_edges(self.tables_metadata)
         self.table_field_catalog = {
             table_name: self._extract_table_fields(payload)
             for table_name, payload in self.tables_metadata.items()
@@ -46,10 +44,6 @@ class SemanticRuntime:
         self.table_domain_catalog = self._build_table_domain_catalog()
 
     def default_limit(self, domain_name: str, default_value: int = 200) -> int:
-        _ = domain_name
-        return default_value
-
-    def max_limit(self, domain_name: str, default_value: int = 200) -> int:
         _ = domain_name
         return default_value
 
@@ -81,17 +75,6 @@ class SemanticRuntime:
         )
         compiled.join_path = self.resolve_join_path(compiled.tables)
         return compiled
-
-    def query_profile(self, domain_name: str) -> dict:
-        _ = domain_name
-        return {}
-
-    def is_known_domain(self, domain_name: str) -> bool:
-        return domain_name == "unknown" or bool(domain_name)
-
-    def domain_tables(self, domain_name: str) -> list[str]:
-        _ = domain_name
-        return []
 
     def table_domains(self, table_name: str) -> list[str]:
         return list(self.table_domain_catalog.get(table_name, []))
@@ -145,76 +128,8 @@ class SemanticRuntime:
         candidates = re.findall(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", normalized_sql, flags=re.IGNORECASE)
         return [table_name for table_name in self._unique_strings(candidates) if table_name in self.tables_metadata]
 
-    def metric_column(self, metric_name: str) -> str:
-        return metric_name
-
-    def metric_aggregate_function(self, metric_name: str) -> str:
-        _ = metric_name
-        return "SUM"
-
-    def metric_act_type_scope(self, metric_name: str) -> str | None:
-        _ = metric_name
-        return None
-
-    def is_known_metric(self, metric_name: str) -> bool:
-        _ = metric_name
-        return False
-
-    def metric_tables(self, metric_name: str) -> list[str]:
-        _ = metric_name
-        return []
-
-    def metric_expression_columns(self, metric_name: str, table_names: list[str] | None = None) -> set[str]:
-        _ = metric_name
-        _ = table_names
-        return set()
-
-    def profile_allowed_fields(self, domain_name: str) -> list[str]:
-        _ = domain_name
-        return []
-
-    def profile_field_aliases(self, domain_name: str) -> dict[str, list[str]]:
-        _ = domain_name
-        return {}
-
-    def semantic_field_metadata(
-        self,
-        subject_domain: str | None = None,
-        role: str | None = None,
-    ) -> list[dict]:
-        _ = subject_domain
-        _ = role
-        return []
-
-    def semantic_field_aliases(
-        self,
-        subject_domain: str | None = None,
-        role: str | None = None,
-    ) -> dict[str, list[str]]:
-        _ = subject_domain
-        _ = role
-        return {}
-
-    def normalize_field_name(self, field_name: str, subject_domain: str) -> str:
-        _ = subject_domain
-        return field_name
-
-    def time_filter_fields(self, domain_name: str) -> list[str]:
-        _ = domain_name
-        return []
-
-    def warn_if_missing_time_filter(self, domain_name: str) -> bool:
-        _ = domain_name
-        return False
-
     def table_fields(self, table_name: str) -> list[str]:
         return list(self.table_field_catalog.get(table_name, []))
-
-    def table_time_fields(self, table_name: str) -> dict[str, dict]:
-        return {
-            field_name: dict(metadata)
-            for field_name, metadata in self.table_time_field_catalog.get(table_name, {}).items()
-        }
 
     def table_time_field(self, table_name: str, field_name: str) -> dict | None:
         if not field_name:
@@ -342,13 +257,6 @@ class SemanticRuntime:
                 if column_name.lower() == lowered_field or column_name.lower() in lowered_aliases:
                     candidates.add(column_name)
         return {item for item in candidates if item}
-
-    def is_dynamic_version_context(self, version_context: VersionContext | None) -> bool:
-        return bool(
-            version_context
-            and isinstance(version_context.value, str)
-            and version_context.value.startswith("LATEST_N:")
-        )
 
     def allowed_fields_for_context(self, context) -> set[str]:
         allowed_fields: set[str] = set()

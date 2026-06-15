@@ -250,67 +250,6 @@ class PromptBuilder:
             selected.append(column_text)
         return selected
 
-    def _relevant_table_columns(
-        self,
-        table_name: str,
-        *,
-        context: SqlGenerationContext,
-        field_resolution: dict[str, dict[str, list[str]]],
-        time_resolution: dict,
-    ) -> set[str]:
-        columns: set[str] = set()
-        if self.semantic_runtime is None:
-            return columns
-        table_fields = set(self.semantic_runtime.table_fields(table_name))
-        for field in self._flatten_values(field_resolution):
-            column_name = self._column_name_from_field(field)
-            if column_name in table_fields:
-                columns.add(column_name)
-        for resolution in time_resolution.values():
-            if not isinstance(resolution, dict):
-                continue
-            for candidate in resolution.get("candidates", []):
-                if not isinstance(candidate, dict):
-                    continue
-                column_name = self._column_name_from_field(candidate.get("field"))
-                if column_name in table_fields:
-                    columns.add(column_name)
-        for item in [*context.dimensions, *(filter_item.field for filter_item in context.filters), *(sort_item.field for sort_item in context.sort)]:
-            if item in table_fields:
-                columns.add(item)
-        for metric_name in context.metrics:
-            columns.update(
-                column
-                for column in self.semantic_runtime.metric_expression_columns(metric_name, table_names=[table_name])
-                if column in table_fields
-            )
-        table_metadata = self._tables_metadata.get(table_name, {})
-        relationships = table_metadata.get("relationships", {}) if isinstance(table_metadata, dict) else {}
-        if isinstance(relationships, dict):
-            for source_field in relationships:
-                if source_field in table_fields:
-                    columns.add(source_field)
-        return columns
-
-    def _column_name_from_field(self, field: Any) -> str:
-        value = str(field or "").strip()
-        if not value:
-            return ""
-        return value.rsplit(".", 1)[-1]
-
-    def _flatten_values(self, value: Any) -> list[Any]:
-        if isinstance(value, dict):
-            flattened: list[Any] = []
-            for item in value.values():
-                flattened.extend(self._flatten_values(item))
-            return flattened
-        if isinstance(value, list):
-            flattened = []
-            for item in value:
-                flattened.extend(self._flatten_values(item))
-            return flattened
-        return [value]
-
     def _structured_business_knowledge_for_context(
         self,
         context: SqlGenerationContext,
@@ -764,168 +703,6 @@ class PromptBuilder:
             )
         )
 
-    def _query_profile(self, subject_domain: str) -> dict | None:
-        if self.semantic_runtime is None or subject_domain == "unknown":
-            return None
-        return self.semantic_runtime.query_profile(subject_domain)
-
-    def _allowed_fields(self, context: SqlGenerationContext) -> set[str]:
-        if self.semantic_runtime is None:
-            return set()
-        return self.semantic_runtime.allowed_fields_for_context(context)
-
-    def _sql_allowed_fields(self, context: SqlGenerationContext) -> set[str]:
-        if self.semantic_runtime is None:
-            return self._allowed_fields(context)
-
-        fields: set[str] = set()
-        for table_name in context.tables:
-            fields.update(self.semantic_runtime.table_fields(table_name))
-        for metric_name in context.metrics:
-            fields.update(
-                self.semantic_runtime.metric_expression_columns(
-                    metric_name,
-                    table_names=context.tables,
-                )
-            )
-        return fields or self._allowed_fields(context)
-
-    def _field_resolution(
-        self,
-        context: SqlGenerationContext,
-        time_resolution: dict | None = None,
-    ) -> dict[str, dict]:
-        return {
-            "dimensions": self._field_resolution_map(context, context.dimensions),
-            "filters": self._field_resolution_map(
-                context,
-                [item.field for item in context.filters],
-                time_resolution=time_resolution,
-            ),
-            "metrics": {
-                metric_name: self._physical_metric_candidates(context, metric_name)
-                for metric_name in context.metrics
-                if self._physical_metric_candidates(context, metric_name)
-            },
-            "sort": self._field_resolution_map(
-                context,
-                [item.field for item in context.sort],
-            ),
-        }
-
-    def _field_resolution_map(
-        self,
-        context: SqlGenerationContext,
-        fields: list[str],
-        time_resolution: dict | None = None,
-    ) -> dict[str, dict | list[str]]:
-        resolved: dict[str, dict | list[str]] = {}
-        time_resolution = time_resolution or {}
-        for field in fields:
-            physical_candidates = self._physical_candidates(context, field)
-            if physical_candidates:
-                time_filter_examples = self._time_filter_examples(field, time_resolution, context=context)
-                if time_filter_examples:
-                    resolved[field] = {
-                        "physical_candidates": physical_candidates,
-                        "filter_examples": time_filter_examples,
-                    }
-                else:
-                    resolved[field] = physical_candidates
-        return resolved
-
-    def _time_filter_examples(
-        self,
-        logical_field: str,
-        time_resolution: dict,
-        *,
-        context: SqlGenerationContext,
-    ) -> list[str]:
-        if logical_field not in {"biz_date", "biz_month", "demand_month"}:
-            return []
-        candidates = time_resolution.get(logical_field, {}).get("candidates", [])
-        examples: list[str] = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            if not self._time_candidate_belongs_to_query_tables(candidate, context):
-                continue
-            for key in ("month_filter_example", "month_range_filter_example", "day_filter_example"):
-                value = candidate.get(key)
-                if isinstance(value, str) and value and value not in examples:
-                    examples.append(value)
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            for key in ("month_filter_example", "month_range_filter_example", "day_filter_example"):
-                value = candidate.get(key)
-                if isinstance(value, str) and value and value not in examples:
-                    examples.append(value)
-        return examples[:6]
-
-    def _time_candidate_belongs_to_query_tables(self, candidate: dict, context: SqlGenerationContext) -> bool:
-        field = str(candidate.get("field") or "")
-        if "." not in field:
-            return False
-        table_name = field.split(".", 1)[0]
-        return table_name in set(context.tables)
-
-    def _physical_candidates(self, context: SqlGenerationContext, logical_field: str) -> list[str]:
-        if self.semantic_runtime is None:
-            return []
-        resolved = self.semantic_runtime.resolve_field_candidates(
-            context.subject_domain,
-            context.tables,
-            logical_field,
-        )
-        physical_allowed = self._sql_allowed_fields(context)
-        allowed_candidates = sorted(item for item in resolved if item in physical_allowed)
-        qualified = self._qualify_columns(context, allowed_candidates)
-        return qualified or allowed_candidates
-
-    def _physical_metric_candidates(self, context: SqlGenerationContext, metric_name: str) -> list[str]:
-        if self.semantic_runtime is None:
-            return []
-        metric_columns = sorted(
-            self.semantic_runtime.metric_expression_columns(
-                metric_name,
-                table_names=context.tables,
-            )
-        )
-        qualified = self._qualify_columns(context, metric_columns)
-        return qualified or metric_columns
-
-    def _output_shape(self, context: SqlGenerationContext, time_resolution: dict | None = None) -> dict:
-        required_projection = list(context.dimensions)
-        aggregate_metrics = list(context.metrics)
-        dimension_hints: list[str] = []
-        logical_dimension_examples: dict[str, list[str]] = {}
-        time_resolution = time_resolution or {}
-        for field in required_projection:
-            examples = self._logical_dimension_examples(field, time_resolution)
-            if examples:
-                logical_dimension_examples[field] = examples
-                if field == "biz_month":
-                    dimension_hints.append(
-                        "如果需要把逻辑月份 biz_month 映射到真实字段，优先参考 time_resolution.biz_month.candidates 里的 projection_example，并保持最终外层 SELECT 与 GROUP BY 使用同一表达式或别名。"
-                    )
-        return {
-            "required_projection": required_projection,
-            "required_group_by": required_projection if aggregate_metrics else [],
-            "aggregate_metrics": aggregate_metrics,
-            "logical_dimension_examples": logical_dimension_examples,
-            "dimension_hints": dimension_hints,
-        }
-
-    def _logical_dimension_examples(self, logical_field: str, time_resolution: dict) -> list[str]:
-        candidates = time_resolution.get(logical_field, {}).get("candidates", [])
-        examples: list[str] = []
-        for candidate in candidates:
-            example = candidate.get("projection_example")
-            if isinstance(example, str) and example and example not in examples:
-                examples.append(example)
-        return examples
-
     def _time_resolution(self, context: SqlGenerationContext) -> dict:
         if self.semantic_runtime is None:
             return {}
@@ -1143,11 +920,6 @@ class PromptBuilder:
                         qualified.append(candidate)
         return qualified
 
-    def _domain_tables(self, subject_domain: str) -> list[str] | None:
-        if self.semantic_runtime is None or subject_domain == "unknown":
-            return None
-        return self.semantic_runtime.domain_tables(subject_domain)
-
     def _domain_business_knowledge(self, subject_domain: str) -> str:
         if not self._business_knowledge or subject_domain == "unknown":
             return ""
@@ -1235,11 +1007,6 @@ class PromptBuilder:
                 domains.add(domain_name)
         return sorted(domains)
 
-    def _semantic_fields(self, subject_domain: str) -> list[dict]:
-        if self.semantic_runtime is None or subject_domain == "unknown":
-            return []
-        return self.semantic_runtime.semantic_field_metadata(subject_domain=subject_domain)[:20]
-
     def _conversation_summary(self, session_state: SessionState) -> str:
         if session_state.conversation_summary:
             return session_state.conversation_summary
@@ -1293,14 +1060,6 @@ class PromptBuilder:
         for table_name in (session_state.tables if session_state is not None else []):
             if table_name and table_name not in tables:
                 tables.append(table_name)
-        if self.semantic_runtime is not None:
-            for metric_name in parser_signals.get("matched_metrics", []) or []:
-                for table_name in self.semantic_runtime.metric_tables(str(metric_name)):
-                    if table_name and table_name not in tables:
-                        tables.append(table_name)
-            for table_name in self.semantic_runtime.domain_tables(subject_domain) or []:
-                if table_name and table_name not in tables:
-                    tables.append(table_name)
         return tables[:8]
 
     def _context_table_fields(self, table_names: list[str]) -> dict[str, list[str]]:

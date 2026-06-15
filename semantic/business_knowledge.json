@@ -36,6 +36,7 @@
         "选择最新 N 版时，N 指最新 N 个不同的 PM_VERSION 版本标识，不是原表中的最新 N 条明细记录；应先从版本标识集合中取最新 N 个 PM_VERSION，再用这些 PM_VERSION 回到需求明细中汇总所有匹配行。",
         "如果问题包含最新 N 版，应先解析 PM_VERSION 显示版本中的版本年月、W 周号和 P/V 周内版次，按版本年月降序、周号降序、周内版次降序取最新 N 个版本，再对目标需求月份聚合；不要简单按 PM_VERSION 字符串倒序或 MAX(PM_VERSION) 替代版本顺序解析。",
         "如果外层还要按 PM_VERSION 过滤，或者要与 latest_versions 做 IN/JOIN，比对用的需求展开 CTE 需要在每个 UNION 分支都显式投影 PM_VERSION。",
+        "固定目标需求月份时，可以把目标月份按 offset 反推到 base MONTH 并在每个 UNION 分支提前等值过滤，例如目标 202606 时 REQUIREMENT_QTY 对应 MONTH='202606'、NEXT_REQUIREMENT 对应 MONTH='202605'、LAST_REQUIREMENT 对应 MONTH='202604'、MONTH4 对应 MONTH='202603'、MONTH5 对应 MONTH='202602'、MONTH6 对应 MONTH='202601'、MONTH7 对应 MONTH='202512'；这与展开 demand_month 后过滤等价，但能减少无关月份扫描和日期函数计算。",
         "当真实表的 MONTH 以紧凑 YYYYMM 编码存储时，不要直接对原始 MONTH 做日期加减；应先转成真实日期再格式化回 YYYYMM，或者在 base MONTH 场景直接保留 MONTH。"
       ]
     },
@@ -47,7 +48,7 @@
       "notes": [
         "当需求问题涉及产品属性过滤时，可以直接通过 p_demand/v_demand.FGCODE = product_attributes.product_ID 关联产品属性维表。",
         "像 Oxide 这类产品属性过滤应落在 product_attributes 上；生产环境中 IS_xxx 字段使用 Y/N 标记，例如 product_attributes.IS_OXIDE = 'Y'。",
-        "如果问题要求的是产品数量/型号数量，目标指标通常同时返回 COUNT(DISTINCT product_attributes.product_ID) 和 SUM(NVL(demand_qty, 0))，目标需求月份仍然必须基于横表展开后的 demand_month 过滤；需求场景下的产品数量默认只统计 NVL(demand_qty, 0) > 0 的产品。"
+        "如果问题要求的是产品数量/型号数量，目标指标通常同时返回 COUNT(DISTINCT product_attributes.product_ID) 和 SUM(NVL(demand_qty, 0))，目标需求月份仍然必须基于横表展开后的 demand_month 过滤；固定目标需求月份时可用等价的 base MONTH 反推写法提前过滤各偏移列，避免完整展开后再筛选；需求场景下的产品数量默认只统计 NVL(demand_qty, 0) > 0 的产品。"
       ]
     },
     {

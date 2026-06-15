@@ -26,10 +26,25 @@ class MetadataRegistry:
         self.reload()
 
     def reload(self) -> None:
-        self._cache["examples_template"] = self._read_examples_template(self.paths["examples_template"])
-        self._cache["tables_metadata"] = self._read_tables_metadata(self.paths["tables_metadata"])
-        self._cache["business_knowledge"] = self._read_business_knowledge(self.paths["business_knowledge"])
-        self._cache["join_patterns"] = self._read_join_patterns(self.paths["join_patterns"])
+        new_cache = {
+            "examples_template": self._read_examples_template(self.paths["examples_template"]),
+            "tables_metadata": self._read_tables_metadata(self.paths["tables_metadata"]),
+            "business_knowledge": self._read_business_knowledge(self.paths["business_knowledge"]),
+            "join_patterns": self._read_join_patterns(self.paths["join_patterns"]),
+        }
+        self._cache = new_cache
+
+    def validate(self, name: str, payload):
+        if name == "examples_template":
+            return self._validate_examples_template(payload, source=name)
+        if name == "tables_metadata":
+            return self._validate_tables_metadata(payload, source=name)
+        if name == "business_knowledge":
+            return self._validate_business_knowledge(payload, source=name)
+        if name == "join_patterns":
+            return self._validate_join_patterns(payload, source=name)
+        self._resolve(name)
+        return payload
 
     def read(self, name: str):
         if name in self._cache:
@@ -45,13 +60,8 @@ class MetadataRegistry:
         return deepcopy(payload if isinstance(payload, dict) else {})
 
     @property
-    def business_knowledge_document(self) -> dict:
-        payload = self._cache.get("business_knowledge", {})
-        return deepcopy(payload if isinstance(payload, dict) else {})
-
-    @property
     def business_knowledge_entries(self) -> list[dict]:
-        payload = self.business_knowledge_document
+        payload = self._cache.get("business_knowledge", {})
         entries = payload.get("entries", []) if isinstance(payload, dict) else []
         return deepcopy(entries if isinstance(entries, list) else [])
 
@@ -61,13 +71,8 @@ class MetadataRegistry:
         return deepcopy(payload if isinstance(payload, list) else [])
 
     @property
-    def join_patterns_document(self) -> dict:
-        payload = self._cache.get("join_patterns", {})
-        return deepcopy(payload if isinstance(payload, dict) else {})
-
-    @property
     def join_patterns(self) -> list[dict]:
-        payload = self.join_patterns_document
+        payload = self._cache.get("join_patterns", {})
         patterns = payload.get("patterns", []) if isinstance(payload, dict) else []
         return deepcopy(patterns if isinstance(patterns, list) else [])
 
@@ -90,30 +95,42 @@ class MetadataRegistry:
 
     def _read_examples_template(self, path: Path) -> list[dict]:
         payload = self._read_json_file(path)
+        return self._validate_examples_template(payload, source=str(path))
+
+    def _validate_examples_template(self, payload, *, source: str) -> list[dict]:
         if not isinstance(payload, list):
-            raise RuntimeError(f"examples_template must be a JSON array: {path}")
+            raise RuntimeError(f"examples_template must be a JSON array: {source}")
         return payload
 
     def _read_tables_metadata(self, path: Path) -> dict:
         payload = self._read_json_file(path)
+        return self._validate_tables_metadata(payload, source=str(path))
+
+    def _validate_tables_metadata(self, payload, *, source: str) -> dict:
         if not isinstance(payload, dict):
-            raise RuntimeError(f"tables_metadata must be a JSON object: {path}")
+            raise RuntimeError(f"tables_metadata must be a JSON object: {source}")
         return payload
 
     def _read_business_knowledge(self, path: Path) -> dict:
         payload = self._read_json_file(path)
+        return self._validate_business_knowledge(payload, source=str(path))
+
+    def _validate_business_knowledge(self, payload, *, source: str) -> dict:
         if not isinstance(payload, dict):
-            raise RuntimeError(f"business_knowledge must be a JSON object: {path}")
+            raise RuntimeError(f"business_knowledge must be a JSON object: {source}")
         entries = payload.get("entries")
         if entries is not None and not isinstance(entries, list):
-            raise RuntimeError(f"business_knowledge.entries must be a JSON array: {path}")
+            raise RuntimeError(f"business_knowledge.entries must be a JSON array: {source}")
         return payload
 
     def _read_join_patterns(self, path: Path) -> dict:
         payload = self._read_json_file(path)
+        return self._validate_join_patterns(payload, source=str(path))
+
+    def _validate_join_patterns(self, payload, *, source: str) -> dict:
         if not isinstance(payload, dict):
-            raise RuntimeError(f"join_patterns must be a JSON object: {path}")
+            raise RuntimeError(f"join_patterns must be a JSON object: {source}")
         patterns = payload.get("patterns")
         if patterns is not None and not isinstance(patterns, list):
-            raise RuntimeError(f"join_patterns.patterns must be a JSON array: {path}")
+            raise RuntimeError(f"join_patterns.patterns must be a JSON array: {source}")
         return payload

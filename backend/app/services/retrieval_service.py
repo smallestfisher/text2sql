@@ -72,8 +72,11 @@ class RetrievalService:
         prewarm_vector_index: bool = False,
     ) -> None:
         self.domain_config = domain_config
-        self.semantic_runtime = semantic_runtime or SemanticRuntime(domain_config)
         self.metadata_registry = metadata_registry or MetadataRegistry()
+        self.semantic_runtime = semantic_runtime or SemanticRuntime(
+            domain_config,
+            metadata_registry=self.metadata_registry,
+        )
         self.example_factory = ExampleFactory(domain_config, self.semantic_runtime)
         self.sql_inspector = SqlAstValidator()
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
@@ -143,6 +146,7 @@ class RetrievalService:
 
     def reload(self, *, prewarm_vectors: bool | None = None) -> None:
         self.metadata_registry.reload()
+        self.semantic_runtime.reload()
         self.examples = self._load_examples()
         self.tables_metadata = self._load_tables_metadata()
         self.business_knowledge = self._load_business_knowledge()

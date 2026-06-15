@@ -3732,6 +3732,13 @@ input:focus {
   background: var(--panel);
 }
 
+:root[data-theme="dark"] .code-block,
+:root[data-theme="dark"] .json-block {
+  border-color: var(--border-strong);
+  background: #101722;
+  color: #f4f7fb;
+}
+
 :root[data-theme="dark"] .message-result-table td {
   color: var(--text);
 }

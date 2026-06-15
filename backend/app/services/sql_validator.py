@@ -163,8 +163,6 @@ class SqlValidator:
                         "sql does not preserve sql context sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
                     )
 
-            time_filter_warnings = self._validate_time_context(sql_context, filter_scope)
-            warnings.extend(time_filter_warnings)
             month_filter_semantic_warnings = self._validate_month_filter_semantics(sql_context, filter_scope)
             warnings.extend(month_filter_semantic_warnings)
             time_literal_format_warnings = self._validate_time_literal_formats(sql_context, filter_scope)
@@ -211,18 +209,6 @@ class SqlValidator:
                 )
             elif not inspection.joins:
                 warnings.append("sql uses multiple sources but no explicit JOIN was detected; review for cartesian risk")
-
-        if sql_context is not None and self.semantic_runtime is not None:
-            if self.semantic_runtime.warn_if_missing_time_filter(sql_context.subject_domain):
-                time_fields = self.semantic_runtime.time_filter_fields(sql_context.subject_domain)
-                if time_fields and not any(
-                    self._filter_is_covered(sql_context, field, filter_scope)
-                    for field in time_fields
-                ):
-                    warning_message = "sql does not include a time filter; this may cause wide scans"
-                    if len(used_sources) > 1:
-                        warning_message += " across multiple sources"
-                    warnings.append(warning_message)
 
         warnings.extend(self._build_risk_warnings(inspection, used_sources))
         warnings.extend(self.quality_validator.validate(sql, inspection, used_sources))
@@ -303,17 +289,7 @@ class SqlValidator:
         return False
 
     def _sort_field_candidates(self, sql_context: SqlGenerationContext, logical_field: str) -> set[str]:
-        candidates = self._field_candidates(sql_context, logical_field)
-        if self.semantic_runtime is None:
-            return candidates
-        metric_columns = {
-            self.semantic_runtime.metric_column(metric_name).lower()
-            for metric_name in sql_context.metrics
-            if self.semantic_runtime.metric_column(metric_name)
-        }
-        if logical_field.lower() in metric_columns:
-            candidates.add(logical_field.lower())
-        return candidates
+        return self._field_candidates(sql_context, logical_field)
 
     def _physical_field_candidates(self, sql_context: SqlGenerationContext, resolved_fields: set[str]) -> set[str]:
         if self.semantic_runtime is None:
@@ -321,39 +297,11 @@ class SqlValidator:
         physical_allowed: set[str] = set()
         for table_name in sql_context.tables:
             physical_allowed.update(self.semantic_runtime.table_fields(table_name))
-        for metric_name in sql_context.metrics:
-            physical_allowed.update(
-                self.semantic_runtime.metric_expression_columns(
-                    metric_name,
-                    table_names=sql_context.tables,
-                )
-            )
         return {
             item.lower()
             for item in resolved_fields
             if item and item in physical_allowed
         }
-
-    def _validate_time_context(
-        self,
-        sql_context: SqlGenerationContext,
-        where_clause: str,
-    ) -> list[str]:
-        if self.semantic_runtime is None:
-            return []
-        if sql_context.time_context.grain == "unknown":
-            return []
-
-        time_fields = self.semantic_runtime.time_filter_fields(sql_context.subject_domain)
-        if not time_fields:
-            return []
-
-        if not any(
-            self._contains_any_field_reference(where_clause, self._field_candidates(sql_context, field))
-            for field in time_fields
-        ):
-            return ["sql is missing required time filter from sql context"]
-        return []
 
     def _validate_version_context(
         self,

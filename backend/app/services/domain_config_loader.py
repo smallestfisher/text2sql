@@ -33,6 +33,9 @@ class DomainConfigLoader:
             },
         }
 
+    def clear_cache(self) -> None:
+        self.load.cache_clear()
+
     def summary(self) -> dict[str, Any]:
         domain_config = self.load()
         return {

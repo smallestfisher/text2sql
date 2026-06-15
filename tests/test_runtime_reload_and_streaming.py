@@ -25,11 +25,13 @@ from backend.app.models.trace import TraceRecord
 from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.metadata_registry import MetadataRegistry
+from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.progress_service import ProgressService
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.session_workspace_service import SessionWorkspaceService
 from backend.app.services.retrieval_service import RetrievalService
+from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.llm_client import LLMClient, sqlglot as llm_sqlglot
 from backend.app.services.vector_retriever import VectorRetriever
 from backend.app.utils import atomic_write_text
@@ -532,6 +534,168 @@ LIMIT 50
 
 
 class MetadataRegistryFailFastTests(unittest.TestCase):
+    def test_semantic_runtime_does_not_expose_deprecated_config_stub_api(self) -> None:
+        deprecated_methods = {
+            "is_known_domain",
+            "max_limit",
+            "query_profile",
+            "domain_tables",
+            "metric_column",
+            "metric_aggregate_function",
+            "metric_act_type_scope",
+            "is_known_metric",
+            "metric_tables",
+            "metric_expression_columns",
+            "profile_allowed_fields",
+            "profile_field_aliases",
+            "semantic_field_metadata",
+            "semantic_field_aliases",
+            "normalize_field_name",
+            "table_time_fields",
+            "time_filter_fields",
+            "is_dynamic_version_context",
+            "warn_if_missing_time_filter",
+        }
+
+        exposed_methods = {
+            name
+            for name, value in vars(SemanticRuntime).items()
+            if callable(value)
+        }
+
+        self.assertFalse(deprecated_methods.intersection(exposed_methods))
+
+    def test_reload_failure_keeps_existing_cache_snapshot(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            examples_path = Path(temp_dir) / "examples.json"
+            tables_path = Path(temp_dir) / "tables.json"
+            business_path = Path(temp_dir) / "business.json"
+            join_path = Path(temp_dir) / "join.json"
+            session_state_path = Path(temp_dir) / "session_state.schema.json"
+            atomic_write_text(examples_path, "[]\n")
+            atomic_write_text(tables_path, '{"stable_table": {"columns": ["id"]}}\n')
+            atomic_write_text(business_path, '{"entries": [{"id": "old_kb", "notes": ["old"]}]}\n')
+            atomic_write_text(join_path, '{"patterns": []}\n')
+            atomic_write_text(session_state_path, "{}\n")
+            registry = MetadataRegistry(
+                {
+                    "business_knowledge": business_path,
+                    "examples_template": examples_path,
+                    "tables_metadata": tables_path,
+                    "join_patterns": join_path,
+                    "session_state_schema": session_state_path,
+                }
+            )
+
+            atomic_write_text(examples_path, '[{"id": "new_example"}]\n')
+            atomic_write_text(business_path, '{"entries": {}}\n')
+
+            with self.assertRaisesRegex(RuntimeError, "business_knowledge.entries"):
+                registry.reload()
+
+            self.assertEqual(registry.examples_template, [])
+            self.assertEqual(
+                registry.business_knowledge_entries,
+                [{"id": "old_kb", "notes": ["old"]}],
+            )
+
+    def test_repository_exposes_document_paths_without_private_method_access(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            examples_path = Path(temp_dir) / "examples.json"
+            tables_path = Path(temp_dir) / "tables.json"
+            business_path = Path(temp_dir) / "business.json"
+            join_path = Path(temp_dir) / "join.json"
+            session_state_path = Path(temp_dir) / "session_state.schema.json"
+            atomic_write_text(examples_path, "[]\n")
+            atomic_write_text(tables_path, '{"stable_table": {"columns": ["id"]}}\n')
+            atomic_write_text(business_path, '{"entries": []}\n')
+            atomic_write_text(join_path, '{"patterns": []}\n')
+            atomic_write_text(session_state_path, "{}\n")
+            registry = MetadataRegistry(
+                {
+                    "business_knowledge": business_path,
+                    "examples_template": examples_path,
+                    "tables_metadata": tables_path,
+                    "join_patterns": join_path,
+                    "session_state_schema": session_state_path,
+                }
+            )
+            repository = FileMetadataRepository(registry)
+
+            self.assertEqual(repository.resolve_path("business_knowledge"), business_path)
+            with self.assertRaises(KeyError):
+                repository.resolve_path("missing")
+
+    def test_repository_write_validates_json_shape_before_overwriting_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            examples_path = Path(temp_dir) / "examples.json"
+            tables_path = Path(temp_dir) / "tables.json"
+            business_path = Path(temp_dir) / "business.json"
+            join_path = Path(temp_dir) / "join.json"
+            session_state_path = Path(temp_dir) / "session_state.schema.json"
+            original_business = '{"entries": [{"id": "old_kb", "notes": ["old"]}]}\n'
+            atomic_write_text(examples_path, "[]\n")
+            atomic_write_text(tables_path, '{"stable_table": {"columns": ["id"]}}\n')
+            atomic_write_text(business_path, original_business)
+            atomic_write_text(join_path, '{"patterns": []}\n')
+            atomic_write_text(session_state_path, "{}\n")
+            registry = MetadataRegistry(
+                {
+                    "business_knowledge": business_path,
+                    "examples_template": examples_path,
+                    "tables_metadata": tables_path,
+                    "join_patterns": join_path,
+                    "session_state_schema": session_state_path,
+                }
+            )
+            repository = FileMetadataRepository(registry)
+
+            with self.assertRaisesRegex(RuntimeError, "business_knowledge.entries"):
+                repository.write("business_knowledge", {"entries": {}})
+
+            self.assertEqual(business_path.read_text(encoding="utf-8"), original_business)
+            self.assertEqual(
+                registry.business_knowledge_entries,
+                [{"id": "old_kb", "notes": ["old"]}],
+            )
+
+    def test_retrieval_reload_refreshes_semantic_runtime_table_catalog(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            examples_path = Path(temp_dir) / "examples.json"
+            tables_path = Path(temp_dir) / "tables.json"
+            business_path = Path(temp_dir) / "business.json"
+            join_path = Path(temp_dir) / "join.json"
+            session_state_path = Path(temp_dir) / "session_state.schema.json"
+            atomic_write_text(examples_path, "[]\n")
+            atomic_write_text(tables_path, '{"old_table": {"columns": ["id"]}}\n')
+            atomic_write_text(business_path, '{"entries": []}\n')
+            atomic_write_text(join_path, '{"patterns": []}\n')
+            atomic_write_text(session_state_path, "{}\n")
+            registry = MetadataRegistry(
+                {
+                    "business_knowledge": business_path,
+                    "examples_template": examples_path,
+                    "tables_metadata": tables_path,
+                    "join_patterns": join_path,
+                    "session_state_schema": session_state_path,
+                }
+            )
+            domain_config = DomainConfigLoader(tables_path).load()
+            semantic_runtime = SemanticRuntime(domain_config, metadata_registry=registry)
+            service = RetrievalService(
+                domain_config=domain_config,
+                semantic_runtime=semantic_runtime,
+                metadata_registry=registry,
+            )
+
+            self.assertTrue(semantic_runtime.is_known_table("old_table"))
+            atomic_write_text(tables_path, '{"new_table": {"columns": ["id"]}}\n')
+
+            service.reload(prewarm_vectors=False)
+
+            self.assertFalse(semantic_runtime.is_known_table("old_table"))
+            self.assertTrue(semantic_runtime.is_known_table("new_table"))
+
     def test_invalid_examples_template_json_raises(self) -> None:
         with TemporaryDirectory() as temp_dir:
             examples_path = Path(temp_dir) / "examples.json"

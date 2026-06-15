@@ -872,11 +872,14 @@ class PromptCompactionTests(unittest.TestCase):
         business_knowledge = prompt["retrieval_context"]["business_knowledge"]
         self.assertIn("IS_xxx 字段使用 Y/N 标记", business_knowledge)
         self.assertIn("目标需求月份仍然必须基于横表展开后的 demand_month 过滤", business_knowledge)
+        self.assertIn("固定目标需求月份", business_knowledge)
         self.assertNotIn("field_resolution", prompt["evidence_context"])
         examples = prompt["retrieval_context"]["examples"]
         self.assertEqual(examples[0]["id"], "demand_latest_p_202605_oxide_product_count_001")
-        self.assertIn("demand_unpivot", examples[0]["sql"])
-        self.assertIn("NVL(demand_unpivot.demand_qty, 0) > 0", examples[0]["sql"])
+        self.assertIn("target_demand", examples[0]["sql"])
+        self.assertIn("MONTH = '202605'", examples[0]["sql"])
+        self.assertNotIn("TO_CHAR(ADD_MONTHS", examples[0]["sql"])
+        self.assertIn("NVL(td.demand_qty, 0) > 0", examples[0]["sql"])
 
     def test_demand_product_count_question_also_requests_total_demand(self) -> None:
         llm_client = QuestionContextDetailLLMClient()
@@ -1202,6 +1205,53 @@ FETCH FIRST 200 ROWS ONLY
             self.assertEqual(document.name, "business_knowledge")
             self.assertEqual(retrieval_service.reload_calls, 1)
             self.assertEqual(registry.read("business_knowledge"), {"entries": [{"id": "kb_1", "notes": ["test"]}]})
+
+    def test_metadata_update_tables_metadata_clears_domain_summary_cache(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            examples_path = Path(temp_dir) / "examples.json"
+            tables_path = Path(temp_dir) / "tables.json"
+            business_path = Path(temp_dir) / "business_knowledge.json"
+            join_path = Path(temp_dir) / "join_patterns.json"
+            examples_path.write_text("[]\n", encoding="utf-8")
+            tables_path.write_text('{"old_table": {"columns": ["id"]}}\n', encoding="utf-8")
+            business_path.write_text('{"entries": []}\n', encoding="utf-8")
+            join_path.write_text('{"patterns": []}\n', encoding="utf-8")
+            registry = MetadataRegistry(
+                paths={
+                    "examples_template": examples_path,
+                    "tables_metadata": tables_path,
+                    "business_knowledge": business_path,
+                    "join_patterns": join_path,
+                    "session_state_schema": Path("schemas/session_state.schema.json"),
+                }
+            )
+            domain_config_loader = DomainConfigLoader(tables_path)
+            service = MetadataService(
+                metadata_repository=FileMetadataRepository(registry),
+                domain_config_loader=domain_config_loader,
+                audit_repository=EmptyAuditRepository(),
+            )
+            retrieval_service = type(
+                "ReloadTrackingRetrievalService",
+                (),
+                {
+                    "reload_calls": 0,
+                    "reload": lambda self: setattr(self, "reload_calls", self.reload_calls + 1),
+                },
+            )()
+
+            self.assertEqual(service.overview().table_count, 1)
+            service.update_document(
+                "tables_metadata",
+                {
+                    "new_table": {"columns": ["id"]},
+                    "second_table": {"columns": ["id"]},
+                },
+                retrieval_service=retrieval_service,
+            )
+
+            self.assertEqual(service.overview().table_count, 2)
+            self.assertEqual(retrieval_service.reload_calls, 1)
 
     def test_sql_prompt_includes_safe_oracle_example_sql(self) -> None:
         prompt_builder = PromptBuilder(

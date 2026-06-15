@@ -52,10 +52,10 @@ class MetadataService:
         with self._lock:
             template = retrieval_service.dump_example_template(payload)
             example = retrieval_service.validate_example(payload)
-            examples = [retrieval_service.validate_example(item) for item in self.metadata_repository.read("examples_template")]
+            templates = self.metadata_repository.read("examples_template")
+            examples = [retrieval_service.validate_example(item) for item in templates]
             if any(item.id == example.id for item in examples):
                 raise ValueError(f"example id already exists: {example.id}")
-            templates = self.metadata_repository.read("examples_template")
             templates.append(template)
             self.metadata_repository.write(
                 "examples_template",
@@ -148,7 +148,7 @@ class MetadataService:
         )
 
     def get_document(self, name: str) -> MetadataDocument:
-        path = self.metadata_repository._resolve(name)
+        path = self.metadata_repository.resolve_path(name)
         content = self.metadata_repository.read(name)
         return MetadataDocument(name=name, path=str(path), content=content)
 
@@ -160,6 +160,8 @@ class MetadataService:
     ) -> MetadataDocument:
         with self._lock:
             path = self.metadata_repository.write(name, content)
+            if name == "tables_metadata":
+                self.domain_config_loader.clear_cache()
         if retrieval_service is not None:
             retrieval_service.reload()
         return MetadataDocument(name=name, path=str(path), content=content)
