@@ -426,9 +426,7 @@ export interface VectorRetrievalStatus {
   model?: string | null;
   api_base?: string | null;
   ready: boolean;
-  indexing: boolean;
   indexed_document_count: number;
-  last_index_error?: string | null;
   last_search_error?: string | null;
   loaded_embedding_signature?: Record<string, unknown> | null;
   configured_embedding_signature?: Record<string, unknown> | null;
@@ -450,7 +448,6 @@ export interface RetrievalCorpusStatus {
   vector_enabled: boolean;
   vector_provider: string;
   vector_ready: boolean;
-  vector_indexing: boolean;
   document_count: number;
   document_count_by_source: Record<string, number>;
   example_count: number;

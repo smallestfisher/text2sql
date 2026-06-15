@@ -64,6 +64,81 @@ class VectorRetrieverTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not configured"):
             retriever.embed_text_with_signature("查询库存")
 
+    def test_enabled_vector_retriever_is_not_ready_until_documents_load(self) -> None:
+        retriever = VectorRetriever(provider="openai", api_key="test-key", dimensions=32)
+
+        self.assertTrue(retriever.enabled)
+        self.assertFalse(retriever.ready)
+        self.assertFalse(retriever.health()["ready"])
+
+    def test_health_omits_removed_index_status_fields(self) -> None:
+        retriever = VectorRetriever(provider="openai", api_key="test-key", dimensions=32)
+
+        health = retriever.health()
+
+        self.assertNotIn("indexing", health)
+        self.assertNotIn("last_index_error", health)
+
+    def test_search_rejects_loaded_vectors_from_stale_embedding_signature(self) -> None:
+        class StubVectorRetriever(VectorRetriever):
+            def _remote_embed(self, text: str) -> list[float]:
+                _ = text
+                return self._normalize([1.0] + [0.0] * (self.dimensions - 1))
+
+        retriever = StubVectorRetriever(
+            provider="openai",
+            api_key="test-key",
+            model_name="current-model",
+            dimensions=32,
+        )
+        retriever.load_documents(
+            [
+                {
+                    "source_type": "table_schema",
+                    "source_id": "orders",
+                    "summary": "orders",
+                    "metadata": {},
+                    "vector": [1.0] + [0.0] * 31,
+                    "embedding_provider": "openai",
+                    "embedding_backend": "remote",
+                    "embedding_model": "previous-model",
+                    "embedding_dimensions": 32,
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "does not match loaded corpus signature"):
+            retriever.search("订单", top_k=1)
+
+    def test_search_returns_no_results_for_non_positive_top_k(self) -> None:
+        class StubVectorRetriever(VectorRetriever):
+            def _remote_embed(self, text: str) -> list[float]:
+                _ = text
+                return self._normalize([1.0] + [0.0] * (self.dimensions - 1))
+
+        retriever = StubVectorRetriever(
+            provider="openai",
+            api_key="test-key",
+            model_name="current-model",
+            dimensions=32,
+        )
+        signature = retriever.embedding_signature() or {}
+        retriever.load_documents(
+            [
+                {
+                    "source_type": "table_schema",
+                    "source_id": source_id,
+                    "summary": source_id,
+                    "metadata": {},
+                    "vector": [1.0] + [0.0] * 31,
+                    **signature,
+                }
+                for source_id in ("orders", "customers")
+            ]
+        )
+
+        self.assertEqual(retriever.search("订单", top_k=-1), [])
+
     def test_default_vector_top_k_keeps_cross_source_retrieval_room(self) -> None:
         settings_source = Path("backend/app/core/settings.py").read_text(encoding="utf-8")
         env_example = Path("env.example").read_text(encoding="utf-8")
@@ -100,6 +175,14 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         self.assertTrue(
             all(document["metadata"].get("table") for document in table_schema_documents)
         )
+
+    def test_health_omits_removed_vector_indexing_field(self) -> None:
+        domain_config = DomainConfigLoader().load()
+        service = RetrievalService(domain_config=domain_config)
+
+        health = service.health()
+
+        self.assertNotIn("vector_indexing", health)
 
     def test_example_vector_documents_include_sql_structure(self) -> None:
         domain_config = DomainConfigLoader().load()
@@ -237,7 +320,7 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
                 return {"embedding_provider": "siliconflow"}
 
             def health(self):
-                return {"ready": False, "indexing": False}
+                return {"ready": False}
 
             def load_documents(self, documents):
                 return None

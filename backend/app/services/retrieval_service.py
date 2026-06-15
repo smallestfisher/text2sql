@@ -68,7 +68,6 @@ class RetrievalService:
         vector_retriever: VectorRetriever | None = None,
         vector_corpus_store_service: VectorCorpusStoreService | None = None,
         vector_top_k: int = 8,
-        async_vector_index: bool = True,
         prewarm_vector_index: bool = False,
     ) -> None:
         self.domain_config = domain_config
@@ -82,7 +81,6 @@ class RetrievalService:
         self.vector_retriever = vector_retriever or VectorRetriever(provider="disabled")
         self.vector_corpus_store_service = vector_corpus_store_service
         self.vector_top_k = vector_top_k
-        self.async_vector_index = async_vector_index
         self.table_domains: dict[str, list[str]] = {}
         if self.vector_retriever.provider != "disabled" and not self.vector_retriever.enabled:
             raise RuntimeError("vector retrieval is enabled but vector embedding client is not configured")
@@ -96,7 +94,6 @@ class RetrievalService:
         self.corpus_documents: list[dict] = []
         self.document_frequency: Counter[str] = Counter()
         self.average_doc_length = 1.0
-        self.document_lookup: dict[tuple[str, str], dict] = {}
         self.last_vector_sync_summary: dict = {
             "persisted_document_count": 0,
             "reused_document_count": 0,
@@ -108,9 +105,9 @@ class RetrievalService:
             "error": None,
             "pending_rebuild": bool(self.vector_retriever.enabled),
         }
-        self._refresh_indexes(prewarm_vectors=False)
+        self._refresh_indexes()
         if prewarm_vector_index:
-            self.prewarm_vector_index(async_sync=False)
+            self.prewarm_vector_index()
 
     def retrieve_text(
         self,
@@ -154,24 +151,11 @@ class RetrievalService:
         self.table_domains = self._build_table_domains()
         self._seed_chinese_tokenizer()
         should_prewarm = self.prewarm_vector_index_on_reload if prewarm_vectors is None else prewarm_vectors
-        self._refresh_indexes(prewarm_vectors=False)
+        self._refresh_indexes()
         if should_prewarm:
-            self.prewarm_vector_index(async_sync=False)
+            self.prewarm_vector_index()
 
-    def prewarm_vector_index(self, *, async_sync: bool = False) -> dict:
-        if async_sync:
-            thread = threading.Thread(
-                target=self.prewarm_vector_index,
-                kwargs={"async_sync": False},
-                daemon=True,
-                name="vector-prewarm",
-            )
-            thread.start()
-            return {
-                "accepted": True,
-                "vector_enabled": self.vector_retriever.enabled,
-                "pending_rebuild": bool(self.last_vector_sync_summary.get("pending_rebuild")),
-            }
+    def prewarm_vector_index(self) -> dict:
         self._sync_vector_index()
         return {
             "accepted": True,
@@ -203,7 +187,6 @@ class RetrievalService:
             "vector_enabled": self.vector_retriever.enabled,
             "vector_provider": self.vector_retriever.provider,
             "vector_ready": vector_health.get("ready", False),
-            "vector_indexing": vector_health.get("indexing", False),
             "document_count": len(self.corpus_documents),
             "document_count_by_source": dict(
                 Counter(document["source_type"] for document in self.corpus_documents)
@@ -223,7 +206,7 @@ class RetrievalService:
         payload = self.metadata_registry.examples_template
         return [self.validate_example(item) for item in payload]
 
-    def _refresh_indexes(self, *, prewarm_vectors: bool) -> None:
+    def _refresh_indexes(self) -> None:
         self.corpus_documents = (
             self._build_example_documents()
             + self._build_knowledge_documents()
@@ -231,18 +214,11 @@ class RetrievalService:
             + self._build_join_pattern_documents()
         )
         self.document_frequency = Counter()
-        self.document_lookup = {
-            (document["source_type"], document["source_id"]): document
-            for document in self.corpus_documents
-        }
         total_length = 0
         for document in self.corpus_documents:
             total_length += document["length"]
             self.document_frequency.update(set(document["token_counts"].keys()))
         self.average_doc_length = total_length / len(self.corpus_documents) if self.corpus_documents else 1.0
-        if prewarm_vectors:
-            self._sync_vector_index()
-            return
         self._mark_vector_index_pending()
 
     def _mark_vector_index_pending(self) -> None:
@@ -897,9 +873,6 @@ class RetrievalService:
         for index in range(len(chunk) - 1):
             tokens.add(chunk[index : index + 2])
         return tokens
-
-    def _lookup_document(self, source_type: str, source_id: str) -> dict | None:
-        return self.document_lookup.get((source_type, source_id))
 
     def _bm25_score(self, query_tokens: list[str], document: dict | None) -> float:
         if document is None or not query_tokens:

@@ -369,9 +369,7 @@ def _empty_vector_retrieval_status(error: str | None = None) -> dict:
         "model": None,
         "api_base": None,
         "ready": False,
-        "indexing": False,
         "indexed_document_count": 0,
-        "last_index_error": error,
         "last_search_error": None,
         "loaded_embedding_signature": None,
         "configured_embedding_signature": None,
@@ -384,7 +382,6 @@ def _empty_retrieval_corpus_status(error: str | None = None) -> dict:
         "vector_enabled": False,
         "vector_provider": "unknown",
         "vector_ready": False,
-        "vector_indexing": False,
         "document_count": 0,
         "document_count_by_source": {},
         "example_count": 0,
@@ -555,7 +552,7 @@ def runtime_status(container: AppContainer = Depends(get_container)) -> dict:
 
 @router.post("/runtime/vector/prewarm")
 def prewarm_runtime_vector_index(container: AppContainer = Depends(get_container)) -> dict:
-    return container.retrieval_service.prewarm_vector_index(async_sync=False)
+    return container.retrieval_service.prewarm_vector_index()
 
 
 @router.get("/runtime/sessions", response_model=RuntimeSessionCollectionResponse)

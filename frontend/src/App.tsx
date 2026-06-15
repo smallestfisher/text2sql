@@ -3117,17 +3117,8 @@ function describeVectorHealth(value: RuntimeStatus["vector_retrieval"] | null | 
   if (!value.enabled) {
     return "未启用";
   }
-  if (value.indexing) {
-    return value.ready ? "后台刷新中" : "预热中";
-  }
-  if (value.ready && value.last_index_error) {
-    return "已就绪，上次刷新失败";
-  }
   if (value.ready) {
     return "已就绪";
-  }
-  if (value.last_index_error) {
-    return "预热失败";
   }
   return "等待初始化";
 }
@@ -3146,17 +3137,8 @@ function describeVectorWarmStatus(value: RuntimeStatus["vector_retrieval"] | nul
   if (!value.enabled) {
     return "向量检索未启用";
   }
-  if (value.indexing) {
-    return value.ready ? "后台刷新中，旧索引仍可用" : "初次预热中";
-  }
-  if (value.ready && value.last_index_error) {
-    return "已就绪，但最近一次刷新失败";
-  }
   if (value.ready) {
     return "已就绪";
-  }
-  if (value.last_index_error) {
-    return "预热失败";
   }
   return "等待初始化";
 }

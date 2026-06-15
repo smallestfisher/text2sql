@@ -176,7 +176,6 @@ class AppContainer:
             vector_retriever=self.vector_retriever,
             vector_corpus_store_service=self.vector_corpus_store_service,
             vector_top_k=self.settings.vector_top_k,
-            async_vector_index=False,
             prewarm_vector_index=self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
         )
         logger.info(

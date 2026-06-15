@@ -12,18 +12,6 @@ class DbVectorDocumentRepository:
     def __init__(self, database_connector: DatabaseConnector) -> None:
         self.database_connector = database_connector
 
-    def list_all(self) -> list[dict]:
-        rows = self.database_connector.fetch_all(
-            """
-            SELECT document_id, source_type, source_id, summary, text_content, metadata_json,
-                   content_hash, embedding_provider, embedding_backend, embedding_model,
-                   embedding_dimensions, vector_json, created_at, updated_at
-            FROM vector_corpus_documents
-            ORDER BY source_type ASC, source_id ASC
-            """
-        )
-        return [self._hydrate_row(row) for row in rows]
-
     def find_by_document_ids(self, document_ids: list[str]) -> list[dict]:
         if not document_ids:
             return []
@@ -101,7 +89,7 @@ class DbVectorDocumentRepository:
     def delete_missing(self, document_ids: list[str]) -> int:
         if not document_ids:
             return self.database_connector.execute_write("DELETE FROM vector_corpus_documents")
-        sql, params = self._build_not_in_clause(
+        sql, params = self._build_in_clause(
             base_sql="DELETE FROM vector_corpus_documents WHERE document_id NOT IN ",
             values=document_ids,
             value_prefix="document_id",
@@ -134,10 +122,6 @@ class DbVectorDocumentRepository:
             params[key] = value
             placeholders.append(f":{key}")
         return f"{base_sql}({', '.join(placeholders)})", params
-
-    def _build_not_in_clause(self, base_sql: str, values: list[str], value_prefix: str) -> tuple[str, dict]:
-        sql, params = self._build_in_clause(base_sql, values, value_prefix)
-        return sql, params
 
     def _coerce_datetime(self, value) -> datetime:
         if isinstance(value, datetime):

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
+import heapq
 import math
 import threading
 
 from openai import OpenAI
-
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,16 +36,13 @@ class VectorRetriever:
         self.timeout_seconds = timeout_seconds
         self.documents: list[VectorDocument] = []
         self._documents_lock = threading.RLock()
-        self._index_generation = 0
-        self._indexing = False
         self.client = None
-        self._ready = not self.enabled
-        self._last_index_error: str | None = None
         self._last_search_error: str | None = None
         self._indexed_document_count = 0
         self._loaded_embedding_signature: dict | None = None
         if self.provider in {"openai", "compatible", "siliconflow"} and self.api_key:
             self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
+        self._ready = not self.enabled
 
     @property
     def enabled(self) -> bool:
@@ -62,9 +56,7 @@ class VectorRetriever:
     def health(self) -> dict:
         with self._documents_lock:
             ready = self._ready
-            indexing = self._indexing
             indexed_document_count = self._indexed_document_count
-            last_index_error = self._last_index_error
             last_search_error = self._last_search_error
             loaded_embedding_signature = self._loaded_embedding_signature
         return {
@@ -73,21 +65,18 @@ class VectorRetriever:
             "model": self.model_name if self.client is not None else None,
             "api_base": self.api_base if self.client is not None else None,
             "ready": ready,
-            "indexing": indexing,
             "indexed_document_count": indexed_document_count,
-            "last_index_error": last_index_error,
             "last_search_error": last_search_error,
             "configured_embedding_signature": self.embedding_signature(),
             "loaded_embedding_signature": loaded_embedding_signature,
         }
 
-    def embedding_signature(self, backend: str | None = None) -> dict | None:
+    def embedding_signature(self) -> dict | None:
         if not self.enabled:
             return None
-        actual_backend = backend or "remote"
         return {
             "embedding_provider": self.provider,
-            "embedding_backend": actual_backend,
+            "embedding_backend": "remote",
             "embedding_model": self.model_name,
             "embedding_dimensions": self.dimensions,
         }
@@ -96,30 +85,19 @@ class VectorRetriever:
         vector, _ = self.embed_text_with_signature(text)
         return vector
 
-    def embed_text_for_signature(self, text: str, signature: dict) -> list[float]:
-        if not text.strip():
-            return [0.0] * self.dimensions
-        if not self.enabled:
-            raise RuntimeError("vector embedding client is not configured")
-        backend = signature.get("embedding_backend")
-        if backend != "remote":
-            raise RuntimeError(f"unsupported embedding backend: {backend}")
-        return self._remote_embed(text)
-
     def embed_text_with_signature(self, text: str) -> tuple[list[float], dict]:
         if not self.enabled:
             raise RuntimeError("vector embedding client is not configured")
+        signature = self.embedding_signature() or {}
         if not text.strip():
-            return [0.0] * self.dimensions, self.embedding_signature(backend="remote") or {}
-        return self._remote_embed(text), self.embedding_signature(backend="remote") or {}
+            return [0.0] * self.dimensions, signature
+        return self._remote_embed(text), signature
 
     def load_documents(self, documents: list[dict]) -> None:
         if not self.enabled:
             with self._documents_lock:
                 self.documents = []
-                self._indexing = False
                 self._ready = True
-                self._last_index_error = None
                 self._last_search_error = None
                 self._indexed_document_count = 0
                 self._loaded_embedding_signature = None
@@ -129,33 +107,10 @@ class VectorRetriever:
         loaded_embedding_signature = self._extract_embedding_signature(documents)
         with self._documents_lock:
             self.documents = indexed_documents
-            self._indexing = False
             self._ready = True
-            self._last_index_error = None
             self._last_search_error = None
             self._indexed_document_count = len(indexed_documents)
             self._loaded_embedding_signature = loaded_embedding_signature
-
-    def load_documents_async(self, documents: list[dict]) -> None:
-        if not self.enabled:
-            self.load_documents(documents)
-            return
-
-        snapshot = [dict(item) for item in documents]
-        with self._documents_lock:
-            self._index_generation += 1
-            generation = self._index_generation
-            self._indexing = True
-            self._ready = bool(self.documents)
-            self._last_index_error = None
-
-        thread = threading.Thread(
-            target=self._load_documents_worker,
-            args=(generation, snapshot),
-            daemon=True,
-            name="vector-index-builder",
-        )
-        thread.start()
 
     def search(
         self,
@@ -163,7 +118,7 @@ class VectorRetriever:
         top_k: int = 5,
         source_types: list[str] | None = None,
     ) -> list[dict]:
-        if not self.enabled or not query_text.strip():
+        if not self.enabled or not query_text.strip() or top_k <= 0:
             return []
 
         allowed_source_types = set(source_types or [])
@@ -173,11 +128,7 @@ class VectorRetriever:
             loaded_embedding_signature = self._loaded_embedding_signature
 
         try:
-            if documents and loaded_embedding_signature:
-                query_vector = self.embed_text_for_signature(query_text, loaded_embedding_signature)
-                query_signature = loaded_embedding_signature
-            else:
-                query_vector, query_signature = self.embed_text_with_signature(query_text)
+            query_vector, query_signature = self.embed_text_with_signature(query_text)
         except Exception as exc:
             with self._documents_lock:
                 self._last_search_error = str(exc)
@@ -207,33 +158,15 @@ class VectorRetriever:
                 }
             )
 
-        scored.sort(key=lambda item: item["score"], reverse=True)
-        return scored[:top_k]
-
-    def _load_documents_worker(self, generation: int, documents: list[dict]) -> None:
-        try:
-            indexed_documents = self._build_vector_documents(documents)
-            loaded_embedding_signature = self._extract_embedding_signature(documents)
-        except Exception as exc:
-            logger.exception("vector index build failed")
-            with self._documents_lock:
-                if generation != self._index_generation:
-                    return
-                self._indexing = False
-                self._ready = bool(self.documents)
-                self._last_index_error = str(exc)
-            return
-
-        with self._documents_lock:
-            if generation != self._index_generation:
-                return
-            self.documents = indexed_documents
-            self._indexing = False
-            self._ready = True
-            self._last_index_error = None
-            self._last_search_error = None
-            self._indexed_document_count = len(indexed_documents)
-            self._loaded_embedding_signature = loaded_embedding_signature
+        if len(scored) <= top_k:
+            scored.sort(key=lambda item: item["score"], reverse=True)
+            return scored
+        ranked = heapq.nlargest(
+            top_k,
+            enumerate(scored),
+            key=lambda item: (item[1]["score"], -item[0]),
+        )
+        return [item for _, item in ranked]
 
     def _build_vector_documents(self, documents: list[dict]) -> list[VectorDocument]:
         return [
@@ -278,15 +211,17 @@ class VectorRetriever:
     def _extract_embedding_signature(self, documents: list[dict]) -> dict | None:
         if not documents:
             return None
-        signatures = {
-            (
+        signatures = set()
+        for item in documents:
+            signature = (
                 item.get("embedding_provider"),
                 item.get("embedding_backend"),
                 item.get("embedding_model"),
                 int(item.get("embedding_dimensions", 0)),
             )
-            for item in documents
-        }
+            if not all(signature):
+                raise ValueError("loaded vector documents are missing embedding signatures")
+            signatures.add(signature)
         if len(signatures) > 1:
             raise ValueError("loaded vector documents have mixed embedding signatures")
         provider, backend, model, dimensions = next(iter(signatures))

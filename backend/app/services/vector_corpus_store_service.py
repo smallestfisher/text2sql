@@ -67,32 +67,25 @@ class VectorCorpusStoreService:
         }
 
         configured_signature = self.vector_retriever.embedding_signature()
-        active_signature = configured_signature
-        for _ in range(2):
-            if active_signature is None:
-                break
-            sync_result = self._sync_with_signature(
-                corpus_documents=corpus_documents,
-                existing_rows=existing_rows,
-                active_signature=active_signature,
-                now=now,
-            )
-            restart_signature = sync_result.pop("restart_signature", None)
-            if restart_signature is None:
-                result = VectorCorpusSyncResult(**sync_result)
-                logger.info(
-                    "vector corpus sync finished: total=%s reused=%s rebuilt=%s deleted=%s upserted=%s backend=%s",
-                    result.persisted_document_count,
-                    result.reused_document_count,
-                    result.rebuilt_document_count,
-                    result.deleted_document_count,
-                    result.upserted_document_count,
-                    result.embedding_signature.get("embedding_backend") if result.embedding_signature else None,
-                )
-                return result
-            active_signature = restart_signature
-
-        raise RuntimeError("vector corpus sync could not stabilize embedding backend")
+        if configured_signature is None:
+            raise RuntimeError("vector embedding signature is unavailable")
+        sync_result = self._sync_with_signature(
+            corpus_documents=corpus_documents,
+            existing_rows=existing_rows,
+            active_signature=configured_signature,
+            now=now,
+        )
+        result = VectorCorpusSyncResult(**sync_result)
+        logger.info(
+            "vector corpus sync finished: total=%s reused=%s rebuilt=%s deleted=%s upserted=%s backend=%s",
+            result.persisted_document_count,
+            result.reused_document_count,
+            result.rebuilt_document_count,
+            result.deleted_document_count,
+            result.upserted_document_count,
+            result.embedding_signature.get("embedding_backend") if result.embedding_signature else None,
+        )
+        return result
 
     def _sync_with_signature(
         self,
@@ -115,20 +108,12 @@ class VectorCorpusStoreService:
             row_changed = needs_rebuild or self._row_changed(candidate, existing)
 
             if needs_rebuild:
-                if not candidate["text_content"].strip():
-                    vector = self.vector_retriever.embed_text_for_signature(
-                        candidate["text_content"],
-                        active_signature,
-                    )
-                elif active_signature.get("embedding_backend") == "remote":
+                if candidate["text_content"].strip():
                     vector, actual_signature = self.vector_retriever.embed_text_with_signature(candidate["text_content"])
                     if not self._same_signature(active_signature, actual_signature):
-                        return {"restart_signature": actual_signature}
+                        raise RuntimeError("embedding signature changed during vector corpus sync")
                 else:
-                    vector = self.vector_retriever.embed_text_for_signature(
-                        candidate["text_content"],
-                        active_signature,
-                    )
+                    vector = [0.0] * int(active_signature["embedding_dimensions"])
                 rebuilt_count += 1
             else:
                 vector = list(existing.get("vector", []) if existing else [])

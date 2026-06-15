@@ -149,12 +149,13 @@ class VectorFusionTests(unittest.TestCase):
         # the DB-backed corpus store. This mirrors what _sync_vector_index would
         # hand to load_documents in production.
         fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))["embeddings"]
+        signature = vector_retriever.embedding_signature() or {}
         documents_with_vectors = []
         for document in service.corpus_documents:
             vector = fixture.get(_text_key(document["text"]))
             if vector is None:
                 continue
-            documents_with_vectors.append({**document, "vector": vector})
+            documents_with_vectors.append({**document, **signature, "vector": vector})
         vector_retriever.load_documents(documents_with_vectors)
 
         # Clear the pending-rebuild gate so retrieve_text treats the index as

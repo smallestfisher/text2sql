@@ -54,12 +54,3 @@ class FakeVectorRetriever(VectorRetriever):
                 "scripts/generate_vector_fixture.py"
             )
         return self._normalize(vector)
-
-    def embed_text_for_signature(self, text: str, signature: dict) -> list[float]:
-        # The real implementation rejects any backend other than "remote".
-        # Documents loaded directly in tests may carry no signature, so bypass
-        # that check and resolve straight from the fixture.
-        _ = signature
-        if not text.strip():
-            return [0.0] * self.dimensions
-        return self._remote_embed(text)
