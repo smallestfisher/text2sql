@@ -1112,7 +1112,58 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual([step.name for step in trace.steps], ["response_snapshot"])
         self.assertEqual([step.name for step in response.trace.steps], [])
         snapshot_response = trace.steps[0].metadata["response"]
-        self.assertNotIn("rows", snapshot_response["execution"])
+        # execution.sql and execution.rows must remain in the snapshot so
+        # that ChatResponseRestoreService._restore_from_snapshot can rebuild
+        # the full ChatResponse without validation errors.
+        self.assertIn("sql", snapshot_response["execution"])
+        self.assertIn("rows", snapshot_response["execution"])
+        # The snapshot step itself must not leak into the response's public trace.
+        self.assertEqual([s.name for s in response.trace.steps], [])
+
+    def test_response_snapshot_round_trip_restores_chat_response(self) -> None:
+        orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)
+        orchestrator.audit_service = RecordingAuditService()
+        trace = TraceRecord(trace_id="trace_round_trip")
+        classification = QuestionClassification(question_type="new", subject_domain="inventory")
+        context_summary = ContextSummary(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["oms_inventory"],
+        )
+        response = ChatResponse(
+            classification=classification,
+            context_summary=context_summary,
+            trace=trace,
+            answer=None,
+            sql="SELECT * FROM oms_inventory FETCH FIRST 2 ROWS ONLY",
+            context_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+            sql_validation=ValidationResponse(valid=True, errors=[], warnings=[]),
+            execution=ExecutionResponse(
+                executed=True,
+                status="ok",
+                sql="SELECT * FROM oms_inventory FETCH FIRST 2 ROWS ONLY",
+                row_count=2,
+                columns=["product_ID"],
+                rows=[{"product_ID": "A"}, {"product_ID": "B"}],
+                errors=[],
+                warnings=[],
+            ),
+            next_session_state=SessionState(session_id="sess_round_trip"),
+        )
+
+        orchestrator._append_response_snapshot(trace, response)
+        snapshot_payload = dict(trace.steps[0].metadata["response"])
+
+        # Restore path mirrors ChatResponseRestoreService._restore_from_snapshot.
+        payload = dict(snapshot_payload)
+        payload["trace"] = trace
+        payload["sql"] = snapshot_payload["execution"]["sql"]
+        payload.pop("sql_context", None)
+
+        restored = ChatResponse(**payload)
+        self.assertEqual(restored.execution.status, "ok")
+        self.assertEqual(restored.execution.row_count, 2)
+        self.assertEqual(restored.execution.rows, [{"product_ID": "A"}, {"product_ID": "B"}])
 
     def test_sql_context_validation_rejects_missing_physical_tables(self) -> None:
         orchestrator = ConversationOrchestrator.__new__(ConversationOrchestrator)

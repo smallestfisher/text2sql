@@ -1663,7 +1663,6 @@ class ConversationOrchestrator:
             exclude={
                 "trace": True,
                 "sql": True,
-                "execution": {"sql": True, "rows": True},
                 "next_session_state": {"last_sql": True},
             },
         )
