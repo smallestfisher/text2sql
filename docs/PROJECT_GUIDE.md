@@ -10,6 +10,7 @@
 - `semantic/`、`examples/`、`eval/` 是语义资产、检索语料、管理台编辑和评测的共同来源。
 - 启动时会检查业务库、runtime 库、runtime schema、metadata、`sqlglot` 和向量检索配置；关键依赖失败会阻断启动。
 - 准确率修复优先沉淀到表结构说明、业务知识、样例、join pattern、retrieval、prompt 和 validator。
+- 字段事实只沉淀在语义资产和 `SemanticRuntime`。例如时间字段的物理存储格式由 `semantic/tables.json.time_fields` 声明，SQL prompt 和 validator 只消费这些语义事实，不在业务链路里按具体表名写场景 if/else。
 
 ## 2. 主链路
 
@@ -234,6 +235,7 @@ Admin：
 - 表和字段必须存在于语义资产中。
 - Oracle 语法边界和结果限制。
 - SQL 来源必须在 SQL prompt 允许表范围内。
+- 时间字段表达式必须匹配语义资产声明的物理格式。对 `YYYYMM`、`YYYYMMDD`、`YYYY-MM`、`YYYY-MM-DD` 这类字符串格式时间字段，不允许套 `TO_CHAR(field, 'YYYYMM')` 等 Oracle 日期格式化函数；应使用 `time_resolution.projection_example` 中的字符串表达式，例如 `SUBSTR(work_date, 1, 6)`，或使用匹配物理格式的范围过滤。
 - 宽表扫描、超大结果等风险标记。
 - SQL 质量警告，例如未保护零分母的除法、多表聚合不显式分层、位置排序。
 
@@ -297,6 +299,8 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 
 `selected_sources` 是最终 SQL prompt 可用表。如果这里缺关键表，先回到 Retrieval 检查对应证据是否命中、证据 metadata 是否声明了该表。
 
+`time_resolution_count` 大于 0 时，继续看 `evidence_context.time_resolution`。这里会给出逻辑时间字段到物理字段的映射、`format`、`projection_example` 和月份过滤示例。排查 Oracle 时间类错误时，先确认 SQL 是否按这些示例生成；例如 `production_actuals.work_date` 是 `YYYYMMDD` 字符串，月粒度表达应是 `SUBSTR(work_date, 1, 6)`，不是 `TO_CHAR(work_date, 'YYYYMM')`。
+
 ## 9. 语义资产维护
 
 会直接影响 SQL 生成的内容资产：
@@ -318,6 +322,15 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 - 防止关键检索证据或表 schema 丢失：改 `eval/retrieval_cases.json`。
 
 不要把业务事实写进 Python if/else；代码只负责加载、检索、排序、裁剪、渲染、组装、安全校验和审计。
+
+### 时间字段格式
+
+`semantic/tables.json` 中的 `time_fields` 是时间表达式生成和执行前校验的共同事实来源。维护规则：
+
+- `grain` 表示业务粒度，例如 `day` 或 `month`。
+- `format` 表示物理字段存储格式，不表示自然语言输入格式。常见值包括 `YYYYMM`、`YYYYMMDD`、`YYYY-MM`、`YYYY-MM-DD`。
+- 如果物理字段是字符串编码的日期或月份，SQL 应使用字符串表达式或匹配格式的字面量范围；不要把它当 Oracle `DATE/TIMESTAMP` 字段套 `TO_CHAR`、`TRUNC` 等日期函数。
+- 如果真实数据库字段后来改成 `DATE/TIMESTAMP`，先更新 `time_fields` 的表达约定和对应测试，再调整 prompt/validator 行为；不要只在样例 SQL 中局部修正。
 
 ### 样例要求
 
