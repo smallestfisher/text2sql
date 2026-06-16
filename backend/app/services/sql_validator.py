@@ -177,6 +177,7 @@ class SqlValidator:
             warnings.extend(month_filter_semantic_warnings)
             time_literal_format_warnings = self._validate_time_literal_formats(sql_context, filter_scope)
             warnings.extend(time_literal_format_warnings)
+            errors.extend(self._validate_time_function_usage(sql_context, sql))
 
             version_warnings = self._validate_version_context(sql_context, filter_scope)
             warnings.extend(version_warnings)
@@ -376,6 +377,40 @@ class SqlValidator:
                             break
         return errors
 
+    def _validate_time_function_usage(
+        self,
+        sql_context: SqlGenerationContext,
+        sql: str,
+    ) -> list[str]:
+        if self.semantic_runtime is None or not sql:
+            return []
+
+        errors: list[str] = []
+        inspected_fields: set[tuple[str, str]] = set()
+        matched_fields: set[tuple[str, str]] = set()
+        for logical_field in ["biz_date", "biz_month"]:
+            for candidate in self._time_field_candidates(sql_context, logical_field):
+                field_format = str(candidate.get("format") or "").strip().upper()
+                if not self.semantic_runtime.is_formatted_string_time_field(candidate):
+                    continue
+                for field_name in self._time_candidate_field_names(candidate):
+                    unqualified_field_name = field_name.rsplit(".", 1)[-1]
+                    key = (field_name, field_format)
+                    match_key = (unqualified_field_name, field_format)
+                    if key in inspected_fields:
+                        continue
+                    inspected_fields.add(key)
+                    if match_key in matched_fields:
+                        continue
+                    if not self._matches_to_char_format_model(sql, field_name):
+                        continue
+                    matched_fields.add(match_key)
+                    errors.append(
+                        f"sql uses TO_CHAR on formatted string time field {unqualified_field_name} ({field_format}); "
+                        "use the field's configured string expression such as SUBSTR(field, 1, 6) or matching range literals"
+                    )
+        return errors
+
     def _validate_limit_consistency(
         self,
         sql_context: SqlGenerationContext,
@@ -476,6 +511,12 @@ class SqlValidator:
             sql_fragment,
             re.IGNORECASE,
         ) is not None
+
+    def _matches_to_char_format_model(self, sql_fragment: str, field_name: str) -> bool:
+        unqualified_field = field_name.rsplit(".", 1)[-1]
+        field_reference = rf"(?:\b[A-Za-z_][\w$#]*\.)?{re.escape(unqualified_field)}\b"
+        pattern = rf"\bto_char\s*\(\s*{field_reference}\s*,\s*'(?:Y{{2,4}}|MM|DD|[-/ ])+?'"
+        return re.search(pattern, sql_fragment, re.IGNORECASE) is not None
 
     def _validate_unexpected_group_by_fields(
         self,

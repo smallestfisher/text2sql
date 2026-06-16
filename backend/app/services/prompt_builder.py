@@ -1116,7 +1116,7 @@ class PromptBuilder:
         constraints.extend(
             [
                 "不要使用 MySQL 专属语法，例如 LIMIT、DATE_FORMAT、STR_TO_DATE、DATE_ADD、CURDATE、反引号。",
-                "Oracle 日期函数优先使用 TO_DATE、TO_CHAR、ADD_MONTHS、TRUNC、SYSDATE。",
+                "Oracle 日期函数只用于真实 DATE/TIMESTAMP 字段；字符串格式日期字段必须按 evidence_context.time_resolution 的 format/projection_example 处理，不要套 TO_CHAR。",
                 "复杂 SQL 优先使用清晰 CTE 分步骤表达，避免无意义嵌套子查询。",
                 "多表聚合对比时，优先先分别聚合到明确粒度，再 join 聚合结果。",
                 "除法表达式必须用 NULLIF 或 CASE WHEN 防止除零。",

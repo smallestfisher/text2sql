@@ -139,6 +139,12 @@ class SemanticRuntime:
             return None
         return dict(metadata)
 
+    def is_formatted_string_time_field(self, metadata: dict | None) -> bool:
+        if not metadata:
+            return False
+        normalized_format = str(metadata.get("format") or "").strip().upper()
+        return normalized_format in {"YYYYMM", "YYYY-MM", "YYYYMMDD", "YYYY-MM-DD"}
+
     def resolve_time_field_candidates(
         self,
         domain_name: str,

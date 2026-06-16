@@ -26,6 +26,7 @@ class TimeFieldFormatTests(unittest.TestCase):
         metadata = self.semantic_runtime.table_time_field("production_actuals", "work_date")
 
         self.assertEqual(metadata, {"grain": "day", "format": "YYYYMMDD"})
+        self.assertTrue(self.semantic_runtime.is_formatted_string_time_field(metadata))
 
         candidates = self.semantic_runtime.resolve_time_field_candidates(
             "plan_actual",
@@ -63,6 +64,13 @@ class TimeFieldFormatTests(unittest.TestCase):
 
         self.assertIn("biz_month", prompt["evidence_context"]["time_resolution"])
         self.assertNotIn("output_shape", prompt["evidence_context"])
+
+    def test_sql_prompt_warns_against_to_char_on_formatted_string_time_fields(self) -> None:
+        constraints = self.prompt_builder._sql_generation_constraints()
+
+        self.assertTrue(
+            any("字符串格式日期字段" in item and "TO_CHAR" in item for item in constraints),
+        )
 
     def test_sql_validator_warns_incompatible_time_literals(self) -> None:
         sql_context_value = SqlGenerationContext(
@@ -103,6 +111,44 @@ class TimeFieldFormatTests(unittest.TestCase):
         self.assertEqual([], result.errors)
         self.assertTrue(result.warnings)
         self.assertIn("collapses biz_month filter to a single day", result.warnings[0])
+
+    def test_sql_validator_rejects_to_char_month_on_formatted_string_date(self) -> None:
+        sql_context_value = SqlGenerationContext(
+            question_type="new",
+            subject_domain="plan_actual",
+            metrics=["actual_input_qty"],
+            tables=["monthly_plan_approved", "production_actuals"],
+            dimensions=["biz_month", "factory"],
+            filters=[
+                FilterItem(field="biz_month", op="in", value=["202603", "202604"]),
+                FilterItem(field="factory", op="=", value="ARRAY"),
+            ],
+            limit=200,
+        )
+
+        result = self.sql_validator.validate_detailed(
+            """
+            WITH actual_input AS (
+              SELECT TO_CHAR(work_date,'YYYYMM') AS biz_month,
+                     FACTORY AS factory,
+                     SUM(GLS_qty) AS actual_input_qty
+              FROM production_actuals
+              WHERE TO_CHAR(work_date,'YYYYMM') IN ('202603','202604')
+                AND FACTORY = 'ARRAY'
+                AND act_type = '投入'
+              GROUP BY TO_CHAR(work_date,'YYYYMM'), FACTORY
+            )
+            SELECT biz_month, factory, actual_input_qty
+            FROM actual_input
+            FETCH FIRST 200 ROWS ONLY
+            """,
+            self.domain_config,
+            sql_context=sql_context_value,
+        )
+
+        self.assertTrue(result.errors)
+        self.assertIn("TO_CHAR", result.errors[0])
+        self.assertIn("work_date", result.errors[0])
 
 
 if __name__ == "__main__":

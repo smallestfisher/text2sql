@@ -1023,6 +1023,7 @@ class ConversationOrchestrator:
             "sql parse error",
             "sql references unknown sources",
             "incompatible time literals",
+            "uses to_char on formatted string time field",
         )
         return any(marker in normalized for marker in repairable_markers)
 
@@ -1077,6 +1078,7 @@ class ConversationOrchestrator:
             "missing",
             "ora-009",
             "ora-01722",
+            "ora-01481",
             "ora-018",
         )
         return any(marker in normalized for marker in repairable_markers)
