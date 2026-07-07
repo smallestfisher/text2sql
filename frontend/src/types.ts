@@ -481,3 +481,107 @@ export interface UserUpsertPayload {
   roles: string[];
   is_active: boolean;
 }
+
+export interface MetadataDocumentRecord {
+  name: string;
+  path: string;
+  content: unknown;
+}
+
+export interface MetadataDocumentListResponse {
+  documents: string[];
+}
+
+export interface TableTimeField {
+  grain?: string;
+  format?: string;
+}
+
+export interface TableSchemaEntry {
+  description?: string;
+  columns?: string[];
+  MAIN_KEY?: string;
+  month_col?: string;
+  date_col?: string;
+  version_col?: string;
+  time_fields?: Record<string, TableTimeField>;
+  relationships?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+export type TablesDocument = Record<string, TableSchemaEntry>;
+
+export interface BusinessKnowledgeEntry {
+  id: string;
+  domains?: string[];
+  tables?: string[];
+  keywords?: string[];
+  notes?: string[];
+  [key: string]: unknown;
+}
+
+export interface BusinessKnowledgeDocument {
+  version?: string;
+  entries: BusinessKnowledgeEntry[];
+  [key: string]: unknown;
+}
+
+export interface JoinPatternEntry {
+  id: string;
+  domains?: string[];
+  tables?: string[];
+  keywords?: string[];
+  join_path?: string[];
+  notes?: string[];
+  [key: string]: unknown;
+}
+
+export interface JoinPatternsDocument {
+  patterns: JoinPatternEntry[];
+  [key: string]: unknown;
+}
+
+export interface ExampleTemplateRecord {
+  id?: string | null;
+  question: string;
+  sql: string;
+  subject_domain?: string | null;
+  metrics?: string[];
+  dimensions?: string[];
+  tags?: string[];
+  notes?: string | null;
+  result_shape?: string | null;
+}
+
+export interface ExampleRecord {
+  id: string;
+  question: string;
+  normalized_question: string;
+  intent: string;
+  scenario?: string | null;
+  coverage_tags: string[];
+  subject_domain: string;
+  question_type: string;
+  tables: string[];
+  entities: string[];
+  metrics: string[];
+  dimensions: string[];
+  filters: FilterItem[];
+  join_path: string[];
+  sql: string;
+  result_shape?: string | null;
+  notes?: string | null;
+}
+
+export interface ExampleCollectionResponse {
+  examples: ExampleRecord[];
+  count: number;
+}
+
+export interface ExampleMutationResponse {
+  created?: boolean | null;
+  updated?: boolean | null;
+  example: ExampleRecord;
+  template: ExampleTemplateRecord;
+  count?: number | null;
+}

@@ -27,6 +27,11 @@ import type {
   UserCollectionResponse,
   UserUpsertPayload,
   FeedbackSummary,
+  MetadataDocumentRecord,
+  MetadataDocumentListResponse,
+  ExampleCollectionResponse,
+  ExampleMutationResponse,
+  ExampleTemplateRecord,
 } from "./types";
 
 type RequestOptions = {
@@ -381,6 +386,44 @@ export const api = {
       method: "POST",
       token,
       body: payload,
+    });
+  },
+  adminListMetadataDocuments(token: string): Promise<MetadataDocumentListResponse> {
+    return request("/api/admin/metadata/documents", { token });
+  },
+  adminGetMetadataDocument(token: string, name: string): Promise<MetadataDocumentRecord> {
+    return request(`/api/admin/metadata/documents/${encodeURIComponent(name)}`, { token });
+  },
+  adminUpdateMetadataDocument(
+    token: string,
+    name: string,
+    content: unknown,
+  ): Promise<MetadataDocumentRecord> {
+    return request(`/api/admin/metadata/documents/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      token,
+      body: { content },
+    });
+  },
+  adminListExamples(token: string): Promise<ExampleCollectionResponse> {
+    return request("/api/admin/examples", { token });
+  },
+  adminCreateExample(token: string, example: ExampleTemplateRecord): Promise<ExampleMutationResponse> {
+    return request("/api/admin/examples", {
+      method: "POST",
+      token,
+      body: { example },
+    });
+  },
+  adminUpdateExample(
+    token: string,
+    exampleId: string,
+    example: ExampleTemplateRecord,
+  ): Promise<ExampleMutationResponse> {
+    return request(`/api/admin/examples/${encodeURIComponent(exampleId)}`, {
+      method: "PUT",
+      token,
+      body: { example },
     });
   },
 };
