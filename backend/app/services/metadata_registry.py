@@ -13,8 +13,20 @@ from backend.app.config import (
 )
 
 
+ASSET_NAMES: tuple[str, ...] = (
+    "examples_template",
+    "tables_metadata",
+    "business_knowledge",
+    "join_patterns",
+)
+
+
 class MetadataRegistry:
-    def __init__(self, paths: dict[str, Path] | None = None) -> None:
+    def __init__(
+        self,
+        paths: dict[str, Path] | None = None,
+        asset_source=None,
+    ) -> None:
         self.paths = paths or {
             "business_knowledge": BUSINESS_KNOWLEDGE_PATH,
             "examples_template": EXAMPLES_TEMPLATE_PATH,
@@ -22,17 +34,51 @@ class MetadataRegistry:
             "join_patterns": JOIN_PATTERNS_PATH,
             "session_state_schema": SESSION_STATE_SCHEMA_PATH,
         }
+        # When ``asset_source`` is provided (a DbSemanticAssetRepository-like
+        # object exposing ``read_all()``), the four semantic assets are read
+        # from it instead of the JSON files. Files then act only as the seed
+        # source loaded into the store before the registry is constructed.
+        # An asset missing from the source falls back to its JSON file so a
+        # partially seeded store never breaks startup.
+        self.asset_source = asset_source
         self._cache: dict[str, object] = {}
         self.reload()
 
     def reload(self) -> None:
-        new_cache = {
+        if self.asset_source is not None:
+            self._cache = self._reload_from_source()
+            return
+        self._cache = self._reload_from_files()
+
+    def _reload_from_files(self) -> dict[str, object]:
+        return {
             "examples_template": self._read_examples_template(self.paths["examples_template"]),
             "tables_metadata": self._read_tables_metadata(self.paths["tables_metadata"]),
             "business_knowledge": self._read_business_knowledge(self.paths["business_knowledge"]),
             "join_patterns": self._read_join_patterns(self.paths["join_patterns"]),
         }
-        self._cache = new_cache
+
+    def _reload_from_source(self) -> dict[str, object]:
+        stored = self.asset_source.read_all()
+        new_cache: dict[str, object] = {}
+        for name in ASSET_NAMES:
+            payload = stored.get(name)
+            if payload is None:
+                new_cache[name] = self._read_asset_file(name)
+            else:
+                new_cache[name] = self.validate(name, payload)
+        return new_cache
+
+    def _read_asset_file(self, name: str):
+        if name == "examples_template":
+            return self._read_examples_template(self.paths["examples_template"])
+        if name == "tables_metadata":
+            return self._read_tables_metadata(self.paths["tables_metadata"])
+        if name == "business_knowledge":
+            return self._read_business_knowledge(self.paths["business_knowledge"])
+        if name == "join_patterns":
+            return self._read_join_patterns(self.paths["join_patterns"])
+        raise KeyError(name)
 
     def validate(self, name: str, payload):
         if name == "examples_template":

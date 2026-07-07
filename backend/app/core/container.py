@@ -10,6 +10,7 @@ from backend.app.repositories.db_feedback_repository import DbFeedbackRepository
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.repositories.db_session_repository import DbSessionRepository
 from backend.app.repositories.db_vector_document_repository import DbVectorDocumentRepository
+from backend.app.repositories.db_semantic_asset_repository import DbSemanticAssetRepository
 from backend.app.repositories.metadata_repository import FileMetadataRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
@@ -41,6 +42,7 @@ from backend.app.services.conversation_persistence_service import ConversationPe
 from backend.app.services.vector_retriever import VectorRetriever
 from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.runtime_store_initializer import RuntimeStoreInitializer
+from backend.app.services.semantic_asset_seeder import seed_semantic_assets_if_empty
 
 
 logger = logging.getLogger(__name__)
@@ -58,13 +60,6 @@ class AppContainer:
             BUSINESS_SQL_DIALECT,
             RUNTIME_SQL_DIALECT,
             self.settings.enable_vector_retrieval,
-        )
-        self.domain_config_loader = DomainConfigLoader()
-        self.domain_config = self.domain_config_loader.load()
-        self.metadata_registry = MetadataRegistry()
-        self.semantic_runtime = SemanticRuntime(
-            self.domain_config,
-            metadata_registry=self.metadata_registry,
         )
         self.business_database_connector = DatabaseConnector(
             database_url=self.settings.business_database_url,
@@ -93,6 +88,33 @@ class AppContainer:
         logger.debug("runtime schema init start")
         self.runtime_store_initializer.ensure_schema()
         logger.debug("runtime schema init done")
+
+        # Semantic assets are stored in the runtime DB by default. The JSON files
+        # seed the store once when it is empty and then act only as a fallback.
+        # Set SEMANTIC_ASSET_STORE=file to keep reading/writing the JSON files.
+        semantic_asset_store = self.settings.semantic_asset_store
+        if semantic_asset_store == "db":
+            self.semantic_asset_repository = DbSemanticAssetRepository(self.runtime_database_connector)
+            seeded = seed_semantic_assets_if_empty(self.semantic_asset_repository)
+            logger.info("semantic asset store=db seeded_from_files=%s", seeded)
+            asset_source = self.semantic_asset_repository
+        else:
+            self.semantic_asset_repository = None
+            logger.info("semantic asset store=file")
+            asset_source = None
+
+        self.metadata_registry = MetadataRegistry(asset_source=asset_source)
+        tables_metadata_provider = (
+            (lambda: self.metadata_registry.tables_metadata) if asset_source is not None else None
+        )
+        self.domain_config_loader = DomainConfigLoader(
+            tables_metadata_provider=tables_metadata_provider,
+        )
+        self.domain_config = self.domain_config_loader.load()
+        self.semantic_runtime = SemanticRuntime(
+            self.domain_config,
+            metadata_registry=self.metadata_registry,
+        )
         self.auth_repository = DbAuthRepository(self.runtime_database_connector)
         self.session_repository = DbSessionRepository(self.runtime_database_connector)
         self.audit_repository = DbAuditRepository(self.runtime_database_connector)

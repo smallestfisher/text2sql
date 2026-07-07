@@ -5,9 +5,9 @@
 ## 1. 架构边界
 
 - 业务库固定为 Oracle，由 `BUSINESS_DATABASE_URL` 配置，只执行只读业务 SQL。
-- runtime 库固定为 MySQL，由 `RUNTIME_DATABASE_URL` 配置，保存用户、会话、消息、状态、trace、query log、SQL audit、feedback、eval 和向量语料。
+- runtime 库固定为 MySQL，由 `RUNTIME_DATABASE_URL` 配置，保存用户、会话、消息、状态、trace、query log、SQL audit、feedback、eval、向量语料和语义资产（`semantic_assets` 表）。
 - 业务 SQL 生成、repair、AST 解析和 validator 都按 Oracle 规则运行。
-- `semantic/`、`examples/`、`eval/` 是语义资产、检索语料、管理台编辑和评测的共同来源。
+- 语义资产（表结构、业务知识、join pattern、示例）默认存 runtime MySQL 的 `semantic_assets` 表；`semantic/`、`examples/` 下的 JSON 文件是首次启动的 seed 和版本控制来源，运行时真相在 DB（见第 9 节）。`eval/` 仍是文件，是评测和检索回归样本的来源。
 - 启动时会检查业务库、runtime 库、runtime schema、metadata、`sqlglot` 和向量检索配置；关键依赖失败会阻断启动。
 - 准确率修复优先沉淀到表结构说明、业务知识、样例、join pattern、retrieval、prompt 和 validator。
 - 字段事实只沉淀在语义资产和 `SemanticRuntime`。例如时间字段的物理存储格式由 `semantic/tables.json.time_fields` 声明，SQL prompt 和 validator 只消费这些语义事实，不在业务链路里按具体表名写场景 if/else。
@@ -311,6 +311,12 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 - `examples/nl2sql_examples.template.json`
 - `eval/retrieval_cases.json`
 - `eval/evaluation_cases.json`
+
+### 存储位置
+
+`tables.json`、`business_knowledge.json`、`join_patterns.json` 和 `nl2sql_examples.template.json` 这四类语义资产的运行时真相在 runtime MySQL 的 `semantic_assets` 表（单表整文档 JSON，一行一类）。`SEMANTIC_ASSET_STORE=db`（默认）时链路只读写 DB；仓库里的 JSON 文件退化为版本控制的**种子**：`semantic_assets` 表为空时首次启动会从文件 seed 一次，之后不再被运行时读取（缺某一类时才回退到对应文件）。设 `SEMANTIC_ASSET_STORE=file` 可回到直接读写 JSON 文件的旧行为。
+
+推荐用管理中心的「语义资产」页面做结构化编辑，保存后自动触发检索重载，无需重启。直接改文件只在种子阶段或 `SEMANTIC_ASSET_STORE=file` 下才影响运行时；DB 模式下改文件需要清空 `semantic_assets` 表重新 seed，或通过 UI / `PUT /api/admin/metadata/documents/{name}` 写入。`eval/` 下的两个 case 文件仍是纯文件，不进 DB。
 
 ### 应该改哪里
 

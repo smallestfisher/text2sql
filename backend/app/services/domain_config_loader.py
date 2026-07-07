@@ -15,8 +15,17 @@ class DomainConfigLoader:
     still needed by SQL validation and admin summaries.
     """
 
-    def __init__(self, tables_metadata_path=TABLES_METADATA_PATH) -> None:
+    def __init__(
+        self,
+        tables_metadata_path=TABLES_METADATA_PATH,
+        tables_metadata_provider=None,
+    ) -> None:
         self.tables_metadata_path = tables_metadata_path
+        # When ``tables_metadata_provider`` is supplied (a zero-arg callable
+        # returning the tables_metadata dict), the schema boundary is built from
+        # it instead of the JSON file. This keeps the boundary aligned with the
+        # DB-backed semantic asset store; otherwise the file is read as before.
+        self.tables_metadata_provider = tables_metadata_provider
 
     @lru_cache(maxsize=1)
     def load(self) -> dict[str, Any]:
@@ -49,6 +58,11 @@ class DomainConfigLoader:
         }
 
     def _load_tables_metadata(self) -> dict[str, Any]:
+        if self.tables_metadata_provider is not None:
+            payload = self.tables_metadata_provider()
+            if not isinstance(payload, dict):
+                raise ValueError("tables metadata provider must return a JSON object")
+            return payload
         with self.tables_metadata_path.open("r", encoding="utf-8") as file:
             payload = json.load(file)
         if not isinstance(payload, dict):

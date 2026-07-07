@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.app.services.metadata_registry import MetadataRegistry
+from backend.app.services.metadata_registry import ASSET_NAMES, MetadataRegistry
 from backend.app.utils import atomic_write_text
 
 
@@ -17,6 +17,15 @@ class FileMetadataRepository:
 
     def write(self, name: str, content) -> Path:
         path = self.resolve_path(name)
+        # When the registry is backed by a DB asset source, the four semantic
+        # assets are persisted to the store instead of the JSON files; the file
+        # path is still returned for informational use by MetadataDocument.
+        asset_source = self.metadata_registry.asset_source
+        if asset_source is not None and name in ASSET_NAMES:
+            content = self.metadata_registry.validate(name, content)
+            asset_source.upsert(name, content)
+            self.metadata_registry.reload()
+            return path
         if path.suffix == ".json":
             content = self.metadata_registry.validate(name, content)
             atomic_write_text(

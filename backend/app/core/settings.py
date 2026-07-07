@@ -74,6 +74,7 @@ class Settings(BaseModel):
     llm_cache_ttl_seconds: int = int(os.getenv("LLM_CACHE_TTL_SECONDS", "300"))
     llm_cache_max_entries: int = int(os.getenv("LLM_CACHE_MAX_ENTRIES", "256"))
     llm_cache_prompt: bool | None = _env_optional_bool("LLM_CACHE_PROMPT")
+    semantic_asset_store: str = os.getenv("SEMANTIC_ASSET_STORE", "db").strip().lower()
     enable_vector_retrieval: bool = _env_bool("ENABLE_VECTOR_RETRIEVAL", default=True)
     prewarm_vector_retrieval: bool = _env_bool("PREWARM_VECTOR_RETRIEVAL", default=True)
     vector_retrieval_provider: str = _default_vector_provider()
