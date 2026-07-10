@@ -14,6 +14,14 @@ Text2SQL 是面向中文业务问题的 Oracle 查询工作台。用户用自然
 业务事实沉淀在语义资产中（而非代码硬编码）；系统只做加载、检索、组装、安全校验、执行与审计。同一时刻对接单一业务场景。
 
 
+## 语义资产与业务数据
+
+语义资产是「如何查询」的说明书（表结构、业务知识、关联路径、样例），不是业务明细的副本；真实行数据只在 Oracle 业务库中，引擎生成只读 SQL 后去那里取数。
+
+<p align="center">
+  <img src="docs/semantic-assets-vs-business-data.png" alt="语义资产与业务数据：Playbook vs 真实数据" width="100%" />
+</p>
+
 ## 快速启动
 
 准备环境文件。默认开启向量检索时，需要填写 `OPENAI_API_KEY`、`VECTOR_API_KEY` 和 `AUTH_TOKEN_SECRET`：
@@ -105,6 +113,7 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 
 - [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)：唯一主文档。架构、运行、API、调试、语义资产维护和验证入口。
 - [docs/architecture-overview.png](docs/architecture-overview.png)：系统架构总览图（README 页头同图）。
+- [docs/semantic-assets-vs-business-data.png](docs/semantic-assets-vs-business-data.png)：语义资产与业务数据关系图。
 - [docs/RETRIEVAL_ACCURACY_REVIEW.md](docs/RETRIEVAL_ACCURACY_REVIEW.md)：检索准确率与运行效率评审，含已处理项的实施记录。
 - [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)：结构性重构评审快照（类职责、分层、技术债务）。
 - [docs/TODO.md](docs/TODO.md)：尚未实现但已经形成方向约束的工程待办（当前为 PromptBuilder 拆分）。
