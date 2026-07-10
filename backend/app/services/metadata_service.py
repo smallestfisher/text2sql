@@ -9,7 +9,7 @@ from backend.app.models.admin import (
     MetadataOverview,
 )
 from backend.app.models.example_library import ExampleTemplateRecord
-from backend.app.repositories.metadata_repository import FileMetadataRepository
+from backend.app.repositories.metadata_repository import MetadataDocumentRepository
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.domain_config_loader import DomainConfigLoader
 
@@ -17,7 +17,7 @@ from backend.app.services.domain_config_loader import DomainConfigLoader
 class MetadataService:
     def __init__(
         self,
-        metadata_repository: FileMetadataRepository,
+        metadata_repository: MetadataDocumentRepository,
         domain_config_loader: DomainConfigLoader,
         audit_repository,
     ) -> None:

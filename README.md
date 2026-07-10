@@ -1,6 +1,18 @@
 # Text2SQL
 
+<p align="center">
+  <img src="docs/architecture-overview.png" alt="Text2SQL 系统架构：中文业务问题 → 只读 Oracle SQL → 答案" width="100%" />
+</p>
+
+<p align="center">
+  <b>中文业务问题 → 只读 Oracle SQL → 答案</b><br/>
+  Semantic assets + LLM generation + validated execution
+</p>
+
 Text2SQL 是面向中文业务问题的 Oracle 查询工作台。用户用自然语言提问，后端基于真实表结构、业务知识、样例、join pattern 和检索证据生成 Oracle SQL，经过校验、执行和审计后返回结果，并把运行证据保存到 MySQL runtime 库。
+
+业务事实沉淀在语义资产中（而非代码硬编码）；系统只做加载、检索、组装、安全校验、执行与审计。同一时刻对接单一业务场景。
+
 
 ## 快速启动
 
@@ -92,6 +104,7 @@ docker exec -i text2sql-oracle sqlplus -L admin/admin123@//localhost:1521/FREEPD
 ## 文档
 
 - [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)：唯一主文档。架构、运行、API、调试、语义资产维护和验证入口。
+- [docs/architecture-overview.png](docs/architecture-overview.png)：系统架构总览图（README 页头同图）。
 - [docs/RETRIEVAL_ACCURACY_REVIEW.md](docs/RETRIEVAL_ACCURACY_REVIEW.md)：检索准确率与运行效率评审，含已处理项的实施记录。
 - [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)：结构性重构评审快照（类职责、分层、技术债务）。
 - [docs/TODO.md](docs/TODO.md)：尚未实现但已经形成方向约束的工程待办（当前为 PromptBuilder 拆分）。

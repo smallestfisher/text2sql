@@ -6,7 +6,7 @@ from typing import Any
 
 from backend.app.core.cancellation import CancellationToken
 from backend.app.models.classification import QuestionClassification
-from backend.app.models.semantic_types import TimeContext
+from backend.app.models.semantic_types import SUPPORTED_SUBJECT_DOMAINS, TimeContext
 from backend.app.models.session_state import SessionState
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.llm_client import LLMClient
@@ -16,7 +16,6 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_SUBJECT_DOMAINS = {"inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"}
 
 
 class QuestionAnalysisService:

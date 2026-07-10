@@ -12,7 +12,7 @@ from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepos
 from backend.app.repositories.db_session_repository import DbSessionRepository
 from backend.app.repositories.db_vector_document_repository import DbVectorDocumentRepository
 from backend.app.repositories.db_semantic_asset_repository import DbSemanticAssetRepository
-from backend.app.repositories.metadata_repository import FileMetadataRepository
+from backend.app.repositories.metadata_repository import MetadataDocumentRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
 from backend.app.services.auth_service import AuthService
@@ -235,7 +235,7 @@ class AppContainer:
             self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
         )
         self.answer_builder = AnswerBuilder()
-        self.metadata_repository = FileMetadataRepository(self.metadata_registry)
+        self.metadata_repository = MetadataDocumentRepository(self.metadata_registry)
         self.session_service = SessionService(self.session_repository)
         self.audit_service = AuditService(self.audit_repository)
         self.chat_response_restore_service = ChatResponseRestoreService(

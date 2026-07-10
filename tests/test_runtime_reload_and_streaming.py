@@ -26,7 +26,7 @@ from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.metadata_registry import MetadataRegistry
-from backend.app.repositories.metadata_repository import FileMetadataRepository
+from backend.app.repositories.metadata_repository import MetadataDocumentRepository
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.progress_service import ProgressService
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
@@ -760,7 +760,7 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
                     "session_state_schema": session_state_path,
                 }
             )
-            repository = FileMetadataRepository(registry)
+            repository = MetadataDocumentRepository(registry)
 
             self.assertEqual(repository.resolve_path("business_knowledge"), business_path)
             with self.assertRaises(KeyError):
@@ -788,7 +788,7 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
                     "session_state_schema": session_state_path,
                 }
             )
-            repository = FileMetadataRepository(registry)
+            repository = MetadataDocumentRepository(registry)
 
             with self.assertRaisesRegex(RuntimeError, "business_knowledge.entries"):
                 repository.write("business_knowledge", {"entries": {}})

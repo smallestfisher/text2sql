@@ -11,6 +11,7 @@ from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
 from backend.app.models.context_summary import ContextSummary
 from backend.app.models.progress import ProgressEvent
 from backend.app.models.session_state import PendingClarification, SessionState
+from backend.app.models.semantic_types import SUPPORTED_SUBJECT_DOMAINS
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
@@ -28,7 +29,6 @@ from backend.app.services.sql_validator import SqlValidator
 
 logger = logging.getLogger(__name__)
 _OMITTED = object()
-SUPPORTED_SUBJECT_DOMAINS = {"inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"}
 
 
 class ConversationOrchestrator:

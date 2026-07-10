@@ -9,7 +9,7 @@ from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
 from backend.app.models.api import ExecutionResponse
-from backend.app.repositories.metadata_repository import FileMetadataRepository
+from backend.app.repositories.metadata_repository import MetadataDocumentRepository
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.metadata_service import MetadataService
 from backend.app.services.orchestrator import ConversationOrchestrator
@@ -1289,7 +1289,7 @@ FETCH FIRST 200 ROWS ONLY
                 },
             )()
             service = MetadataService(
-                metadata_repository=FileMetadataRepository(registry),
+                metadata_repository=MetadataDocumentRepository(registry),
                 domain_config_loader=DomainConfigLoader(),
                 audit_repository=EmptyAuditRepository(),
             )
@@ -1337,7 +1337,7 @@ FETCH FIRST 200 ROWS ONLY
                 },
             )()
             service = MetadataService(
-                metadata_repository=FileMetadataRepository(registry),
+                metadata_repository=MetadataDocumentRepository(registry),
                 domain_config_loader=DomainConfigLoader(),
                 audit_repository=EmptyAuditRepository(),
             )
@@ -1373,7 +1373,7 @@ FETCH FIRST 200 ROWS ONLY
             )
             domain_config_loader = DomainConfigLoader(tables_path)
             service = MetadataService(
-                metadata_repository=FileMetadataRepository(registry),
+                metadata_repository=MetadataDocumentRepository(registry),
                 domain_config_loader=domain_config_loader,
                 audit_repository=EmptyAuditRepository(),
             )
