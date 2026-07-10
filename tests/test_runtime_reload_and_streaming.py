@@ -40,11 +40,12 @@ from backend.app.utils import atomic_write_text
 
 class ContainerResetTests(unittest.TestCase):
     def tearDown(self) -> None:
-        dependencies.get_container.cache_clear()
+        # Reset the explicit singleton holder between tests.
+        dependencies._container = None
 
     def test_reset_container_rebuilds_cached_singleton(self) -> None:
-        first = SimpleNamespace(name="first")
-        second = SimpleNamespace(name="second")
+        first = SimpleNamespace(name="first", dispose=lambda: None)
+        second = SimpleNamespace(name="second", dispose=lambda: None)
         with patch("backend.app.api.dependencies.AppContainer", side_effect=[first, second]) as factory:
             cached = dependencies.get_container()
             cached_again = dependencies.get_container()
@@ -54,6 +55,17 @@ class ContainerResetTests(unittest.TestCase):
         self.assertIs(cached, first)
         self.assertIs(rebuilt, second)
         self.assertEqual(factory.call_count, 2)
+
+    def test_reset_container_keeps_old_on_rebuild_failure(self) -> None:
+        # A failed rebuild must leave the previous container installed.
+        first = SimpleNamespace(name="first", dispose=lambda: None)
+        with patch("backend.app.api.dependencies.AppContainer", side_effect=[first, RuntimeError("boom")]):
+            installed = dependencies.get_container()
+            self.assertIs(installed, first)
+            with self.assertRaises(RuntimeError):
+                dependencies.reset_container()
+            # Old container still served after the failure.
+            self.assertIs(dependencies.get_container(), first)
 
 
 class VectorRetrieverTests(unittest.TestCase):
@@ -141,10 +153,15 @@ class VectorRetrieverTests(unittest.TestCase):
         self.assertEqual(retriever.search("订单", top_k=-1), [])
 
     def test_default_vector_top_k_keeps_cross_source_retrieval_room(self) -> None:
-        settings_source = Path("backend/app/core/settings.py").read_text(encoding="utf-8")
+        import os
+
+        from backend.app.core.settings import SPEC_BY_ENV, Settings
+
         env_example = Path("env.example").read_text(encoding="utf-8")
 
-        self.assertIn('os.getenv("VECTOR_TOP_K", "8")', settings_source)
+        self.assertEqual(SPEC_BY_ENV["VECTOR_TOP_K"].default, 8)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(Settings.build().vector_top_k, 8)
         self.assertIn('VECTOR_TOP_K="8"', env_example)
 
 
@@ -311,7 +328,11 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
                 vector_retriever=retriever,
             )
 
-    def test_retrieval_service_raises_when_vector_prewarm_fails(self) -> None:
+    def test_retrieval_service_survives_vector_prewarm_failure(self) -> None:
+        # Prewarm at construction is best-effort: a failing embedding backend
+        # must NOT brick construction (which would brick startup / reset_container).
+        # The container stays reachable so the config UI can fix the key; the
+        # error surfaces later at actual retrieval time.
         class FakeVectorRetriever:
             provider = "siliconflow"
             enabled = True
@@ -332,13 +353,14 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
 
         domain_config = DomainConfigLoader().load()
 
-        with self.assertRaisesRegex(RuntimeError, "vector corpus sync failed"):
-            RetrievalService(
-                domain_config=domain_config,
-                vector_retriever=FakeVectorRetriever(),
-                vector_corpus_store_service=FakeVectorCorpusStoreService(),
-                prewarm_vector_index=True,
-            )
+        # Construction succeeds despite the prewarm failure.
+        service = RetrievalService(
+            domain_config=domain_config,
+            vector_retriever=FakeVectorRetriever(),
+            vector_corpus_store_service=FakeVectorCorpusStoreService(),
+            prewarm_vector_index=True,
+        )
+        self.assertIsInstance(service, RetrievalService)
 
 
 class AtomicWriteTests(unittest.TestCase):

@@ -1,0 +1,184 @@
+{
+  "version": "2026-04-26",
+  "entries": [
+    {
+      "id": "demand_fgcode_mapping",
+      "domains": ["demand", "sales_financial"],
+      "tables": ["p_demand", "v_demand", "product_mapping", "sales_financial_perf"],
+      "keywords": ["FGCODE", "product_mapping", "Cell No", "Array No", "CF No", "customer", "销售业绩", "财务业绩", "需求量", "差异量", "sales_financial_perf"],
+      "notes": [
+        "p_demand 和 v_demand 的核心业务实体是 FGCODE。",
+        "需求表和不同阶段 product_ID 的映射通常通过 product_mapping 完成，其中 FGCODE、Cell No、Array No、CF No 分别对应不同阶段编码列。",
+        "只有在 product_mapping、FGCODE、需求到销售/财务映射这类语境中，Cell No、Array No、CF No 才表示阶段产品编码；不要把它们和生产计划/实际语境中的 Cell工厂、Array工厂、CF工厂混用。",
+        "当需求问题需要和销售或财务业绩对比时，通常通过 FGCODE 与 sales_financial_perf 关联。"
+      ]
+    },
+    {
+      "id": "sales_financial_perf_grain",
+      "domains": ["sales_financial", "demand"],
+      "tables": ["sales_financial_perf"],
+      "keywords": ["sales_financial_perf", "销售业绩", "财务业绩", "sales_qty", "FINANCIAL_qty", "report_month", "FGCODE", "CUSTOMER", "差异量"],
+      "notes": [
+        "sales_financial_perf 的明细粒度是 report_month、SBU_DESC、BU_DESC、CUSTOMER、FGCODE；同一 FGCODE 在同一结算月份可能有多条客户或组织维度明细。",
+        "按 FGCODE 与需求量、产品属性或其他事实口径对比前，应先在 sales_financial_perf 内按目标月份和目标维度聚合销售业绩或财务业绩，再与其他已聚合结果对齐。",
+        "销售业绩通常使用 SUM(NVL(sales_qty, 0))；财务业绩通常使用 SUM(NVL(FINANCIAL_qty, 0))。"
+      ]
+    },
+    {
+      "id": "demand_horizontal_month_mapping",
+      "domains": ["demand"],
+      "tables": ["p_demand", "v_demand"],
+      "keywords": ["MONTH", "REQUIREMENT_QTY", "NEXT_REQUIREMENT", "LAST_REQUIREMENT", "MONTH4", "MONTH5", "MONTH6", "MONTH7", "PM_VERSION", "最新P版", "需求量", "demand_month"],
+      "notes": [
+        "p_demand 和 v_demand 是横向需求表，目标需求月份不能简单理解成 base MONTH 本身。",
+        "需求月份映射规则是：offset 0 对应 REQUIREMENT_QTY，offset 1 对应 NEXT_REQUIREMENT，offset 2 对应 LAST_REQUIREMENT，offset 3 到 6 分别对应 MONTH4 到 MONTH7。",
+        "PM_VERSION 表示需求版本标识，不是行唯一键；同一个 PM_VERSION 下通常会有多条 FGCODE/CUSTOMER 等明细行。",
+        "选择最新 N 版时，N 指最新 N 个不同的 PM_VERSION 版本标识，不是原表中的最新 N 条明细记录；应先从版本标识集合中取最新 N 个 PM_VERSION，再用这些 PM_VERSION 回到需求明细中汇总所有匹配行。",
+        "如果问题包含最新 N 版，应先解析 PM_VERSION 显示版本中的版本年月、W 周号和 P/V 周内版次，按版本年月降序、周号降序、周内版次降序取最新 N 个版本，再对目标需求月份聚合；不要简单按 PM_VERSION 字符串倒序或 MAX(PM_VERSION) 替代版本顺序解析。",
+        "如果外层还要按 PM_VERSION 过滤，或者要与 latest_versions 做 IN/JOIN，比对用的需求展开 CTE 需要在每个 UNION 分支都显式投影 PM_VERSION。",
+        "固定目标需求月份时，可以把目标月份按 offset 反推到 base MONTH 并在每个 UNION 分支提前等值过滤，例如目标 202606 时 REQUIREMENT_QTY 对应 MONTH='202606'、NEXT_REQUIREMENT 对应 MONTH='202605'、LAST_REQUIREMENT 对应 MONTH='202604'、MONTH4 对应 MONTH='202603'、MONTH5 对应 MONTH='202602'、MONTH6 对应 MONTH='202601'、MONTH7 对应 MONTH='202512'；这与展开 demand_month 后过滤等价，但能减少无关月份扫描和日期函数计算。",
+        "当真实表的 MONTH 以紧凑 YYYYMM 编码存储时，不要直接对原始 MONTH 做日期加减；应先转成真实日期再格式化回 YYYYMM，或者在 base MONTH 场景直接保留 MONTH。"
+      ]
+    },
+    {
+      "id": "demand_product_attributes_direct_join",
+      "domains": ["demand"],
+      "tables": ["p_demand", "v_demand", "product_attributes"],
+      "keywords": ["product_attributes", "IS_OXIDE", "Oxide", "产品数量", "FGCODE", "product_ID"],
+      "notes": [
+        "当需求问题涉及产品属性过滤时，可以直接通过 p_demand/v_demand.FGCODE = product_attributes.product_ID 关联产品属性维表。",
+        "像 Oxide 这类产品属性过滤应落在 product_attributes 上；生产环境中 IS_xxx 字段使用 Y/N 标记，例如 product_attributes.IS_OXIDE = 'Y'。",
+        "如果问题要求的是产品数量/型号数量，目标指标通常同时返回 COUNT(DISTINCT product_attributes.product_ID) 和 SUM(NVL(demand_qty, 0))，目标需求月份仍然必须基于横表展开后的 demand_month 过滤；固定目标需求月份时可用等价的 base MONTH 反推写法提前过滤各偏移列，避免完整展开后再筛选；需求场景下的产品数量默认只统计 NVL(demand_qty, 0) > 0 的产品。"
+      ]
+    },
+    {
+      "id": "demand_v_to_p_glass_conversion",
+      "domains": ["demand"],
+      "tables": ["v_demand", "p_demand", "product_attributes"],
+      "keywords": ["V到P", "V转P", "转换率", "转化率", "GLASS", "Glass", "CUT_NUM", "第一版", "最后一版", "PM_VERSION"],
+      "notes": [
+        "当问题要求 V 到 P 的 GLASS 转换率时，V 侧来源是 v_demand，P 侧来源是 p_demand；两侧都必须先按需求横表规则展开成 demand_month 后再过滤目标需求月份。",
+        "展开后的目标月份过滤必须覆盖 REQUIREMENT_QTY、NEXT_REQUIREMENT、LAST_REQUIREMENT、MONTH4、MONTH5、MONTH6、MONTH7 所有偏移列映射出的 demand_month；不要因为目标月份刚好是基准月份的下月就只取 NEXT_REQUIREMENT。",
+        "需求表中的需求量是产品数量口径；如果问题要求 GLASS 口径，应通过 product_attributes.CUT_NUM 折算，计算方式为 glass_qty = demand_qty / NULLIF(CUT_NUM, 0)。",
+        "V 到 P GLASS 转换率默认定义为 P 侧 GLASS 需求量 / V 侧 GLASS 需求量；若 V 侧 GLASS 为 0，则转换率返回 NULL。",
+        "如果问句同时出现目标月份和版本月份，例如“计算202605月，V选择202604月份的第一版需求，P选择202604的最后一版需求”，202605 是展开后的 demand_month，202604 是 PM_VERSION 显示版本的年月前缀，不是原始 MONTH 字段。",
+        "PM_VERSION 不是行唯一键；第一版/最后一版选中的是一个版本标识，后续计算必须覆盖该版本标识下的所有需求明细行。",
+        "PM_VERSION 的显示版本格式类似 202605W3V2 或 202605W3P2：前 6 位是版本年月，W 后数字是周，P/V 表示 P 表或 V 表，最后数字表示该周第几版。",
+        "第一版需求应在指定 PM_VERSION 年月前缀和 P/V 类型内，按周号升序、周内版次升序取第一条；最后一版需求应按周号降序、周内版次降序取第一条。不要用原始 MONTH 的 MIN/MAX，也不要简单按 PM_VERSION 字符串 MIN/MAX 替代版本顺序解析。",
+        "V/P 对比时不要把 v_demand 和 p_demand 明细行互相 join 后再汇总；应分别计算 V 侧 GLASS 总量和 P 侧 GLASS 总量，再在最终 SELECT 中计算转换率。"
+      ]
+    },
+    {
+      "id": "inventory_daily_inventory",
+      "domains": ["inventory"],
+      "tables": ["daily_inventory"],
+      "keywords": ["inventory", "型号", "product", "factory_code", "ERP_FACTORY"],
+      "notes": [
+        "daily_inventory 通常用于查询库存数量，核心过滤条件通常是型号、工厂和时间。",
+        "库存问题如果出现工厂语义，需要区分 factory_code 和 ERP_FACTORY。"
+      ]
+    },
+    {
+      "id": "inventory_oms_attributes",
+      "domains": ["inventory"],
+      "tables": ["oms_inventory", "product_attributes"],
+      "keywords": ["oms_inventory", "product_attributes", "inventory", "customer", "OMS库存", "glass_qty", "panel_qty", "库龄"],
+      "notes": [
+        "oms_inventory 也是库存口径来源之一。",
+        "当问题明确说 OMS 库存时，应优先使用 oms_inventory 作为主事实表，不要再把 daily_inventory 一起作为并列事实表引入。",
+        "当问题只是泛化地问 OMS 库存/库存物量，而没有显式指定 glass、panel 或库龄桶时，默认同时返回 glass_qty 与 panel_qty 两套库存口径。",
+        "oms_inventory 的常规库存字段优先看 panel_qty 或 glass_qty；只有用户明确提到库龄段时，才应考虑 ONE_AGE_panel_qty 到 EUGHT_AGE_panel_qty 这类库龄字段。",
+        "当库存问题涉及产品属性或分类时，通常需要和 product_attributes 关联。"
+      ]
+    },
+    {
+      "id": "inventory_oms_age_bucket_distribution",
+      "domains": ["inventory"],
+      "tables": ["oms_inventory"],
+      "keywords": ["OMS库存", "TTL物量", "库龄分布", "<3M", "3-6M", "6-12M", ">12M"],
+      "notes": [
+        "当问题要求 OMS 库龄分布，且没有显式要求按产品分类、客户、型号等维度拆分时，不要自行追加 common_categories、customer、product_ID 等维度。",
+        "当问题写“最新 OMS 库存”且没有显式月份时，默认取 oms_inventory.report_month 的最新月份。",
+        "如果库龄桶写成 <3M、3-6M、6-12M、>12M，则分别对应：<3M = ONE_AGE_panel_qty + TWO_AGE_panel_qty + THREE_AGE_panel_qty；3-6M = FOUR_AGE_panel_qty；6-12M = FIVE_AGE_panel_qty；>12M = SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty。"
+      ]
+    },
+    {
+      "id": "plan_actual_daily_plan",
+      "domains": ["plan_actual"],
+      "tables": ["daily_PLAN", "production_actuals"],
+      "keywords": ["plan", "actual", "投入", "产出", "factory", "work_date"],
+      "notes": [
+        "daily_PLAN 通常用于计划投入量和计划产出量查询。",
+        "计划投入的 Glass / panel 字段分别是 target_IN_glass_qty、target_IN_panel_qty；计划产出的 Glass / panel 字段分别是 target_Out_glass_qty、target_Out_panel_qty。",
+        "target_Out_TTL_panel_qty 表示全部品产出 panel 量，仅适用于需要全部品口径或 MDL 相关口径的问题。",
+        "当问题需要计划和实际产出对比时，daily_PLAN 通常与 production_actuals 关联。"
+      ]
+    },
+    {
+      "id": "plan_actual_monthly_approved",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["actual_input", "monthly_plan_approved", "production_actuals", "投入", "产出"],
+      "notes": [
+        "monthly_plan_approved 常用于已审批计划口径查询，不应直接替代 production_actuals 的实际投入/产出/报废事实口径。",
+        "如果要对比计划与实际，可以把 monthly_plan_approved 作为计划侧来源，把 production_actuals 作为实际侧来源。"
+      ]
+    },
+    {
+      "id": "plan_actual_factory_names",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["Array工厂", "Cell工厂", "CF工厂", "MDL工厂", "ARRAY", "CELL", "CF", "MDL", "factory", "factory_code", "FACTORY"],
+      "notes": [
+        "在计划、实际、审批版生产语境中，Array工厂、Cell工厂、CF工厂、MDL工厂是明确的工厂名称。",
+        "这些工厂名称通常映射到逻辑字段 factory；monthly_plan_approved 中对应 factory_code，production_actuals 中对应 FACTORY。",
+        "Array工厂通常规范化为 ARRAY，Cell工厂通常规范化为 CELL，CF工厂通常规范化为 CF，MDL工厂在当前生产计划/实际数据中通常对应物理工厂值 MODULE。",
+        "当自然语言明确写成“Cell工厂”“Array工厂”“CF工厂”“MDL工厂”时，应优先理解为生产工厂过滤条件，而不是 product_mapping 中的阶段料号列。"
+      ]
+    },
+    {
+      "id": "plan_actual_approved_actual_gap_rate",
+      "domains": ["plan_actual"],
+      "tables": ["monthly_plan_approved", "production_actuals"],
+      "keywords": ["审批版", "实际", "投入", "Gap", "达成率", "monthly_plan_approved", "production_actuals", "target_IN_glass_qty", "GLS_qty", "target_IN_panel_qty", "Panel_qty"],
+      "notes": [
+        "问句同时出现审批版、实际、Gap、达成率，且语义是投入时，应同时查询审批投入和实际投入，再计算差异与达成率，不能只返回单侧事实值。",
+        "审批侧来源是 monthly_plan_approved；实际侧来源是 production_actuals，且实际投入必须过滤 act_type=投入。",
+        "审批版与实际对比时，禁止直接把 monthly_plan_approved 明细行和 production_actuals 明细行 join 后再 SUM；这会让两侧物量按明细行数互相重复放大。",
+        "必须先分别在审批侧 CTE 和实际侧 CTE 内按对齐粒度聚合，例如 biz_month、factory；再把两个已聚合 CTE 按 biz_month、factory join，最后计算 Gap 和达成率。",
+        "如果问题按工厂对比，审批侧工厂通常来自 monthly_plan_approved.factory_code，实际侧工厂通常来自 production_actuals.FACTORY；这些字段应在各自聚合 CTE 内分组，再在聚合结果之间对齐。",
+        "月粒度对比时，不要把逻辑字段 biz_month 直接写成物理列。审批侧应使用 plan_month 或按 PLAN_date 的 YYYYMMDD 格式映射到 YYYYMM；实际侧应按 work_date 的 YYYYMMDD 格式映射到 YYYYMM，例如 SUBSTR(work_date, 1, 6)。",
+        "非 MDL 工厂的物量默认使用 Glass 口径：审批侧 target_IN_glass_qty，对应实际侧 GLS_qty；MDL 工厂或显式 panel 口径时，审批侧改用 target_IN_panel_qty，对应实际侧 Panel_qty；当前数据中 MDL 工厂对应 factory_code/FACTORY=MODULE。",
+        "Gap 默认定义为 实际投入 - 审批投入，SQL 输出列 input_gap_qty 必须写成 actual_input_qty - approved_input_qty，不要写成 approved_input_qty - actual_input_qty。达成率默认定义为 实际投入 / 审批投入；若审批投入为 0，则达成率返回 NULL。"
+      ]
+    },
+    {
+      "id": "production_actuals_act_type_panel_volume",
+      "domains": ["plan_actual"],
+      "tables": ["production_actuals"],
+      "keywords": ["production_actuals", "act_type", "投入", "产出", "报废", "物量", "panel", "Panel_qty", "型号", "top"],
+      "notes": [
+        "production_actuals.act_type 的中文枚举是 投入、产出、报废，问句里出现这些词时应优先落为 act_type 过滤条件。",
+        "当问题在 production_actuals 这类日事实表上使用逻辑月份筛选时，应把月份展开成整月 work_date 过滤或等价的月表达式过滤，不要错误收窄成单日。",
+        "在工厂语境下，物量口径不是统一的：当自然语言为 MDL 工厂时，当前数据通常对应 FACTORY=MODULE，默认指 panel 数量；其他工厂默认指 GLS 数量。",
+        "如果问句显式提到 panel量 或 panel数量，应优先使用 Panel_qty；如果没有显式写 panel，且工厂不是 MDL，则优先使用 GLS_qty。",
+        "像“26年MDL工厂top10投入型号及其物量”这类问题，应基于 production_actuals，按 product_ID 分组，过滤 FACTORY=MODULE 且 act_type=投入，并按 SUM(Panel_qty) 降序取前 10。"
+      ]
+    },
+    {
+      "id": "time_comparison_yoy_mom_definition",
+      "domains": ["inventory", "demand", "plan_actual", "sales_financial"],
+      "tables": [],
+      "keywords": ["同比", "环比", "YoY", "MoM", "去年同期", "上期", "上月", "上周", "上一期", "增长率", "变化率"],
+      "notes": [
+        "同比表示与上一年同期对比。月粒度同比通常是当前月份与去年同月对比，例如 202604 的同比基期是 202504；日粒度同比通常是当前日期与去年同日对比；周粒度同比通常是当前周与去年同周对比。",
+        "环比表示与紧邻上一期对比。月粒度环比通常是当前月份与上月对比，例如 202604 的环比基期是 202603；日粒度环比通常是当前日期与前一日对比；周粒度环比通常是当前周与上一周对比。",
+        "同比或环比计算前，应先在当前期和对比期分别按用户要求的同一业务粒度聚合，例如月份、工厂、客户、产品、FGCODE、产品大类等；再把两个聚合结果按除时间以外的同一维度对齐后计算，不要把明细行直接互 join 后再汇总。",
+        "如果问题只问同比/环比差异或变化量，默认输出 current_qty、compare_qty 和 diff_qty，其中 diff_qty = current_qty - compare_qty。",
+        "如果问题问同比/环比增长率、变化率、增幅或比例，默认公式为 (current_qty - compare_qty) / NULLIF(compare_qty, 0)；若 compare_qty 为 0，则增长率返回 NULL。",
+        "如果问题只说同比或环比但未明确是差值还是增长率，默认同时返回当前期值、对比期值、差值和变化率，避免只返回单侧事实值。",
+        "同比/环比的时间对齐必须基于该事实表真实时间字段或展开后的业务月份字段。例如需求横表应先展开为 demand_month 后再做同比/环比；生产实际通常基于 work_date；OMS库存通常基于 report_month；审批计划通常基于 plan_month 或 PLAN_date 映射出的月份。"
+      ]
+    }
+  ]
+}

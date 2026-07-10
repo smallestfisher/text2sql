@@ -4,16 +4,28 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.app.api.dependencies import get_container, get_current_user, require_admin_user, reset_container
-from backend.app.core.container import AppContainer
+from backend.app.core.container import AppContainer, BUSINESS_SQL_DIALECT
+from backend.app.core.settings import (
+    EDITABLE_SPECS,
+    FIELD_SPECS,
+    SPEC_BY_ENV,
+    Settings,
+)
+from backend.app.services.database_connector import DatabaseConnector
 from backend.app.models.admin import (
     AdminDashboardResponse,
     AdminMetricChangeRecord,
     AdminMetricsSummary,
+    ConfigCollectionResponse,
+    ConfigFieldRecord,
+    ConfigUpdateRequest,
+    ConfigUpdateResponse,
     ExampleCollectionResponse,
     ExampleMutationResponse,
     MetadataDocument,
@@ -442,6 +454,146 @@ def reload_metadata(container: AppContainer = Depends(get_container)) -> dict:
         "semantic_version": summary.semantic_version,
         "reloaded": True,
     }
+
+
+def _config_fields(container: AppContainer) -> list[ConfigFieldRecord]:
+    """Render every settings field with its current effective value and where
+    that value came from (override row / env / default)."""
+    try:
+        overrides = container.app_config_repository.read_all()
+    except Exception:
+        logger.warning("failed to read app_config overrides for listing", exc_info=True)
+        overrides = {}
+    records: list[ConfigFieldRecord] = []
+    for spec in FIELD_SPECS:
+        override_raw = overrides.get(spec.env) if spec.editable else None
+        env_raw = os.getenv(spec.env)
+        if override_raw is not None and override_raw.strip() != "":
+            source = "override"
+        elif env_raw is not None and env_raw.strip() != "":
+            source = "env"
+        else:
+            source = "default"
+        effective = getattr(container.settings, spec.attr, None)
+        records.append(
+            ConfigFieldRecord(
+                name=spec.env,
+                group=spec.group,
+                type=spec.type,
+                editable=spec.editable,
+                secret=spec.secret,
+                value=None if effective is None else str(effective),
+                source=source,
+            )
+        )
+    return records
+
+
+@router.get("/config", response_model=ConfigCollectionResponse)
+def get_config(
+    container: AppContainer = Depends(get_container),
+    _admin: UserContext = Depends(require_admin_user),
+) -> ConfigCollectionResponse:
+    return ConfigCollectionResponse(fields=_config_fields(container))
+
+
+@router.put("/config", response_model=ConfigUpdateResponse)
+def update_config(
+    request: ConfigUpdateRequest,
+    container: AppContainer = Depends(get_container),
+    _admin: UserContext = Depends(require_admin_user),
+) -> ConfigUpdateResponse:
+    editable_envs = {spec.env for spec in EDITABLE_SPECS}
+
+    # 1. Validate the requested keys are known + editable.
+    unknown = [name for name in request.values if name not in SPEC_BY_ENV]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown config keys: {', '.join(sorted(unknown))}")
+    non_editable = [name for name in request.values if name not in editable_envs]
+    if non_editable:
+        raise HTTPException(
+            status_code=400,
+            detail=f"config keys are not editable: {', '.join(sorted(non_editable))}",
+        )
+
+    try:
+        previous_overrides = container.app_config_repository.read_all()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to read current config: {exc}") from exc
+
+    # 2. Compute the candidate override set (null / blank -> revert to baseline).
+    candidate = dict(previous_overrides)
+    for name, value in request.values.items():
+        if value is None or value.strip() == "":
+            candidate.pop(name, None)
+        else:
+            candidate[name] = value
+
+    # 3. Type-coercion validation before persisting anything.
+    try:
+        new_settings = Settings.build(candidate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 4. Business DB connectivity check when its effective URL changes: a bad
+    #    URL must be rejected at save time, never persisted.
+    if new_settings.business_database_url != container.settings.business_database_url:
+        probe = DatabaseConnector(
+            database_url=new_settings.business_database_url,
+            timeout_seconds=new_settings.sql_timeout_seconds,
+            sql_dialect=BUSINESS_SQL_DIALECT,
+        )
+        try:
+            health = probe.test_connection(verify_readonly_session_settings=True)
+        finally:
+            probe.dispose()
+        if not health.get("connected"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"business database is not reachable with the new settings: "
+                f"{health.get('error') or 'connection failed'}",
+            )
+
+    # 5. Persist: upsert non-blank, delete reverted keys.
+    repo = container.app_config_repository
+    for name, value in request.values.items():
+        try:
+            if value is None or value.strip() == "":
+                repo.delete(name)
+            else:
+                repo.upsert(name, value)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to persist {name}: {exc}") from exc
+
+    # 6. Guarded rebuild. If it fails, roll the override rows back to their prior
+    #    state so a restart won't load a broken config, then surface the error.
+    try:
+        new_container = reset_container()
+    except Exception as exc:
+        _restore_overrides(repo, previous_overrides, candidate)
+        raise HTTPException(
+            status_code=500,
+            detail=f"config saved but container rebuild failed and was rolled back: {exc}",
+        ) from exc
+
+    return ConfigUpdateResponse(
+        updated=True,
+        reloaded=True,
+        fields=_config_fields(new_container),
+    )
+
+
+def _restore_overrides(repo, previous: dict[str, str], attempted: dict[str, str]) -> None:
+    """Best-effort restore of app_config rows to ``previous`` after a failed
+    rebuild. Removes keys that weren't there before and re-writes prior values."""
+    try:
+        for name in set(attempted) | set(previous):
+            if name in previous:
+                repo.upsert(name, previous[name])
+            else:
+                repo.delete(name)
+    except Exception:
+        logger.error("failed to roll back app_config after rebuild failure", exc_info=True)
 
 
 @router.get("/examples", response_model=ExampleCollectionResponse)

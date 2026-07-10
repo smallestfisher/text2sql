@@ -1,0 +1,253 @@
+[
+  {
+    "id": "plan_actual_mdl_common_categories_input_panel_202604_001",
+    "question": "202604，MDL工厂各个产品大类实际投入数量",
+    "sql": "SELECT product_attributes.common_categories, SUM(production_actuals.Panel_qty) AS actual_input_panel_qty FROM production_actuals INNER JOIN product_attributes ON production_actuals.product_ID = product_attributes.product_ID WHERE production_actuals.work_date BETWEEN '20260401' AND '20260430' AND production_actuals.FACTORY = 'MODULE' AND production_actuals.act_type = '投入' GROUP BY product_attributes.common_categories FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "plan_actual",
+    "metrics": [
+      "actual_input_panel_qty"
+    ],
+    "dimensions": [
+      "common_categories"
+    ],
+    "tags": [
+      "production_actuals",
+      "product_attributes",
+      "common_categories",
+      "factory_named",
+      "month",
+      "panel_default_mdl"
+    ],
+    "notes": "验证产品大类/产品类别/产品分类收敛到 common_categories；自然语言 MDL 工厂在当前数据中对应 production_actuals.FACTORY=MODULE，实际投入数量默认走 Panel_qty 口径。"
+  },
+  {
+    "id": "plan_actual_mdl_input_panel_top10_001",
+    "question": "26年MDL工厂top10投入型号及其物量",
+    "sql": "SELECT product_ID, SUM(Panel_qty) AS actual_input_panel_qty FROM production_actuals WHERE work_date BETWEEN '20260101' AND '20261231' AND FACTORY = 'MODULE' AND act_type = '投入' GROUP BY product_ID ORDER BY actual_input_panel_qty DESC FETCH FIRST 10 ROWS ONLY;",
+    "subject_domain": "plan_actual",
+    "metrics": [
+      "actual_input_panel_qty"
+    ],
+    "dimensions": [
+      "stage_product_id"
+    ],
+    "tags": [
+      "production_actuals",
+      "act_type",
+      "factory_named",
+      "short_year",
+      "panel_volume",
+      "topn"
+    ],
+    "notes": "基于 production_actuals，过滤 act_type=投入；自然语言 MDL 工厂在当前数据中对应 FACTORY=MODULE，物量默认使用 Panel_qty，并按投入物量降序取 top10 型号。"
+  },
+  {
+    "id": "plan_actual_array_approved_vs_actual_input_gap_rate_001",
+    "question": "2026年2月Array工厂审批版投入物量与实际物量Gap和达成率",
+    "sql": "WITH approved_input AS (SELECT plan_month AS biz_month, factory_code AS factory, SUM(target_IN_glass_qty) AS approved_input_qty FROM monthly_plan_approved WHERE plan_month = '202602' AND factory_code = 'ARRAY' GROUP BY plan_month, factory_code), actual_input AS (SELECT SUBSTR(work_date, 1, 6) AS biz_month, FACTORY AS factory, SUM(GLS_qty) AS actual_input_qty FROM production_actuals WHERE SUBSTR(work_date, 1, 6) = '202602' AND FACTORY = 'ARRAY' AND act_type = '投入' GROUP BY SUBSTR(work_date, 1, 6), FACTORY) SELECT approved_input.biz_month AS biz_month, approved_input.factory AS factory, approved_input.approved_input_qty, NVL(actual_input.actual_input_qty, 0) AS actual_input_qty, NVL(actual_input.actual_input_qty, 0) - approved_input.approved_input_qty AS input_gap_qty, CASE WHEN approved_input.approved_input_qty = 0 THEN NULL ELSE NVL(actual_input.actual_input_qty, 0) / approved_input.approved_input_qty END AS input_achievement_rate FROM approved_input LEFT JOIN actual_input ON approved_input.biz_month = actual_input.biz_month AND approved_input.factory = actual_input.factory ORDER BY approved_input.biz_month FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "plan_actual",
+    "metrics": [
+      "approved_input_qty",
+      "actual_input_qty",
+      "input_gap_qty",
+      "input_achievement_rate"
+    ],
+    "dimensions": [
+      "biz_month",
+      "factory"
+    ],
+    "tags": [
+      "monthly_plan_approved",
+      "production_actuals",
+      "approved_vs_actual",
+      "gap",
+      "achievement_rate",
+      "factory_named",
+      "month",
+      "aggregate_then_join"
+    ],
+    "notes": "审批侧和实际侧必须先分别按月份、工厂聚合，再 join 聚合结果。Array 口径默认使用 GLS_qty 与 target_IN_glass_qty。Gap = 实际投入 - 审批投入；达成率 = 实际投入 / 审批投入。"
+  },
+  {
+    "id": "plan_actual_array_mdl_input_output_achievement_actual_input_yoy_mom_202605_001",
+    "question": "202605月Array工厂和MDL工厂的投入产出达成率分别是多少，实际投入物量环比和同比分别上升/下降多少",
+    "sql": "WITH factory_dim AS (SELECT 'ARRAY' AS factory_label, 'ARRAY' AS factory_code FROM dual UNION ALL SELECT 'MDL' AS factory_label, 'MODULE' AS factory_code FROM dual), approved_plan AS (SELECT factory_code, SUM(CASE WHEN factory_code = 'MODULE' THEN target_IN_panel_qty ELSE target_IN_glass_qty END) AS approved_input_qty, SUM(CASE WHEN factory_code = 'MODULE' THEN NVL(target_Out_TTL_panel_qty, target_Out_panel_qty) ELSE target_Out_glass_qty END) AS approved_output_qty FROM monthly_plan_approved WHERE plan_month = '202605' AND factory_code IN ('ARRAY', 'MODULE') GROUP BY factory_code), actual_summary AS (SELECT FACTORY AS factory_code, SUM(CASE WHEN act_type = '投入' AND SUBSTR(work_date, 1, 6) = '202605' THEN CASE WHEN FACTORY = 'MODULE' THEN Panel_qty ELSE GLS_qty END ELSE 0 END) AS actual_input_qty, SUM(CASE WHEN act_type = '产出' AND SUBSTR(work_date, 1, 6) = '202605' THEN CASE WHEN FACTORY = 'MODULE' THEN Panel_qty ELSE GLS_qty END ELSE 0 END) AS actual_output_qty, SUM(CASE WHEN act_type = '投入' AND SUBSTR(work_date, 1, 6) = '202604' THEN CASE WHEN FACTORY = 'MODULE' THEN Panel_qty ELSE GLS_qty END ELSE 0 END) AS prev_month_actual_input_qty, SUM(CASE WHEN act_type = '投入' AND SUBSTR(work_date, 1, 6) = '202505' THEN CASE WHEN FACTORY = 'MODULE' THEN Panel_qty ELSE GLS_qty END ELSE 0 END) AS prev_year_actual_input_qty FROM production_actuals WHERE SUBSTR(work_date, 1, 6) IN ('202605', '202604', '202505') AND FACTORY IN ('ARRAY', 'MODULE') AND act_type IN ('投入', '产出') GROUP BY FACTORY) SELECT '202605' AS biz_month, f.factory_label AS factory, NVL(p.approved_input_qty, 0) AS approved_input_qty, NVL(a.actual_input_qty, 0) AS actual_input_qty, CASE WHEN NVL(p.approved_input_qty, 0) = 0 THEN NULL ELSE NVL(a.actual_input_qty, 0) / p.approved_input_qty END AS input_achievement_rate, NVL(p.approved_output_qty, 0) AS approved_output_qty, NVL(a.actual_output_qty, 0) AS actual_output_qty, CASE WHEN NVL(p.approved_output_qty, 0) = 0 THEN NULL ELSE NVL(a.actual_output_qty, 0) / p.approved_output_qty END AS output_achievement_rate, NVL(a.prev_month_actual_input_qty, 0) AS prev_month_actual_input_qty, NVL(a.actual_input_qty, 0) - NVL(a.prev_month_actual_input_qty, 0) AS mom_change_qty, CASE WHEN NVL(a.actual_input_qty, 0) - NVL(a.prev_month_actual_input_qty, 0) > 0 THEN '上升' WHEN NVL(a.actual_input_qty, 0) - NVL(a.prev_month_actual_input_qty, 0) < 0 THEN '下降' ELSE '持平' END AS mom_change_direction, CASE WHEN NVL(a.prev_month_actual_input_qty, 0) = 0 THEN NULL ELSE (NVL(a.actual_input_qty, 0) - a.prev_month_actual_input_qty) / a.prev_month_actual_input_qty END AS mom_change_rate, NVL(a.prev_year_actual_input_qty, 0) AS prev_year_actual_input_qty, NVL(a.actual_input_qty, 0) - NVL(a.prev_year_actual_input_qty, 0) AS yoy_change_qty, CASE WHEN NVL(a.actual_input_qty, 0) - NVL(a.prev_year_actual_input_qty, 0) > 0 THEN '上升' WHEN NVL(a.actual_input_qty, 0) - NVL(a.prev_year_actual_input_qty, 0) < 0 THEN '下降' ELSE '持平' END AS yoy_change_direction, CASE WHEN NVL(a.prev_year_actual_input_qty, 0) = 0 THEN NULL ELSE (NVL(a.actual_input_qty, 0) - a.prev_year_actual_input_qty) / a.prev_year_actual_input_qty END AS yoy_change_rate FROM factory_dim f LEFT JOIN approved_plan p ON f.factory_code = p.factory_code LEFT JOIN actual_summary a ON f.factory_code = a.factory_code ORDER BY CASE f.factory_label WHEN 'ARRAY' THEN 1 WHEN 'MDL' THEN 2 ELSE 3 END FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "plan_actual",
+    "metrics": [
+      "approved_input_qty",
+      "actual_input_qty",
+      "input_achievement_rate",
+      "approved_output_qty",
+      "actual_output_qty",
+      "output_achievement_rate",
+      "mom_change_qty",
+      "mom_change_rate",
+      "yoy_change_qty",
+      "yoy_change_rate"
+    ],
+    "dimensions": [
+      "biz_month",
+      "factory"
+    ],
+    "tags": [
+      "monthly_plan_approved",
+      "production_actuals",
+      "factory_named",
+      "month",
+      "input_output_achievement_rate",
+      "actual_input",
+      "yoy",
+      "mom",
+      "aggregate_then_join",
+      "panel_default_mdl",
+      "glass_default_array"
+    ],
+    "result_shape": "factory_comparison_with_achievement_and_time_comparison",
+    "notes": "这个问题同时要求投入达成率、产出达成率，以及实际投入物量的环比/同比变化。审批计划侧和实际侧必须先分别按工厂聚合，再 join。ARRAY 默认使用 glass 口径：计划 target_IN_glass_qty/target_Out_glass_qty，实际 GLS_qty；自然语言 MDL 工厂在当前数据中对应 MODULE，并默认使用 panel 口径：计划投入 target_IN_panel_qty，计划产出优先 target_Out_TTL_panel_qty、否则 target_Out_panel_qty，实际 Panel_qty。环比基期为 202604，同比基期为 202505。变化量 = 当前期实际投入 - 对比期实际投入；变化率 = 变化量 / NULLIF(对比期实际投入, 0)；方向按变化量大于0为上升、小于0为下降、等于0为持平。使用 factory_dim 固定输出用户指定的 ARRAY 和 MDL 两个展示工厂，即使某工厂计划或实际数据缺失也保留行。"
+  },
+  {
+    "id": "demand_latest5_p_202604_top_fgcode_001",
+    "question": "最新5版p版需求中，202604需求量最多的fgcode是哪一个",
+    "sql": "WITH parsed_versions AS (SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}')) AS version_month, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION), latest_versions AS (SELECT PM_VERSION FROM (SELECT PM_VERSION FROM parsed_versions ORDER BY version_month DESC, version_week DESC, version_seq DESC, PM_VERSION DESC) FETCH FIRST 5 ROWS ONLY), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT FGCODE, SUM(NVL(demand_qty, 0)) AS demand_qty FROM demand_unpivot WHERE demand_month = '202604' AND PM_VERSION IN (SELECT PM_VERSION FROM latest_versions) GROUP BY FGCODE ORDER BY demand_qty DESC FETCH FIRST 1 ROW ONLY;",
+    "subject_domain": "demand",
+    "metrics": [
+      "demand_qty"
+    ],
+    "dimensions": [
+      "FGCODE"
+    ],
+    "tags": [
+      "horizontal_table",
+      "latest_version",
+      "topn",
+      "fgcode"
+    ],
+    "notes": "P 版需求是横表，必须完整展开 REQUIREMENT_QTY、NEXT_REQUIREMENT、LAST_REQUIREMENT、MONTH4、MONTH5、MONTH6、MONTH7 到 demand_month 后再按目标月份过滤。PM_VERSION 是版本标识不是行唯一键，同一版本会有多条明细；最新 5 版指最新 5 个不同 PM_VERSION，不是最新 5 条原表记录。应先解析显示版本中的版本年月、W 周号和 P 周内版次后排序取最新 5 个 P 版，再回到这些版本下的全部明细行，按 202604 汇总并取需求量最高的 FGCODE。"
+  },
+  {
+    "id": "demand_sales_vs_latest_p_demand_diff_fgcode_202604_001",
+    "question": "202604月销售业绩和最新P版202604需求量差异最大的前10个FGCODE，输出FGCODE、销售业绩、需求量和差异量",
+    "sql": "WITH parsed_versions AS (SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}')) AS version_month, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION), latest_version AS (SELECT PM_VERSION FROM (SELECT PM_VERSION FROM parsed_versions ORDER BY version_month DESC, version_week DESC, version_seq DESC, PM_VERSION DESC) FETCH FIRST 1 ROW ONLY), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM p_demand), sales_data AS (SELECT FGCODE, SUM(NVL(sales_qty, 0)) AS sales_performance FROM sales_financial_perf WHERE report_month = '202604' GROUP BY FGCODE), demand_data AS (SELECT FGCODE, SUM(NVL(demand_qty, 0)) AS demand_qty FROM demand_unpivot WHERE PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_month = '202604' GROUP BY FGCODE) SELECT COALESCE(s.FGCODE, d.FGCODE) AS FGCODE, NVL(s.sales_performance, 0) AS sales_performance, NVL(d.demand_qty, 0) AS demand_qty, NVL(s.sales_performance, 0) - NVL(d.demand_qty, 0) AS difference_amount FROM sales_data s FULL OUTER JOIN demand_data d ON s.FGCODE = d.FGCODE ORDER BY ABS(NVL(s.sales_performance, 0) - NVL(d.demand_qty, 0)) DESC FETCH FIRST 10 ROWS ONLY;",
+    "subject_domain": "demand",
+    "metrics": [
+      "sales_qty",
+      "demand_qty",
+      "difference_amount"
+    ],
+    "dimensions": [
+      "FGCODE"
+    ],
+    "tags": [
+      "sales_financial",
+      "horizontal_table",
+      "latest_version",
+      "fgcode",
+      "difference",
+      "aggregate_then_join"
+    ],
+    "result_shape": "fgcode_sales_demand_difference_topn",
+    "notes": "销售业绩与最新P版需求量差异样例。sales_financial_perf 的明细粒度包含 report_month、SBU_DESC、BU_DESC、CUSTOMER、FGCODE，同一 FGCODE 同月可能有多条明细，因此销售侧必须先按 report_month 和 FGCODE 聚合 sales_qty。P 版需求必须先解析 PM_VERSION 取最新一个 P 版版本标识，再完整展开横向月份列到 demand_month，按目标需求月份 202604 聚合 demand_qty。两侧都聚合到 FGCODE 后再 FULL OUTER JOIN 计算差异量，差异量默认 sales_performance - demand_qty，按绝对差异排序取前10。"
+  },
+  {
+    "id": "demand_latest_p_recent6m_ttl_001",
+    "question": "最新p版，最近6个月的ttl需求物量",
+    "sql": "WITH parsed_versions AS (SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}')) AS version_month, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION), latest_version AS (SELECT PM_VERSION FROM (SELECT PM_VERSION FROM parsed_versions ORDER BY version_month DESC, version_week DESC, version_seq DESC, PM_VERSION DESC) FETCH FIRST 1 ROW ONLY), demand_unpivot AS (SELECT PM_VERSION, FGCODE, CUSTOMER, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, CUSTOMER, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM p_demand) SELECT demand_month, SUM(NVL(demand_qty, 0)) AS ttl_demand_qty FROM demand_unpivot WHERE PM_VERSION IN (SELECT PM_VERSION FROM latest_version) AND demand_month BETWEEN TO_CHAR(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -5), 'YYYYMM') AND TO_CHAR(TRUNC(SYSDATE, 'MM'), 'YYYYMM') GROUP BY demand_month ORDER BY demand_month FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "demand",
+    "metrics": [
+      "demand_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "tags": [
+      "horizontal_table",
+      "latest_version",
+      "recent_months",
+      "ttl"
+    ],
+    "notes": "最新 P 版应解析 PM_VERSION 显示版本中的版本年月、W 周号和 P 周内版次后排序取最新一个 PM_VERSION；PM_VERSION 是版本标识不是行唯一键，选中版本后需要汇总该版本下全部明细行。横表需求月份展开后，按自然日期最近 6 个 demand_month 汇总 total 需求物量。"
+  },
+  {
+    "id": "demand_latest_p_202605_oxide_product_count_001",
+    "question": "最新P版，2026年5月，Oxide产品数量是多少",
+    "sql": "WITH parsed_versions AS (SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}')) AS version_month, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION), latest_version AS (SELECT PM_VERSION FROM (SELECT PM_VERSION FROM parsed_versions ORDER BY version_month DESC, version_week DESC, version_seq DESC, PM_VERSION DESC) FETCH FIRST 1 ROW ONLY), latest_p AS (SELECT p.FGCODE, p.MONTH, p.REQUIREMENT_QTY, p.NEXT_REQUIREMENT, p.LAST_REQUIREMENT, p.MONTH4, p.MONTH5, p.MONTH6, p.MONTH7 FROM p_demand p JOIN latest_version lv ON lv.PM_VERSION = p.PM_VERSION), target_demand AS (SELECT FGCODE, REQUIREMENT_QTY AS demand_qty FROM latest_p WHERE MONTH = '202605' UNION ALL SELECT FGCODE, NEXT_REQUIREMENT FROM latest_p WHERE MONTH = '202604' UNION ALL SELECT FGCODE, LAST_REQUIREMENT FROM latest_p WHERE MONTH = '202603' UNION ALL SELECT FGCODE, MONTH4 FROM latest_p WHERE MONTH = '202602' UNION ALL SELECT FGCODE, MONTH5 FROM latest_p WHERE MONTH = '202601' UNION ALL SELECT FGCODE, MONTH6 FROM latest_p WHERE MONTH = '202512' UNION ALL SELECT FGCODE, MONTH7 FROM latest_p WHERE MONTH = '202511'), oxide_products AS (SELECT product_ID FROM product_attributes WHERE IS_OXIDE = 'Y') SELECT COUNT(DISTINCT op.product_ID) AS product_count, SUM(NVL(td.demand_qty, 0)) AS total_demand_qty FROM target_demand td JOIN oxide_products op ON op.product_ID = td.FGCODE WHERE NVL(td.demand_qty, 0) > 0;",
+    "subject_domain": "demand",
+    "metrics": [
+      "product_count",
+      "demand_qty"
+    ],
+    "tags": [
+      "horizontal_table",
+      "latest_version",
+      "product_attributes",
+      "product_count",
+      "demand_qty",
+      "oxide"
+    ],
+    "notes": "同时要求最新版本过滤、横表需求月份映射、产品属性过滤。最新 P 版是最新一个 PM_VERSION 版本标识，PM_VERSION 下可能有多条需求明细，不能只取一条原表记录。目标月份语义仍然基于展开后的 demand_month；当目标月份固定为 202605 时，可以用等价的 base MONTH 反推过滤：REQUIREMENT_QTY 对应 MONTH='202605'，NEXT_REQUIREMENT 对应 MONTH='202604'，LAST_REQUIREMENT 对应 MONTH='202603'，MONTH4 对应 MONTH='202602'，MONTH5 对应 MONTH='202601'，MONTH6 对应 MONTH='202512'，MONTH7 对应 MONTH='202511'。这种写法避免完整展开后再筛选，也避免对无关月份执行日期函数。Oxide 落在 product_attributes.IS_OXIDE = 'Y'；产品数量使用 COUNT(DISTINCT product_attributes.product_ID)，需求总数使用 SUM(NVL(demand_qty, 0))，且只统计 NVL(demand_qty, 0) > 0 的产品。"
+  },
+  {
+    "id": "demand_v_to_p_glass_conversion_202605_from_202604_versions_001",
+    "question": "计算202605月的V到P GLASS转换率，V选择202604月份的第一版需求，P选择202604的到最后一版需求",
+    "sql": "WITH v_first_version AS ( SELECT PM_VERSION FROM ( SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'V([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM v_demand WHERE REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}') = '202604' AND REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+V[0-9]+$') GROUP BY PM_VERSION ) ORDER BY version_week ASC, version_seq ASC, PM_VERSION ASC FETCH FIRST 1 ROW ONLY ), p_last_version AS ( SELECT PM_VERSION FROM ( SELECT PM_VERSION, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'W([0-9]+)', 1, 1, NULL, 1)) AS version_week, TO_NUMBER(REGEXP_SUBSTR(PM_VERSION, 'P([0-9]+)$', 1, 1, NULL, 1)) AS version_seq FROM p_demand WHERE REGEXP_SUBSTR(PM_VERSION, '^[0-9]{6}') = '202604' AND REGEXP_LIKE(PM_VERSION, '^[0-9]{6}W[0-9]+P[0-9]+$') GROUP BY PM_VERSION ) ORDER BY version_week DESC, version_seq DESC, PM_VERSION DESC FETCH FIRST 1 ROW ONLY ), v_demand_unpivot AS ( SELECT PM_VERSION, FGCODE, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM v_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM v_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM v_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM v_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM v_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM v_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM v_demand ), p_demand_unpivot AS ( SELECT PM_VERSION, FGCODE, CAST(MONTH AS VARCHAR2(6)) AS demand_month, REQUIREMENT_QTY AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 1), 'YYYYMM') AS demand_month, NEXT_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 2), 'YYYYMM') AS demand_month, LAST_REQUIREMENT AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 3), 'YYYYMM') AS demand_month, MONTH4 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 4), 'YYYYMM') AS demand_month, MONTH5 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 5), 'YYYYMM') AS demand_month, MONTH6 AS demand_qty FROM p_demand UNION ALL SELECT PM_VERSION, FGCODE, TO_CHAR(ADD_MONTHS(TO_DATE(CAST(MONTH AS VARCHAR2(6)) || '01', 'YYYYMMDD'), 6), 'YYYYMM') AS demand_month, MONTH7 AS demand_qty FROM p_demand ), v_glass AS ( SELECT SUM(NVL(vdu.demand_qty, 0) / NULLIF(pa.CUT_NUM, 0)) AS v_glass_qty FROM v_demand_unpivot vdu JOIN product_attributes pa ON pa.product_ID = vdu.FGCODE WHERE vdu.PM_VERSION = (SELECT PM_VERSION FROM v_first_version) AND vdu.demand_month = '202605' ), p_glass AS ( SELECT SUM(NVL(pdu.demand_qty, 0) / NULLIF(pa.CUT_NUM, 0)) AS p_glass_qty FROM p_demand_unpivot pdu JOIN product_attributes pa ON pa.product_ID = pdu.FGCODE WHERE pdu.PM_VERSION = (SELECT PM_VERSION FROM p_last_version) AND pdu.demand_month = '202605' ) SELECT '202605' AS demand_month, (SELECT PM_VERSION FROM v_first_version) AS v_version, (SELECT PM_VERSION FROM p_last_version) AS p_version, v_glass.v_glass_qty, p_glass.p_glass_qty, CASE WHEN v_glass.v_glass_qty = 0 THEN NULL ELSE p_glass.p_glass_qty / v_glass.v_glass_qty END AS v_to_p_glass_conversion_rate FROM v_glass CROSS JOIN p_glass FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "demand",
+    "metrics": [
+      "demand_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "tags": [
+      "horizontal_table",
+      "v_demand",
+      "p_demand",
+      "v_to_p",
+      "glass_conversion",
+      "cut_num",
+      "first_version",
+      "last_version",
+      "aggregate_then_join",
+      "pm_version_display_version"
+    ],
+    "result_shape": "single_row_conversion_rate",
+    "notes": "V到P GLASS转换率样例。202605 是展开后的目标 demand_month；202604 是 PM_VERSION 显示版本年月前缀，不是原始 MONTH。PM_VERSION 类似 202605W3V2/202605W3P2，W 后数字表示周，P/V 后数字表示该周第几版。PM_VERSION 是版本标识不是行唯一键，第一版/最后一版选中的是一个 PM_VERSION，计算时必须覆盖该版本下所有需求明细。V 第一版按版本周升序、周内版次升序取第一条；P 最后一版按版本周降序、周内版次降序取第一条。需求横表必须完整展开 REQUIREMENT_QTY 到 MONTH7 后再筛 demand_month。需求量换算 GLASS 使用 demand_qty / product_attributes.CUT_NUM。V侧和P侧必须分别聚合后再计算 P GLASS / V GLASS，不要明细互 join 后 SUM。"
+  },
+  {
+    "id": "inventory_oms_recent6m_trend_dual_volume_001",
+    "question": "oms库存，近6个月库存变化趋势",
+    "sql": "SELECT oms_inventory.report_month AS biz_month, SUM(oms_inventory.glass_qty) AS inventory_glass_qty, SUM(oms_inventory.panel_qty) AS inventory_panel_qty FROM oms_inventory WHERE oms_inventory.report_month BETWEEN TO_CHAR(ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -5), 'YYYYMM') AND TO_CHAR(TRUNC(SYSDATE, 'MM'), 'YYYYMM') GROUP BY oms_inventory.report_month ORDER BY oms_inventory.report_month FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "inventory",
+    "metrics": [
+      "inventory_qty"
+    ],
+    "dimensions": [
+      "biz_month"
+    ],
+    "tags": [
+      "oms_inventory",
+      "recent_months",
+      "trend",
+      "dual_volume",
+      "glass_qty",
+      "panel_qty"
+    ],
+    "notes": "OMS 库存趋势必须走 oms_inventory，按 report_month 展示；非库龄场景默认同时返回 glass_qty 与 panel_qty 两套库存口径。近 6 个月按自然日期最近 6 个月理解。"
+  },
+  {
+    "id": "inventory_oms_latest_ttl_age_distribution_001",
+    "question": "最新OMS库存，TtL物量，对应库龄分布情况，库龄分为<3M、3-6M、6-12M、>12M",
+    "sql": "SELECT SUM(ONE_AGE_panel_qty + TWO_AGE_panel_qty + THREE_AGE_panel_qty) AS lt_3m_qty, SUM(FOUR_AGE_panel_qty) AS m3_6m_qty, SUM(FIVE_AGE_panel_qty) AS m6_12m_qty, SUM(SIX_AGE_panel_qty + SEVEN_AGE_panel_qty + EUGHT_AGE_panel_qty) AS gt_12m_qty FROM oms_inventory WHERE report_month = (SELECT MAX(report_month) FROM oms_inventory) FETCH FIRST 200 ROWS ONLY;",
+    "subject_domain": "inventory",
+    "metrics": [
+      "inventory_qty"
+    ],
+    "tags": [
+      "oms_inventory",
+      "latest_month",
+      "ttl_volume",
+      "age_distribution"
+    ],
+    "result_shape": "single_row_age_bucket_distribution",
+    "notes": "最新 OMS 库存默认取 MAX(report_month)。库龄桶映射：<3M = ONE+TWO+THREE，3-6M = FOUR，6-12M = FIVE，>12M = SIX+SEVEN+EUGHT。不要额外按产品分类、客户、型号拆分。"
+  }
+]

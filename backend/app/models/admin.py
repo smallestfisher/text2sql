@@ -19,6 +19,32 @@ class MetadataDocument(BaseModel):
     content: dict | list | str
 
 
+class ConfigFieldRecord(BaseModel):
+    name: str          # env-var name, e.g. "LLM_MODEL"
+    group: str         # UI grouping: app | business_db | llm | vector | sql
+    type: str          # str | int | bool | optional_bool
+    editable: bool
+    secret: bool
+    value: str | None  # current effective value rendered as a string
+    source: str        # env | override | default
+
+
+class ConfigCollectionResponse(BaseModel):
+    fields: list[ConfigFieldRecord]
+
+
+class ConfigUpdateRequest(BaseModel):
+    # env-name -> new value. A null value reverts that field to its baseline
+    # (env / default) by deleting its override row.
+    values: dict[str, str | None]
+
+
+class ConfigUpdateResponse(BaseModel):
+    updated: bool
+    reloaded: bool
+    fields: list[ConfigFieldRecord]
+
+
 class MetadataOverview(BaseModel):
     semantic_version: str | None
     semantic_domains: list[str]

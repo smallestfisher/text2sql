@@ -29,6 +29,8 @@ import type {
   FeedbackSummary,
   MetadataDocumentRecord,
   MetadataDocumentListResponse,
+  ConfigCollectionResponse,
+  ConfigUpdateResponse,
   ExampleCollectionResponse,
   ExampleMutationResponse,
   ExampleTemplateRecord,
@@ -403,6 +405,19 @@ export const api = {
       method: "PUT",
       token,
       body: { content },
+    });
+  },
+  adminGetConfig(token: string): Promise<ConfigCollectionResponse> {
+    return request("/api/admin/config", { token });
+  },
+  adminUpdateConfig(
+    token: string,
+    values: Record<string, string | null>,
+  ): Promise<ConfigUpdateResponse> {
+    return request("/api/admin/config", {
+      method: "PUT",
+      token,
+      body: { values },
     });
   },
   adminListExamples(token: string): Promise<ExampleCollectionResponse> {

@@ -107,7 +107,15 @@ class RetrievalService:
         }
         self._refresh_indexes()
         if prewarm_vector_index:
-            self.prewarm_vector_index()
+            # Best-effort: a failing embedding backend must not block container
+            # construction (which would brick startup / reset_container). The
+            # error is recorded in last_vector_sync_summary and retrieval that
+            # needs vectors surfaces it at use time; the admin prewarm button
+            # can retry once the config is fixed.
+            try:
+                self.prewarm_vector_index()
+            except Exception:
+                logger.warning("vector index prewarm failed at construction", exc_info=True)
 
     def retrieve_text(
         self,

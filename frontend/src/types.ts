@@ -492,6 +492,26 @@ export interface MetadataDocumentListResponse {
   documents: string[];
 }
 
+export interface ConfigFieldRecord {
+  name: string;
+  group: string;
+  type: string;
+  editable: boolean;
+  secret: boolean;
+  value: string | null;
+  source: string;
+}
+
+export interface ConfigCollectionResponse {
+  fields: ConfigFieldRecord[];
+}
+
+export interface ConfigUpdateResponse {
+  updated: boolean;
+  reloaded: boolean;
+  fields: ConfigFieldRecord[];
+}
+
 export interface TableTimeField {
   grain?: string;
   format?: string;

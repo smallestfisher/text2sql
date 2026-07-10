@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from backend.app.core.settings import settings
+from backend.app.core.settings import Settings, settings
+from backend.app.repositories.db_app_config_repository import DbAppConfigRepository
 from backend.app.repositories.db_audit_repository import DbAuditRepository
 from backend.app.repositories.db_evaluation_run_repository import DbEvaluationRunRepository
 from backend.app.repositories.db_auth_repository import DbAuthRepository
@@ -53,33 +54,23 @@ RUNTIME_SQL_DIALECT = "mysql"
 
 class AppContainer:
     def __init__(self) -> None:
-        self.settings = settings
-        logger.info(
-            "container init start app_env=%s business_dialect=%s runtime_dialect=%s vector_enabled=%s",
-            self.settings.app_env,
-            BUSINESS_SQL_DIALECT,
-            RUNTIME_SQL_DIALECT,
-            self.settings.enable_vector_retrieval,
-        )
-        self.business_database_connector = DatabaseConnector(
-            database_url=self.settings.business_database_url,
-            timeout_seconds=self.settings.sql_timeout_seconds,
-            max_result_rows=self.settings.execution_max_rows,
-            slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
-            sql_dialect=BUSINESS_SQL_DIALECT,
-        )
+        # Track connectors so a rebuilt container can dispose stale pools.
+        self._disposables: list[DatabaseConnector] = []
+
+        # Phase 1 — bootstrap. Use env-only settings just to reach the runtime
+        # DB, which is the sole hard startup dependency. Runtime connection
+        # params (timeouts/limits) are read from the env baseline here; they get
+        # re-read from effective settings once overrides are loaded (they only
+        # affect per-query behavior, not the pool itself).
+        bootstrap = settings
         self.runtime_database_connector = DatabaseConnector(
-            database_url=self.settings.runtime_database_url,
-            timeout_seconds=self.settings.sql_timeout_seconds,
-            max_result_rows=self.settings.execution_max_rows,
-            slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
+            database_url=bootstrap.runtime_database_url,
+            timeout_seconds=bootstrap.sql_timeout_seconds,
+            max_result_rows=bootstrap.execution_max_rows,
+            slow_query_threshold_ms=bootstrap.slow_query_threshold_ms,
             sql_dialect=RUNTIME_SQL_DIALECT,
         )
-        self._require_database_connection(
-            self.business_database_connector,
-            connector_name="business database",
-            verify_readonly_session_settings=True,
-        )
+        self._disposables.append(self.runtime_database_connector)
         self._require_database_connection(
             self.runtime_database_connector,
             connector_name="runtime database",
@@ -88,6 +79,37 @@ class AppContainer:
         logger.debug("runtime schema init start")
         self.runtime_store_initializer.ensure_schema()
         logger.debug("runtime schema init done")
+
+        # Phase 2 — load editable overrides from app_config and build the
+        # effective settings that the rest of the container reads from.
+        self.app_config_repository = DbAppConfigRepository(self.runtime_database_connector)
+        try:
+            overrides = self.app_config_repository.read_all()
+        except Exception:
+            logger.warning("failed to read app_config overrides; using env baseline", exc_info=True)
+            overrides = {}
+        self.settings = Settings.build(overrides)
+        logger.info(
+            "container init start app_env=%s business_dialect=%s runtime_dialect=%s vector_enabled=%s overrides=%s",
+            self.settings.app_env,
+            BUSINESS_SQL_DIALECT,
+            RUNTIME_SQL_DIALECT,
+            self.settings.enable_vector_retrieval,
+            len(overrides),
+        )
+
+        # Phase 3 — business DB connector. NOT validated at construction: a bad
+        # URL only surfaces when a query runs, so a wrong value never bricks the
+        # container (the config UI stays reachable to fix it). Save-time
+        # connectivity checks live in the config API instead.
+        self.business_database_connector = DatabaseConnector(
+            database_url=self.settings.business_database_url,
+            timeout_seconds=self.settings.sql_timeout_seconds,
+            max_result_rows=self.settings.execution_max_rows,
+            slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
+            sql_dialect=BUSINESS_SQL_DIALECT,
+        )
+        self._disposables.append(self.business_database_connector)
 
         # Semantic assets are stored in the runtime DB by default. The JSON files
         # seed the store once when it is empty and then act only as a fallback.
@@ -185,8 +207,15 @@ class AppContainer:
             dimensions=self.settings.vector_dimensions,
             timeout_seconds=self.settings.vector_timeout_seconds,
         )
+        # Vector misconfiguration degrades instead of bricking the container:
+        # if enabled but no client could be built, log and run as disabled so
+        # the config UI stays reachable to fix the key. Retrieval that actually
+        # needs vectors will surface the error at use time.
         if self.settings.enable_vector_retrieval and not self.vector_retriever.enabled:
-            raise RuntimeError("ENABLE_VECTOR_RETRIEVAL is true but vector embedding client is not configured")
+            logger.warning(
+                "vector retrieval enabled but embedding client not configured; running with vectors disabled"
+            )
+            self.vector_retriever = VectorRetriever(provider="disabled")
         self.vector_corpus_store_service = VectorCorpusStoreService(
             repository=self.vector_document_repository,
             vector_retriever=self.vector_retriever,
@@ -282,3 +311,9 @@ class AppContainer:
         raise RuntimeError(
             f"{connector_name} is not ready: {health.get('error') or 'database connector is not configured'}"
         )
+
+    def dispose(self) -> None:
+        """Release database connection pools held by this container. Called when
+        a rebuilt container replaces this one so stale engines don't leak."""
+        for connector in getattr(self, "_disposables", []):
+            connector.dispose()

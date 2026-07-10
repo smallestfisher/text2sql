@@ -156,3 +156,9 @@ CREATE TABLE IF NOT EXISTS semantic_assets (
   version VARCHAR(64) NULL,
   updated_at DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS app_config (
+  name VARCHAR(64) PRIMARY KEY,
+  value_text TEXT NULL,
+  updated_at DATETIME NOT NULL
+);

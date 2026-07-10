@@ -35,8 +35,18 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def warm_app_container() -> None:
-        # Move container construction off the first user request path.
-        get_container()
+        # Move container construction off the first user request path. Best-effort:
+        # if the runtime DB is briefly unreachable at boot, don't crash the whole
+        # process — the (uncached) container is retried on the first request, and
+        # vector prewarm inside the build is itself best-effort.
+        import logging
+
+        try:
+            get_container()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "app container warm-up failed; will retry on first request", exc_info=True
+            )
 
     return app
 

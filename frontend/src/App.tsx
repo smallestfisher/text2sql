@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Login } from "./Login";
 import { SemanticStudio } from "./SemanticStudio";
+import { SystemSettings } from "./SystemSettings";
 import workspaceIllustration from "./assets/workspace-illustration.svg";
 import { api, isAuthFailure } from "./api";
 import type {
@@ -66,6 +67,7 @@ const ADMIN_SIDEBAR_LINKS = [
   { href: "#admin-runtime", icon: "server", label: "运行状态" },
   { href: "#admin-index", icon: "search", label: "检索索引" },
   { href: "#admin-semantic", icon: "database", label: "语义资产" },
+  { href: "#admin-settings", icon: "server", label: "系统设置" },
   { href: "#admin-users", icon: "users", label: "用户管理" },
   { href: "#admin-logs", icon: "document", label: "日志审计" },
 ] as const;
@@ -1901,6 +1903,10 @@ function AdminView(props: {
 
       <section id="admin-semantic" className="admin-semantic-section">
         <SemanticStudio token={props.token} onAuthFailure={props.onAuthFailure} />
+      </section>
+
+      <section id="admin-settings" className="admin-semantic-section">
+        <SystemSettings token={props.token} onAuthFailure={props.onAuthFailure} />
       </section>
     </div>
   );

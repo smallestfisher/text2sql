@@ -1,21 +1,45 @@
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, Request
+import logging
 
-from functools import lru_cache
+from fastapi import Depends, HTTPException, Request
 
 from backend.app.core.container import AppContainer
 from backend.app.models.auth import UserContext
 
 
-@lru_cache(maxsize=1)
+logger = logging.getLogger(__name__)
+
+# Explicit singleton holder (not lru_cache) so reset_container can rebuild
+# atomically: a failed rebuild keeps the last working container in place instead
+# of leaving an empty cache that re-fails on every subsequent request.
+_container: AppContainer | None = None
+
+
 def get_container() -> AppContainer:
-    return AppContainer()
+    global _container
+    if _container is None:
+        _container = AppContainer()
+    return _container
 
 
 def reset_container() -> AppContainer:
-    get_container.cache_clear()
-    return get_container()
+    """Rebuild the container from current settings/overrides and swap it in.
+
+    If construction raises, the previous container is kept intact and the error
+    propagates to the caller — the app never ends up with no working container.
+    On success the old container's connection pools are disposed.
+    """
+    global _container
+    old = _container
+    new = AppContainer()  # may raise; old remains installed if it does
+    _container = new
+    if old is not None and old is not new:
+        try:
+            old.dispose()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            logger.warning("failed to dispose previous container", exc_info=True)
+    return new
 
 
 def resolve_request_user_context(

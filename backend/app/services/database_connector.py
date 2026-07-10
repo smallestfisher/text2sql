@@ -47,6 +47,15 @@ class DatabaseConnector:
     def connected(self) -> bool:
         return self.engine is not None
 
+    def dispose(self) -> None:
+        """Release the underlying connection pool. Called when the owning
+        container is rebuilt so stale engines don't leak connections."""
+        if self.engine is not None:
+            try:
+                self.engine.dispose()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                logger.warning("failed to dispose database engine", exc_info=True)
+
     def execute_readonly(self, sql: str) -> ExecutionResponse:
         if not self.connected:
             raise RuntimeError("database connector is not configured")
