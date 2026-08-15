@@ -59,7 +59,15 @@ from backend.app.models.evaluation import (
     RuntimeQueryLogMaterializeCaseRequest,
 )
 from backend.app.models.feedback import FeedbackCollectionResponse, FeedbackSummary
+from backend.app.models.data_source import (
+    DataSourceCollectionResponse,
+    DataSourceCreateRequest,
+    DataSourceRecord,
+    SchemaSyncRequest,
+    SchemaSyncResponse,
+)
 from backend.app.models.trace import TraceRecord
+from backend.app.services.oracle_schema_introspector import merge_tables_metadata
 
 
 router = APIRouter(
@@ -78,6 +86,91 @@ class MetadataUpdateRequest(BaseModel):
 
 class ExampleUpsertRequest(BaseModel):
     example: dict
+
+
+@router.get("/data-sources", response_model=DataSourceCollectionResponse)
+def list_data_sources(
+    workspace_id: str | None = None,
+    domain_id: str | None = None,
+    container: AppContainer = Depends(get_container),
+) -> DataSourceCollectionResponse:
+    records = container.data_source_repository.list(
+        workspace_id=workspace_id,
+        domain_id=domain_id,
+    )
+    return DataSourceCollectionResponse(data_sources=records, count=len(records))
+
+
+@router.post("/data-sources", response_model=DataSourceRecord)
+def create_data_source(
+    request: DataSourceCreateRequest,
+    container: AppContainer = Depends(get_container),
+) -> DataSourceRecord:
+    try:
+        return container.data_source_repository.create(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/data-sources/{data_source_id}/sync", response_model=SchemaSyncResponse)
+def sync_data_source_schema(
+    data_source_id: str,
+    request: SchemaSyncRequest,
+    container: AppContainer = Depends(get_container),
+) -> SchemaSyncResponse:
+    record = container.data_source_repository.get(data_source_id)
+    database_url = container.data_source_repository.get_database_url(data_source_id)
+    if record is None or database_url is None:
+        raise HTTPException(status_code=404, detail="data source not found")
+
+    schemas = request.schemas or record.schemas
+    container.data_source_repository.update_sync_result(data_source_id, status="syncing")
+    try:
+        result = container.oracle_schema_introspector.inspect(
+            database_url,
+            schemas,
+            include_views=request.include_views,
+        )
+        scoped_tables = {
+            name: {
+                **metadata,
+                "workspace_id": record.workspace_id,
+                "domain_id": record.domain_id,
+                "data_source_id": record.id,
+                "dialect": "oracle",
+            }
+            for name, metadata in result["tables_metadata"].items()
+        }
+        existing = container.metadata_service.get_document("tables_metadata").content
+        existing_doc = dict(existing) if isinstance(existing, dict) else {}
+        # Three-way merge: physical facts are refreshed, human-authored business
+        # content (description / column annotations / time_fields / relationships)
+        # is never overwritten. Drift is surfaced as warnings for the UI.
+        merged, merge_warnings = merge_tables_metadata(
+            existing_doc, scoped_tables, data_source_id
+        )
+        container.metadata_service.update_document(
+            "tables_metadata",
+            merged,
+            retrieval_service=container.retrieval_service,
+        )
+        updated = container.data_source_repository.update_sync_result(
+            data_source_id, status="ready"
+        )
+    except Exception as exc:
+        container.data_source_repository.update_sync_result(
+            data_source_id, status="error", error=str(exc)
+        )
+        raise HTTPException(status_code=400, detail=f"Oracle Schema 同步失败: {exc}") from exc
+
+    return SchemaSyncResponse(
+        data_source=updated,
+        table_count=result["table_count"],
+        column_count=result["column_count"],
+        relationship_count=result["relationship_count"],
+        tables_metadata=merged,
+        warnings=list(result.get("warnings", [])) + merge_warnings,
+    )
 
 
 class ExampleBulkUpsertRequest(BaseModel):

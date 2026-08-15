@@ -512,12 +512,58 @@ export interface ConfigUpdateResponse {
   fields: ConfigFieldRecord[];
 }
 
+export interface DataSourceRecord {
+  id: string;
+  workspace_id: string;
+  domain_id: string;
+  name: string;
+  dialect: "oracle";
+  schemas: string[];
+  description?: string | null;
+  status: "draft" | "ready" | "syncing" | "error" | "disabled";
+  enabled: boolean;
+  last_sync_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DataSourceCollectionResponse {
+  data_sources: DataSourceRecord[];
+  count: number;
+}
+
+export interface DataSourceCreateRequest {
+  workspace_id: string;
+  domain_id: string;
+  name: string;
+  database_url: string;
+  schemas: string[];
+  description?: string | null;
+}
+
+export interface SchemaSyncResponse {
+  data_source: DataSourceRecord;
+  table_count: number;
+  column_count: number;
+  relationship_count: number;
+  tables_metadata: TablesDocument;
+  warnings: string[];
+}
+
 export interface TableTimeField {
   grain?: string;
   format?: string;
 }
 
 export interface TableSchemaEntry {
+  workspace_id?: string;
+  domain_id?: string;
+  data_source_id?: string;
+  dialect?: "oracle";
+  schema?: string;
+  table_name?: string;
+  source?: string;
   description?: string;
   columns?: string[];
   MAIN_KEY?: string;

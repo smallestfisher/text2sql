@@ -31,6 +31,10 @@ import type {
   MetadataDocumentListResponse,
   ConfigCollectionResponse,
   ConfigUpdateResponse,
+  DataSourceCollectionResponse,
+  DataSourceCreateRequest,
+  DataSourceRecord,
+  SchemaSyncResponse,
   ExampleCollectionResponse,
   ExampleMutationResponse,
   ExampleTemplateRecord,
@@ -405,6 +409,38 @@ export const api = {
       method: "PUT",
       token,
       body: { content },
+    });
+  },
+  adminListDataSources(
+    token: string,
+    workspaceId?: string,
+    domainId?: string,
+  ): Promise<DataSourceCollectionResponse> {
+    const params = new URLSearchParams();
+    if (workspaceId) params.set("workspace_id", workspaceId);
+    if (domainId) params.set("domain_id", domainId);
+    const query = params.toString();
+    return request(`/api/admin/data-sources${query ? `?${query}` : ""}`, { token });
+  },
+  adminCreateDataSource(
+    token: string,
+    payload: DataSourceCreateRequest,
+  ): Promise<DataSourceRecord> {
+    return request("/api/admin/data-sources", {
+      method: "POST",
+      token,
+      body: payload,
+    });
+  },
+  adminSyncDataSource(
+    token: string,
+    dataSourceId: string,
+    schemas: string[],
+  ): Promise<SchemaSyncResponse> {
+    return request(`/api/admin/data-sources/${encodeURIComponent(dataSourceId)}/sync`, {
+      method: "POST",
+      token,
+      body: { schemas, include_views: true, sample_values_per_column: 0 },
     });
   },
   adminGetConfig(token: string): Promise<ConfigCollectionResponse> {

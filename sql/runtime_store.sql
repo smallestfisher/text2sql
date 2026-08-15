@@ -157,6 +157,23 @@ CREATE TABLE IF NOT EXISTS semantic_assets (
   updated_at DATETIME NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS data_sources (
+  id VARCHAR(64) PRIMARY KEY,
+  workspace_id VARCHAR(64) NOT NULL,
+  domain_id VARCHAR(64) NOT NULL,
+  name VARCHAR(191) NOT NULL,
+  database_url TEXT NOT NULL,
+  dialect VARCHAR(32) NOT NULL,
+  schemas_json LONGTEXT NULL,
+  description TEXT NULL,
+  status VARCHAR(16) NOT NULL,
+  enabled BOOLEAN NOT NULL,
+  last_sync_at DATETIME NULL,
+  last_error TEXT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS app_config (
   name VARCHAR(64) PRIMARY KEY,
   value_text TEXT NULL,

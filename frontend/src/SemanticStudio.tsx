@@ -3,17 +3,22 @@ import { api, isAuthFailure } from "./api";
 import type {
   BusinessKnowledgeDocument,
   BusinessKnowledgeEntry,
+  DataSourceCollectionResponse,
+  DataSourceCreateRequest,
+  DataSourceRecord,
   ExampleRecord,
   ExampleTemplateRecord,
   JoinPatternEntry,
   JoinPatternsDocument,
+  SchemaSyncResponse,
   TableSchemaEntry,
   TablesDocument,
 } from "./types";
 
-type AssetTab = "tables" | "knowledge" | "joins" | "examples";
+type AssetTab = "tables" | "knowledge" | "joins" | "examples" | "data_sources";
 
 const ASSET_TABS: { key: AssetTab; label: string; hint: string }[] = [
+  { key: "data_sources", label: "数据源", hint: "接入 Oracle 并同步物理表结构" },
   { key: "tables", label: "表结构", hint: "物理表、字段、时间格式与关系" },
   { key: "knowledge", label: "业务知识", hint: "可复用业务规则、口径与禁忌" },
   { key: "joins", label: "Join Pattern", hint: "稳定的多表关联方式" },
@@ -1294,6 +1299,200 @@ function ExamplesEditor(props: { token: string }) {
   );
 }
 
+/* ----------------------------- Data Sources ----------------------------- */
+
+function DataSourcesEditor(props: { token: string }) {
+  const [sources, setSources] = useState<DataSourceRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  // Warnings surfaced by the most recent sync, keyed by data source id.
+  const [warningsBySource, setWarningsBySource] = useState<Record<string, string[]>>({});
+
+  // New-source form state.
+  const [name, setName] = useState("");
+  const [databaseUrl, setDatabaseUrl] = useState("");
+  const [schemas, setSchemas] = useState("");
+  const [workspaceId, setWorkspaceId] = useState("default");
+  const [domainId, setDomainId] = useState("default");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const record = await api.adminListDataSources(props.token);
+      setSources(record.data_sources || []);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [props.token]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function create() {
+    if (!name.trim() || !databaseUrl.trim()) {
+      setError("请填写名称和 Oracle 数据库 URL");
+      return;
+    }
+    setError("");
+    setMessage("");
+    try {
+      const payload: DataSourceCreateRequest = {
+        workspace_id: workspaceId.trim() || "default",
+        domain_id: domainId.trim() || "default",
+        name: name.trim(),
+        database_url: databaseUrl.trim(),
+        schemas: schemas
+          .split(/[\s,，]+/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+      await api.adminCreateDataSource(props.token, payload);
+      setName("");
+      setDatabaseUrl("");
+      setSchemas("");
+      setMessage("已创建数据源（状态：草稿）。点“同步 schema”开始接入。");
+      await load();
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  async function sync(record: DataSourceRecord) {
+    setBusyId(record.id);
+    setError("");
+    setMessage("");
+    try {
+      const syncSchemas = record.schemas || [];
+      const response: SchemaSyncResponse = await api.adminSyncDataSource(
+        props.token,
+        record.id,
+        syncSchemas,
+      );
+      const warnings = response.warnings || [];
+      setWarningsBySource((prev) => ({ ...prev, [record.id]: warnings }));
+      const userActioned = warnings.some((w) => w.includes("Semantic Studio"));
+      const summary =
+        `同步完成：${response.table_count} 张表、${response.column_count} 列、${response.relationship_count} 物理外键。` +
+        (userActioned
+          ? " 业务字段（说明/时间字段/join）未被覆盖，请在「表结构」里补充。"
+          : " 无新增待补充内容。");
+      setMessage(summary);
+      await load();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="studio-form">
+      <div className="studio-form-head">
+        <div className="studio-badge">数据源接入</div>
+        <h3>注册 Oracle 数据源并同步物理表结构</h3>
+      </div>
+      <p className="studio-subsection-hint">
+        同步只读取物理事实（表/列/主键/外键），作为占位写入「表结构」。
+        业务内容（表说明、中文列说明、时间字段、join、口径）请到「表结构」里人工补充，
+        再次同步不会覆盖这些人工内容。
+      </p>
+
+      <fieldset className="studio-fieldset">
+        <legend>新建数据源</legend>
+        <TextField
+          label="名称"
+          value={name}
+          onChange={setName}
+          placeholder="业务库 / 一厂产线 Oracle"
+        />
+        <TextField
+          label="Oracle URL"
+          value={databaseUrl}
+          onChange={setDatabaseUrl}
+          placeholder="oracle+oracledb://admin:***@host:1521/?service_name=FREEPDB1"
+        />
+        <TextField
+          label="schema（逗号分隔，留空取默认）"
+          value={schemas}
+          onChange={setSchemas}
+          placeholder="ADMIN, PROD"
+        />
+        <div className="studio-grid-2">
+          <TextField label="workspace_id" value={workspaceId} onChange={setWorkspaceId} />
+          <TextField label="domain_id" value={domainId} onChange={setDomainId} />
+        </div>
+        <button className="primary-button" type="button" onClick={() => void create()}>
+          创建数据源
+        </button>
+      </fieldset>
+
+      {(error || message) && (
+        <div className={error ? "studio-error" : "studio-message"}>
+          {error || message}
+        </div>
+      )}
+
+      <div className="studio-subsection">
+        <div className="studio-subsection-head">
+          <span>已接入数据源</span>
+          <button
+            type="button"
+            className="studio-mini-add"
+            onClick={() => void load()}
+            disabled={loading}
+          >
+            刷新
+          </button>
+        </div>
+        {loading && sources.length === 0 ? (
+          <div className="studio-loading">加载中…</div>
+        ) : sources.length === 0 ? (
+          <div className="studio-empty">暂无数据源。</div>
+        ) : (
+          <ul className="studio-list-rows">
+            {sources.map((record) => (
+              <li key={record.id} className="studio-list-row">
+                <div className="studio-list-row-main">
+                  <div className="studio-list-row-title">{record.name}</div>
+                  <div className="studio-list-row-meta">
+                    {record.dialect} · 状态 {record.status}
+                    {record.schemas?.length ? ` · schema ${record.schemas.join(", ")}` : ""}
+                    {record.last_sync_at ? ` · 最近同步 ${record.last_sync_at}` : ""}
+                  </div>
+                  {record.last_error ? (
+                    <div className="studio-list-row-error">{record.last_error}</div>
+                  ) : null}
+                  {warningsBySource[record.id]?.length ? (
+                    <div className="studio-list-row-warnings">
+                      {warningsBySource[record.id].map((w, i) => (
+                        <div key={i}>· {w}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={busyId === record.id}
+                  onClick={() => void sync(record)}
+                >
+                  {busyId === record.id ? "同步中…" : "同步 schema"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------- Container ------------------------------- */
 
 export function SemanticStudio(props: { token: string; onAuthFailure?: () => void }) {
@@ -1333,6 +1532,7 @@ export function SemanticStudio(props: { token: string; onAuthFailure?: () => voi
         ))}
       </div>
       <div className="studio-body">
+        {tab === "data_sources" ? <DataSourcesEditor token={props.token} /> : null}
         {tab === "tables" ? <TablesEditor token={props.token} /> : null}
         {tab === "knowledge" ? <KnowledgeEditor token={props.token} /> : null}
         {tab === "joins" ? <JoinPatternsEditor token={props.token} /> : null}

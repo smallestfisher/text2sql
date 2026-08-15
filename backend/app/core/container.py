@@ -4,6 +4,7 @@ import logging
 
 from backend.app.core.settings import Settings, settings
 from backend.app.repositories.db_app_config_repository import DbAppConfigRepository
+from backend.app.repositories.db_data_source_repository import DbDataSourceRepository
 from backend.app.repositories.db_audit_repository import DbAuditRepository
 from backend.app.repositories.db_evaluation_run_repository import DbEvaluationRunRepository
 from backend.app.repositories.db_auth_repository import DbAuthRepository
@@ -23,6 +24,7 @@ from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.feedback_service import FeedbackService
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.metadata_service import MetadataService
+from backend.app.services.oracle_schema_introspector import OracleSchemaIntrospector
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.progress_service import ProgressService
@@ -83,6 +85,8 @@ class AppContainer:
         # Phase 2 — load editable overrides from app_config and build the
         # effective settings that the rest of the container reads from.
         self.app_config_repository = DbAppConfigRepository(self.runtime_database_connector)
+        self.data_source_repository = DbDataSourceRepository(self.runtime_database_connector)
+        self.oracle_schema_introspector = OracleSchemaIntrospector()
         try:
             overrides = self.app_config_repository.read_all()
         except Exception:
