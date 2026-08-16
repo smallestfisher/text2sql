@@ -19,6 +19,8 @@ class EvaluationCase(BaseModel):
     expected_question_type: str | None = None
     expected_metrics: list[str] = Field(default_factory=list)
     unexpected_metrics: list[str] = Field(default_factory=list)
+    expected_tables: list[str] = Field(default_factory=list)
+    unexpected_tables: list[str] = Field(default_factory=list)
     expected_dimensions: list[str] = Field(default_factory=list)
     unexpected_dimensions: list[str] = Field(default_factory=list)
     expected_sort_fields: list[str] = Field(default_factory=list)
@@ -51,10 +53,13 @@ class EvaluationResultItem(BaseModel):
     classification_domain: str | None = None
     answer_status: str | None = None
     actual_reason_code: str | None = None
+    actual_tables: list[str] = Field(default_factory=list)
     actual_metrics: list[str] = Field(default_factory=list)
     actual_dimensions: list[str] = Field(default_factory=list)
     actual_filter_fields: list[str] = Field(default_factory=list)
+    actual_sort_fields: list[str] = Field(default_factory=list)
     actual_warnings: list[str] = Field(default_factory=list)
+    elapsed_ms: int | None = None
     context_valid: bool = False
     sql_valid: bool = False
     executed: bool = False
@@ -69,6 +74,12 @@ class EvaluationRunRecord(BaseModel):
     case_count: int
     passed_count: int
     failed_count: int
+    context_valid_count: int = 0
+    sql_valid_count: int = 0
+    executed_count: int = 0
+    context_valid_rate: float = 0.0
+    sql_valid_rate: float = 0.0
+    execution_rate: float = 0.0
     items: list[EvaluationResultItem] = Field(default_factory=list)
 
 

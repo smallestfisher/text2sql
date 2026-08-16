@@ -20,9 +20,11 @@ class DbSessionRepository:
         self.database_connector.execute_write(
             """
             INSERT INTO chat_sessions (
-                session_id, user_id, title, status, current_state_json, created_at, updated_at
+                session_id, user_id, title, status, semantic_release_id,
+                current_state_json, created_at, updated_at
             ) VALUES (
-                :session_id, :user_id, :title, :status, :current_state_json, :created_at, :updated_at
+                :session_id, :user_id, :title, :status, :semantic_release_id,
+                :current_state_json, :created_at, :updated_at
             )
             """,
             {
@@ -30,6 +32,7 @@ class DbSessionRepository:
                 "user_id": session.user_id,
                 "title": session.title,
                 "status": session.status,
+                "semantic_release_id": session.semantic_release_id,
                 "current_state_json": json_dumps(session.last_state.model_dump(mode="json")) if session.last_state else None,
                 "created_at": session.created_at,
                 "updated_at": session.updated_at,
@@ -40,7 +43,8 @@ class DbSessionRepository:
     def get_session(self, session_id: str) -> ChatSession | None:
         row = self.database_connector.fetch_one(
             """
-            SELECT session_id, user_id, title, status, current_state_json, created_at, updated_at
+            SELECT session_id, user_id, title, status, semantic_release_id,
+                   current_state_json, created_at, updated_at
             FROM chat_sessions
             WHERE session_id = :session_id
             """,
@@ -54,6 +58,7 @@ class DbSessionRepository:
             user_id=row["user_id"],
             title=row["title"],
             status=row["status"],
+            semantic_release_id=row.get("semantic_release_id"),
             created_at=as_datetime(row["created_at"]),
             updated_at=as_datetime(row["updated_at"]),
             last_state=SessionState(**state_payload) if state_payload else None,
@@ -63,7 +68,8 @@ class DbSessionRepository:
         if user_id is None:
             rows = self.database_connector.fetch_all(
                 """
-                SELECT session_id, user_id, title, status, current_state_json, created_at, updated_at
+                SELECT session_id, user_id, title, status, semantic_release_id,
+                       current_state_json, created_at, updated_at
                 FROM chat_sessions
                 WHERE user_id IS NULL
                 ORDER BY updated_at DESC, created_at DESC
@@ -74,7 +80,8 @@ class DbSessionRepository:
         else:
             rows = self.database_connector.fetch_all(
                 """
-                SELECT session_id, user_id, title, status, current_state_json, created_at, updated_at
+                SELECT session_id, user_id, title, status, semantic_release_id,
+                       current_state_json, created_at, updated_at
                 FROM chat_sessions
                 WHERE user_id = :user_id
                 ORDER BY updated_at DESC, created_at DESC
@@ -91,6 +98,7 @@ class DbSessionRepository:
                     user_id=row["user_id"],
                     title=row["title"],
                     status=row["status"],
+                    semantic_release_id=row.get("semantic_release_id"),
                     created_at=as_datetime(row["created_at"]),
                     updated_at=as_datetime(row["updated_at"]),
                     last_state=SessionState(**state_payload) if state_payload else None,
@@ -101,7 +109,8 @@ class DbSessionRepository:
     def list_sessions(self, limit: int = 50, offset: int = 0) -> list[ChatSession]:
         rows = self.database_connector.fetch_all(
             """
-            SELECT session_id, user_id, title, status, current_state_json, created_at, updated_at
+            SELECT session_id, user_id, title, status, semantic_release_id,
+                   current_state_json, created_at, updated_at
             FROM chat_sessions
             ORDER BY updated_at DESC, created_at DESC
             LIMIT :limit OFFSET :offset
@@ -117,6 +126,7 @@ class DbSessionRepository:
                     user_id=row["user_id"],
                     title=row["title"],
                     status=row["status"],
+                    semantic_release_id=row.get("semantic_release_id"),
                     created_at=as_datetime(row["created_at"]),
                     updated_at=as_datetime(row["updated_at"]),
                     last_state=SessionState(**state_payload) if state_payload else None,

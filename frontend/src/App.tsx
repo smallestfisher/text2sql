@@ -13,7 +13,6 @@ import type {
   EvaluationReplayResult,
   EvaluationSummary,
   FeedbackSummary,
-  AdminMetadataReloadResponse,
   AdminVectorPrewarmResponse,
   ContextSummary,
   MetadataOverview,
@@ -34,12 +33,6 @@ const SESSION_KEY = "text2sql.frontend.session";
 const VIEW_MODE_KEY = "text2sql.frontend.view_mode";
 const THEME_KEY = "text2sql.frontend.theme";
 const ADMIN_TABLE_PAGE_SIZE = 5;
-const PROMPTS = [
-  "本月销售额相比上月增长了多少？",
-  "各产品线的销售趋势如何？",
-  "哪个区域的业绩表现最好？",
-  "客户数量的变化趋势是什么？",
-];
 const WORKSPACE_FEATURES = [
   {
     icon: "chat",
@@ -74,7 +67,7 @@ const ADMIN_SIDEBAR_LINKS = [
 const ADMIN_DASHBOARD_SECTION_LABELS: Record<string, string> = {
   runtime_status: "运行状态",
   metrics: "指标汇总",
-  metadata_overview: "元数据概览",
+  metadata_overview: "已发布语义",
   users: "用户列表",
   roles: "角色列表",
   query_logs: "日志审计",
@@ -214,6 +207,7 @@ function App() {
   }
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [starterQuestions, setStarterQuestions] = useState<string[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     () => window.localStorage.getItem(SESSION_KEY) || null,
   );
@@ -259,7 +253,7 @@ function App() {
   const [adminSessionCount, setAdminSessionCount] = useState(0);
   const [adminReplayPendingTraceId, setAdminReplayPendingTraceId] = useState<string | null>(null);
   const [adminReplayResult, setAdminReplayResult] = useState<EvaluationReplayResult | null>(null);
-  const [adminIndexActionPending, setAdminIndexActionPending] = useState<"" | "reload" | "prewarm" | "reload_prewarm">("");
+  const [adminIndexActionPending, setAdminIndexActionPending] = useState<"" | "prewarm">("");
   const [adminIndexActionMessage, setAdminIndexActionMessage] = useState("");
   const [userForm, setUserForm] = useState<UserUpsertPayload>(emptyUserForm);
   const [resetPasswordTarget, setResetPasswordTarget] = useState<UserContext | null>(null);
@@ -394,7 +388,17 @@ function App() {
   }
 
   async function refreshSessions(authToken: string, preferredSessionId?: string | null) {
-    const response = await api.listSessions(authToken);
+    const [sessionResult, semanticResult] = await Promise.allSettled([
+      api.listSessions(authToken),
+      api.domainSummary(),
+    ]);
+    if (sessionResult.status === "rejected") {
+      throw sessionResult.reason;
+    }
+    setStarterQuestions(
+      semanticResult.status === "fulfilled" ? semanticResult.value.starter_questions || [] : [],
+    );
+    const response = sessionResult.value;
     setSessions(response.sessions);
     const nextSessionId =
       preferredSessionId && response.sessions.some((item) => item.id === preferredSessionId)
@@ -496,6 +500,7 @@ function App() {
     setViewMode("workspace");
     setAuthError("");
     setSessions([]);
+    setStarterQuestions([]);
     setSelectedSessionId(null);
     setMessages([]);
     setSessionState(null);
@@ -777,49 +782,23 @@ function App() {
     }
   }
 
-  function formatIndexActionMessage(
-    mode: "reload" | "prewarm" | "reload_prewarm",
-    reloadResult?: AdminMetadataReloadResponse | null,
-    prewarmResult?: AdminVectorPrewarmResponse | null,
-  ) {
-    if (mode === "reload") {
-      return reloadResult?.reloaded
-        ? `元数据已重载${reloadResult.semantic_version ? `，语义版本 ${reloadResult.semantic_version}` : ""}。`
-        : "元数据重载请求已完成。";
-    }
-    if (mode === "prewarm") {
-      return prewarmResult?.accepted
-        ? `向量索引预热已触发，当前${prewarmResult.pending_rebuild ? "仍有待重建任务" : "状态已同步"}。`
-        : "向量索引预热请求已完成。";
-    }
-    return [
-      reloadResult?.reloaded
-        ? `元数据已重载${reloadResult.semantic_version ? `，语义版本 ${reloadResult.semantic_version}` : ""}`
-        : "元数据重载已完成",
-      prewarmResult?.accepted
-        ? `向量索引已预热${prewarmResult.pending_rebuild ? "，仍有待重建任务" : ""}`
-        : "向量索引预热请求已完成",
-    ].join("；");
+  function formatIndexActionMessage(prewarmResult?: AdminVectorPrewarmResponse | null) {
+    return prewarmResult?.accepted
+      ? `当前发布版本的向量索引已触发预热${prewarmResult.pending_rebuild ? "，仍有待重建任务" : "。"}`
+      : "当前发布版本的向量索引预热请求已完成。";
   }
 
-  async function handleAdminIndexAction(mode: "reload" | "prewarm" | "reload_prewarm") {
+  async function handleAdminIndexAction() {
     if (!token) {
       return;
     }
     setAdminError("");
     setAdminIndexActionMessage("");
-    setAdminIndexActionPending(mode);
+    setAdminIndexActionPending("prewarm");
     try {
-      let reloadResult: AdminMetadataReloadResponse | null = null;
-      let prewarmResult: AdminVectorPrewarmResponse | null = null;
-      if (mode === "reload" || mode === "reload_prewarm") {
-        reloadResult = await api.adminReloadMetadata(token);
-      }
-      if (mode === "prewarm" || mode === "reload_prewarm") {
-        prewarmResult = await api.adminPrewarmVectorIndex(token);
-      }
+      const prewarmResult = await api.adminPrewarmVectorIndex(token);
       await loadAdminData(token);
-      setAdminIndexActionMessage(formatIndexActionMessage(mode, reloadResult, prewarmResult));
+      setAdminIndexActionMessage(formatIndexActionMessage(prewarmResult));
     } catch (error) {
       setAdminError(errorMessage(error));
     } finally {
@@ -1184,9 +1163,7 @@ function App() {
               onUserPageChange={setAdminUserPage}
               onLogPageChange={setAdminLogPage}
               onReplayLog={(log) => void handleAdminReplayLog(log)}
-              onReloadMetadata={() => void handleAdminIndexAction("reload")}
-              onPrewarmVector={() => void handleAdminIndexAction("prewarm")}
-              onReloadAndPrewarm={() => void handleAdminIndexAction("reload_prewarm")}
+              onPrewarmVector={() => void handleAdminIndexAction()}
               onRefresh={() => token && void loadAdminData(token)}
             />
           </main>
@@ -1261,19 +1238,22 @@ function App() {
                         <img className="workspace-illustration" src={workspaceIllustration} alt="" aria-hidden="true" />
                       </div>
 
-                      <div className="welcome-prompt-title">
-                        <AppIcon name="spark" />
-                        <span>试试这些示例问题，快速开始</span>
-                      </div>
-
-                      <div className="prompt-grid">
-                        {PROMPTS.map((prompt) => (
-                          <button key={prompt} className="prompt-card" type="button" onClick={() => void handleSend(prompt)}>
-                            <AppIcon name={prompt.includes("区域") ? "location" : prompt.includes("客户") ? "users" : "trend"} />
-                            <span className="prompt-card-title">{prompt}</span>
-                          </button>
-                        ))}
-                      </div>
+                      {starterQuestions.length ? (
+                        <>
+                          <div className="welcome-prompt-title">
+                            <AppIcon name="spark" />
+                            <span>试试当前语义版本中的示例问题</span>
+                          </div>
+                          <div className="prompt-grid">
+                            {starterQuestions.map((prompt, index) => (
+                              <button key={prompt} className="prompt-card" type="button" onClick={() => void handleSend(prompt)}>
+                                <AppIcon name={index % 2 ? "trend" : "spark"} />
+                                <span className="prompt-card-title">{prompt}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      ) : null}
 
                       <div className="workspace-feature-strip">
                         {WORKSPACE_FEATURES.map((feature) => (
@@ -1346,7 +1326,7 @@ function App() {
                           void handleSend();
                         }
                       }}
-                      placeholder="输入你的业务问题，例如：本月销售额相比上月增长了多少？"
+                      placeholder="输入你的业务问题，例如：查询某项指标的近期趋势"
                     />
 
                     <div className="composer-footer">
@@ -1510,7 +1490,7 @@ function AdminView(props: {
   evaluationSummary: EvaluationSummary | null;
   replayPendingTraceId: string | null;
   replayResult: EvaluationReplayResult | null;
-  indexActionPending: "" | "reload" | "prewarm" | "reload_prewarm";
+  indexActionPending: "" | "prewarm";
   indexActionMessage: string;
   themeMode: ThemeMode;
   token: string;
@@ -1525,9 +1505,7 @@ function AdminView(props: {
   onUserPageChange: (page: number) => void;
   onLogPageChange: (page: number) => void;
   onReplayLog: (log: RuntimeQueryLogRecord) => void;
-  onReloadMetadata: () => void;
   onPrewarmVector: () => void;
-  onReloadAndPrewarm: () => void;
   onRefresh: () => void;
 }) {
   const vectorStatus = props.runtimeStatus?.vector_retrieval;
@@ -1611,7 +1589,7 @@ function AdminView(props: {
         <div>
           <div className="admin-page-badge">管理中心</div>
           <h1>系统监控与用户管理</h1>
-          <p>统一管理数据源、模型能力、用户权限、查询日志与系统运行状态，保障企业数据分析安全、稳定、可审计。</p>
+          <p>统一管理业务数据库状态、模型能力、用户权限、查询日志与系统运行状态，保障企业数据分析安全、稳定、可审计。</p>
         </div>
 
         <div className="admin-head-actions">
@@ -1699,14 +1677,8 @@ function AdminView(props: {
               检索索引
             </div>
             <div className="admin-inline-actions">
-              <button className="secondary-button" type="button" onClick={props.onReloadMetadata} disabled={Boolean(props.indexActionPending)}>
-                重载元数据
-              </button>
               <button className="secondary-button" type="button" onClick={props.onPrewarmVector} disabled={Boolean(props.indexActionPending)}>
-                重建向量索引
-              </button>
-              <button className="primary-button" type="button" onClick={props.onReloadAndPrewarm} disabled={Boolean(props.indexActionPending)}>
-                重载并重建
+                重建当前版本索引
               </button>
             </div>
           </div>
@@ -2693,7 +2665,6 @@ function resolveDisplayDomain(input: {
     input.sessionState?.subject_domain,
     input.sessionState?.topic,
     input.queryLog?.subject_domain,
-    inferDomainFromTables(input.response?.context_summary?.tables || input.sessionState?.tables || []),
   ]);
 }
 
@@ -2723,15 +2694,7 @@ function buildWorkspaceHeading(input: {
 }
 
 function formatDomainLabel(domain?: string | null) {
-  const normalized = (domain || "").trim();
-  const labels: Record<string, string> = {
-    demand: "需求",
-    inventory: "库存",
-    plan_actual: "计划实绩",
-    sales_financial: "销售财务",
-    dimension: "维度",
-  };
-  return labels[normalized] || normalized;
+  return (domain || "").trim();
 }
 
 function firstText(values: Array<string | null | undefined>) {
@@ -2766,33 +2729,6 @@ function firstKnownDomain(values: Array<string | null | undefined>) {
     }
   }
   return "";
-}
-
-function inferDomainFromTables(tables: string[]) {
-  const domains = new Set<string>();
-  for (const table of tables) {
-    const normalized = table.trim();
-    if (["daily_inventory", "oms_inventory"].includes(normalized)) {
-      domains.add("inventory");
-    }
-    if (["v_demand", "p_demand"].includes(normalized)) {
-      domains.add("demand");
-    }
-    if (["daily_PLAN", "monthly_plan_approved", "weekly_rolling_plan", "production_actuals"].includes(normalized)) {
-      domains.add("plan_actual");
-    }
-    if (normalized === "sales_financial_perf") {
-      domains.add("sales_financial");
-    }
-    if (["product_attributes", "product_mapping"].includes(normalized)) {
-      domains.add("dimension");
-    }
-  }
-  if (domains.size === 1) {
-    return Array.from(domains)[0];
-  }
-  const primaryDomains = Array.from(domains).filter((domain) => domain !== "dimension");
-  return primaryDomains.length === 1 ? primaryDomains[0] : "";
 }
 
 function getStringArrayValue(value: unknown) {

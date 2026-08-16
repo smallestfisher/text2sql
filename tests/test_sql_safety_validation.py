@@ -4,14 +4,15 @@ import inspect
 import unittest
 
 from backend.app.models.sql_generation_context import SqlGenerationContext
-from backend.app.services.domain_config_loader import DomainConfigLoader
+from backend.app.models.semantic_types import FilterItem, SortItem, VersionContext
 from backend.app.services.sql_validator import SqlValidator
+from tests.fixture_metadata import fixture_domain_config
 
 
 class SqlSafetyValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.domain_config = DomainConfigLoader().load()
+        cls.domain_config = fixture_domain_config()
         cls.sql_validator = SqlValidator()
 
     def test_dangerous_keyword_inside_literal_is_not_rejected(self) -> None:
@@ -159,6 +160,38 @@ class SqlSafetyValidationTests(unittest.TestCase):
 
         self.assertIn("sql references sources outside sql context: sales_financial_perf", result.errors)
         self.assertIn("context_mismatch_risk", result.risk_flags)
+
+    def test_explicit_structured_constraints_are_validation_errors(self) -> None:
+        sql_context = SqlGenerationContext(
+            question_type="new",
+            subject_domain="inventory",
+            tables=["daily_inventory"],
+            dimensions=["product_ID"],
+            filters=[FilterItem(field="GRADE", op="=", value="A")],
+            sort=[SortItem(field="product_ID", order="asc")],
+            version_context=VersionContext(field="version_code", value="latest"),
+            limit=10,
+        )
+
+        result = self.sql_validator.validate_detailed(
+            "SELECT SUM(panel_qty) AS total_qty FROM daily_inventory FETCH FIRST 10 ROWS ONLY",
+            self.domain_config,
+            sql_context=sql_context,
+        )
+
+        self.assertTrue(any("does not cover all sql context filters" in item for item in result.errors))
+        self.assertTrue(any("does not group by required dimensions" in item for item in result.errors))
+        self.assertTrue(any("does not preserve sql context sort fields" in item for item in result.errors))
+        self.assertTrue(any("missing required version filter" in item for item in result.errors))
+        self.assertTrue(any("does not project required dimensions" in item for item in result.errors))
+
+    def test_missing_result_limit_is_a_validation_error(self) -> None:
+        result = self.sql_validator.validate_detailed(
+            "SELECT product_ID FROM daily_inventory",
+            self.domain_config,
+        )
+
+        self.assertTrue(any("sql does not include FETCH FIRST" in item for item in result.errors))
 
 
 if __name__ == "__main__":

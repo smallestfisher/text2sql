@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
 from backend.app.models.trace import TraceRecord
-from backend.app.repositories.db_repository_utils import json_dumps
+from backend.app.repositories.db_repository_utils import as_datetime, json_dumps
 from backend.app.services.database_connector import DatabaseConnector
 
 
@@ -26,6 +26,7 @@ class ConversationPersistenceService:
         if warnings:
             trace.warnings.extend(warnings)
         with self.database_connector.begin() as connection:
+            semantic_release_id = response.semantic_release_id
             if request.session_id:
                 self._persist_session_exchange(connection, request=request, response=response, trace=trace)
             self._upsert_query_log(
@@ -35,10 +36,16 @@ class ConversationPersistenceService:
                 response=response,
                 warnings=warnings,
             )
-            self._replace_retrieval_logs(connection, trace_id=trace.trace_id, retrieval=response.retrieval)
+            self._replace_retrieval_logs(
+                connection,
+                trace_id=trace.trace_id,
+                semantic_release_id=semantic_release_id,
+                retrieval=response.retrieval,
+            )
             self._replace_sql_audit(
                 connection,
                 trace_id=trace.trace_id,
+                semantic_release_id=semantic_release_id,
                 sql=response.sql,
                 context_validation=response.context_validation,
                 sql_validation=response.sql_validation,
@@ -63,6 +70,14 @@ class ConversationPersistenceService:
         if warnings:
             trace.warnings.extend(warnings)
         with self.database_connector.begin() as connection:
+            semantic_release_id = (
+                request.semantic_release_id
+                or (
+                    request.session_state.semantic_release_id
+                    if request.session_state is not None
+                    else None
+                )
+            )
             self._upsert_query_log(
                 connection,
                 trace=trace,
@@ -76,11 +91,17 @@ class ConversationPersistenceService:
                 sql_validation=sql_validation,
                 execution=execution,
             )
-            self._replace_retrieval_logs(connection, trace_id=trace.trace_id, retrieval=retrieval)
+            self._replace_retrieval_logs(
+                connection,
+                trace_id=trace.trace_id,
+                semantic_release_id=semantic_release_id,
+                retrieval=retrieval,
+            )
             if context_validation is not None and sql_validation is not None:
                 self._replace_sql_audit(
                     connection,
                     trace_id=trace.trace_id,
+                    semantic_release_id=semantic_release_id,
                     sql=sql,
                     context_validation=context_validation,
                     sql_validation=sql_validation,
@@ -92,17 +113,22 @@ class ConversationPersistenceService:
         if session_id is None:
             return
         now = datetime.now(timezone.utc)
+        lock_clause = "" if self.database_connector.sql_dialect.name == "sqlite" else " FOR UPDATE"
         session_row = connection.execute(
             text(
-                """
-                SELECT title
+                f"""
+                SELECT title, semantic_release_id
                 FROM chat_sessions
                 WHERE session_id = :session_id
-                FOR UPDATE
+                {lock_clause}
                 """
             ),
             {"session_id": session_id},
         ).mappings().first()
+        if session_row is not None:
+            bound_release_id = session_row.get("semantic_release_id")
+            if bound_release_id != response.semantic_release_id:
+                raise RuntimeError("session semantic release changed during query persistence")
         last_message_row = connection.execute(
             text(
                 """
@@ -117,9 +143,7 @@ class ConversationPersistenceService:
         ).mappings().first()
         base_created_at = now
         if last_message_row is not None and last_message_row.get("created_at") is not None:
-            candidate = last_message_row["created_at"]
-            if candidate.tzinfo is None:
-                candidate = candidate.replace(tzinfo=timezone.utc)
+            candidate = as_datetime(last_message_row["created_at"])
             candidate = candidate + timedelta(seconds=1)
             if candidate > base_created_at:
                 base_created_at = candidate
@@ -169,6 +193,7 @@ class ConversationPersistenceService:
                         WHEN title IS NULL OR title = '' THEN :title
                         ELSE title
                     END,
+                    semantic_release_id = :semantic_release_id,
                     current_state_json = :current_state_json,
                     updated_at = :updated_at
                 WHERE session_id = :session_id
@@ -177,6 +202,7 @@ class ConversationPersistenceService:
             {
                 "session_id": session_id,
                 "title": title,
+                "semantic_release_id": response.semantic_release_id,
                 "current_state_json": state_json,
                 "updated_at": assistant_created_at,
             },
@@ -232,6 +258,18 @@ class ConversationPersistenceService:
         params = {
             "trace_id": trace.trace_id,
             "session_id": request.session_id,
+            "semantic_release_id": (
+                response.semantic_release_id
+                if response is not None
+                else (
+                    request.semantic_release_id
+                    or (
+                        request.session_state.semantic_release_id
+                        if request.session_state is not None
+                        else None
+                    )
+                )
+            ),
             "user_id": request.user_context.user_id if request.user_context else None,
             "question": request.question,
             "effective_question": (
@@ -284,6 +322,7 @@ class ConversationPersistenceService:
                 """
                 UPDATE query_logs
                 SET session_id = :session_id,
+                    semantic_release_id = :semantic_release_id,
                     user_id = :user_id,
                     question = :question,
                     effective_question = :effective_question,
@@ -323,14 +362,14 @@ class ConversationPersistenceService:
             text(
                 """
                 INSERT INTO query_logs (
-                    trace_id, session_id, user_id, question, effective_question,
+                    trace_id, session_id, semantic_release_id, user_id, question, effective_question,
                     context_relation, question_decision, conversation_summary, semantic_brief,
                     question_context_json, question_type, subject_domain,
                     answer_status, context_valid, context_risk_level, context_risk_flags_json,
                     sql_valid, sql_risk_level, sql_risk_flags_json,
                     executed, row_count, warnings_json, trace_json, created_at
                 ) VALUES (
-                    :trace_id, :session_id, :user_id, :question, :effective_question,
+                    :trace_id, :session_id, :semantic_release_id, :user_id, :question, :effective_question,
                     :context_relation, :question_decision, :conversation_summary, :semantic_brief,
                     :question_context_json, :question_type, :subject_domain,
                     :answer_status, :context_valid, :context_risk_level, :context_risk_flags_json,
@@ -379,7 +418,14 @@ class ConversationPersistenceService:
                     },
                 )
 
-    def _replace_retrieval_logs(self, connection, *, trace_id: str, retrieval) -> None:
+    def _replace_retrieval_logs(
+        self,
+        connection,
+        *,
+        trace_id: str,
+        semantic_release_id: str | None,
+        retrieval,
+    ) -> None:
         connection.execute(
             text("DELETE FROM retrieval_logs WHERE trace_id = :trace_id"),
             {"trace_id": trace_id},
@@ -392,11 +438,13 @@ class ConversationPersistenceService:
                 text(
                     """
                     INSERT INTO retrieval_logs (
-                        retrieval_log_id, trace_id, rank_position, source_type, source_id,
+                        retrieval_log_id, trace_id, semantic_release_id,
+                        rank_position, source_type, source_id,
                         summary, retrieval_channel, source_score,
                         score, matched_features_json, metadata_json, created_at
                     ) VALUES (
-                        :retrieval_log_id, :trace_id, :rank_position, :source_type, :source_id,
+                        :retrieval_log_id, :trace_id, :semantic_release_id,
+                        :rank_position, :source_type, :source_id,
                         :summary, :retrieval_channel, :source_score,
                         :score, :matched_features_json, :metadata_json, :created_at
                     )
@@ -405,6 +453,7 @@ class ConversationPersistenceService:
                 {
                     "retrieval_log_id": f"rl_{uuid.uuid4().hex[:16]}",
                     "trace_id": trace_id,
+                    "semantic_release_id": semantic_release_id,
                     "rank_position": index,
                     "source_type": hit.source_type,
                     "source_id": hit.source_id,
@@ -423,6 +472,7 @@ class ConversationPersistenceService:
         connection,
         *,
         trace_id: str,
+        semantic_release_id: str | None,
         sql: str | None,
         context_validation: ValidationResponse,
         sql_validation: ValidationResponse,
@@ -436,10 +486,12 @@ class ConversationPersistenceService:
             text(
                 """
                 INSERT INTO sql_audit_logs (
-                    sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
+                    sql_audit_id, trace_id, semantic_release_id, sql_text,
+                    context_valid, context_risk_level, context_risk_flags_json,
                     sql_valid, executed, sql_risk_level, sql_risk_flags_json, row_count, warnings_json, errors_json, created_at
                 ) VALUES (
-                    :sql_audit_id, :trace_id, :sql_text, :context_valid, :context_risk_level, :context_risk_flags_json,
+                    :sql_audit_id, :trace_id, :semantic_release_id, :sql_text,
+                    :context_valid, :context_risk_level, :context_risk_flags_json,
                     :sql_valid, :executed, :sql_risk_level, :sql_risk_flags_json, :row_count, :warnings_json, :errors_json, :created_at
                 )
                 """
@@ -447,6 +499,7 @@ class ConversationPersistenceService:
             {
                 "sql_audit_id": f"sa_{uuid.uuid4().hex[:16]}",
                 "trace_id": trace_id,
+                "semantic_release_id": semantic_release_id,
                 "sql_text": sql,
                 "context_valid": context_validation.valid,
                 "context_risk_level": context_validation.risk_level,

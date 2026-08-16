@@ -3,38 +3,49 @@ import { api, isAuthFailure } from "./api";
 import type {
   BusinessKnowledgeDocument,
   BusinessKnowledgeEntry,
-  DataSourceCollectionResponse,
-  DataSourceCreateRequest,
-  DataSourceRecord,
-  ExampleRecord,
+  DatabaseStatusRecord,
   ExampleTemplateRecord,
   JoinPatternEntry,
   JoinPatternsDocument,
-  SchemaSyncResponse,
+  SemanticAssetDraftRecord,
+  SemanticReleaseDetailRecord,
+  SemanticReleaseRecord,
   TableSchemaEntry,
   TablesDocument,
 } from "./types";
 
-type AssetTab = "tables" | "knowledge" | "joins" | "examples" | "data_sources";
+type AssetTab = "database" | "tables" | "knowledge" | "joins" | "examples";
 
 const ASSET_TABS: { key: AssetTab; label: string; hint: string }[] = [
-  { key: "data_sources", label: "数据源", hint: "接入 Oracle 并同步物理表结构" },
+  { key: "database", label: "数据库结构", hint: "当前连接、Schema 同步与发布" },
   { key: "tables", label: "表结构", hint: "物理表、字段、时间格式与关系" },
   { key: "knowledge", label: "业务知识", hint: "可复用业务规则、口径与禁忌" },
   { key: "joins", label: "Join Pattern", hint: "稳定的多表关联方式" },
   { key: "examples", label: "示例", hint: "人工确认的 NL2SQL few-shot" },
 ];
 
-const SUBJECT_DOMAINS = [
-  "inventory",
-  "demand",
-  "plan_actual",
-  "sales_financial",
-  "dimension",
-  "unknown",
-];
-
 const TIME_GRAINS = ["day", "week", "month", "version", "unknown"];
+
+const ASSET_LABELS: Record<string, string> = {
+  tables_metadata: "表结构",
+  business_knowledge: "业务知识",
+  join_patterns: "Join Pattern",
+  examples_template: "问题示例",
+};
+
+const SYNC_STATUS_LABELS: Record<string, string> = {
+  not_synced: "未同步",
+  syncing: "同步中",
+  ready: "已同步",
+  error: "同步失败",
+};
+
+const RELEASE_STATUS_LABELS: Record<string, string> = {
+  building: "构建中",
+  active: "当前生效",
+  inactive: "历史版本",
+  failed: "发布失败",
+};
 
 function errorText(error: unknown): string {
   if (error instanceof Error) {
@@ -55,6 +66,18 @@ function parseLines(value: string): string[] {
     .split("\n")
     .map((item) => item.trimEnd())
     .filter((item) => item.trim().length > 0);
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatWarnings(warnings: string[]): string {
+  return warnings.length ? `；${warnings.join("；")}` : "";
 }
 
 function TextField(props: {
@@ -216,6 +239,7 @@ function StudioStatusBar(props: {
   onSave: () => void;
   onReset: () => void;
   saveLabel?: string;
+  idleLabel?: string;
 }) {
   return (
     <div className="studio-statusbar">
@@ -227,7 +251,7 @@ function StudioStatusBar(props: {
         ) : props.dirty ? (
           <span className="studio-status-dirty">有未保存的修改</span>
         ) : (
-          <span className="studio-status-idle">已同步</span>
+          <span className="studio-status-idle">{props.idleLabel || "已同步"}</span>
         )}
       </div>
       <div className="studio-status-actions">
@@ -260,6 +284,7 @@ function emptyTable(): TableSchemaEntry {
 
 function TablesEditor(props: { token: string }) {
   const [doc, setDoc] = useState<TablesDocument | null>(null);
+  const [version, setVersion] = useState<number | null>(null);
   const [baseline, setBaseline] = useState<string>("");
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -271,9 +296,10 @@ function TablesEditor(props: { token: string }) {
     setLoading(true);
     setError("");
     try {
-      const record = await api.adminGetMetadataDocument(props.token, "tables_metadata");
+      const record = await api.adminGetSemanticDraft(props.token, "tables_metadata");
       const content = (record.content || {}) as TablesDocument;
       setDoc(content);
+      setVersion(record.version);
       setBaseline(JSON.stringify(content));
       const names = Object.keys(content);
       setSelected((current) => (current && names.includes(current) ? current : names[0] || null));
@@ -319,7 +345,7 @@ function TablesEditor(props: { token: string }) {
   }
 
   function createTable() {
-    if (!doc) {
+    if (!doc || version === null) {
       return;
     }
     let name = "new_table";
@@ -348,18 +374,24 @@ function TablesEditor(props: { token: string }) {
   }
 
   async function save() {
-    if (!doc) {
+    if (!doc || version === null) {
       return;
     }
     setSaving(true);
     setError("");
     setMessage("");
     try {
-      const record = await api.adminUpdateMetadataDocument(props.token, "tables_metadata", doc);
-      const content = (record.content || {}) as TablesDocument;
+      const response = await api.adminUpdateSemanticDraft(
+        props.token,
+        "tables_metadata",
+        doc,
+        version,
+      );
+      const content = (response.draft.content || {}) as TablesDocument;
       setDoc(content);
+      setVersion(response.draft.version);
       setBaseline(JSON.stringify(content));
-      setMessage("表结构已保存并触发检索重载");
+      setMessage(`表结构草稿已保存（v${response.draft.version}）${formatWarnings(response.warnings)}`);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -433,31 +465,14 @@ function TablesEditor(props: { token: string }) {
             rows={6}
             mono
             hint="每行一个字段，可保留 (中文说明)"
-            placeholder={"id\nMONTH (需求起始月份)"}
+            placeholder={"id\nperiod (业务时间字段)"}
           />
-          <div className="studio-grid-3">
-            <TextField
-              label="MAIN_KEY"
-              value={String(current.MAIN_KEY || "")}
-              onChange={(value) => patchTable({ MAIN_KEY: value })}
-              placeholder="COL_A,COL_B"
-            />
-            <TextField
-              label="month_col"
-              value={String(current.month_col || "")}
-              onChange={(value) => patchTable({ month_col: value })}
-            />
-            <TextField
-              label="version_col"
-              value={String(current.version_col || "")}
-              onChange={(value) => patchTable({ version_col: value })}
-            />
-          </div>
           <TextField
-            label="date_col"
-            value={String(current.date_col || "")}
-            onChange={(value) => patchTable({ date_col: value })}
-            placeholder="按需填写，日粒度表的日期字段"
+            label="MAIN_KEY"
+            value={String(current.MAIN_KEY || "")}
+            onChange={(value) => patchTable({ MAIN_KEY: value })}
+            placeholder="COL_A,COL_B"
+            hint="来自物理主键；复合主键使用逗号分隔"
           />
 
           <div className="studio-subsection">
@@ -522,6 +537,19 @@ function TablesEditor(props: { token: string }) {
                       })
                     }
                   />
+                  <input
+                    className="studio-input"
+                    value={(spec.semantic_names || []).join(", ")}
+                    placeholder="语义名，逗号分隔"
+                    onChange={(event) =>
+                      patchTable({
+                        time_fields: {
+                          ...timeFields,
+                          [fieldName]: { ...spec, semantic_names: parseTokens(event.target.value) },
+                        },
+                      })
+                    }
+                  />
                   <button
                     type="button"
                     className="studio-mini-remove"
@@ -547,7 +575,7 @@ function TablesEditor(props: { token: string }) {
                 type="button"
                 className="studio-mini-add"
                 onClick={() => {
-                  let name = "FGCODE";
+                  let name = "SOURCE_FIELD";
                   let index = 1;
                   while (relationships[name]) {
                     name = `FIELD_${index++}`;
@@ -609,6 +637,7 @@ function TablesEditor(props: { token: string }) {
             onSave={() => void save()}
             onReset={reset}
             saveLabel="保存表结构"
+            idleLabel={version === null ? "草稿未加载" : `草稿 v${version}`}
           />
         </div>
       ) : (
@@ -626,6 +655,7 @@ function emptyKnowledgeEntry(id: string): BusinessKnowledgeEntry {
 
 function KnowledgeEditor(props: { token: string }) {
   const [doc, setDoc] = useState<BusinessKnowledgeDocument | null>(null);
+  const [version, setVersion] = useState<number | null>(null);
   const [baseline, setBaseline] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -637,12 +667,13 @@ function KnowledgeEditor(props: { token: string }) {
     setLoading(true);
     setError("");
     try {
-      const record = await api.adminGetMetadataDocument(props.token, "business_knowledge");
+      const record = await api.adminGetSemanticDraft(props.token, "business_knowledge");
       const content = (record.content || { entries: [] }) as BusinessKnowledgeDocument;
       if (!Array.isArray(content.entries)) {
         content.entries = [];
       }
       setDoc(content);
+      setVersion(record.version);
       setBaseline(JSON.stringify(content));
       setSelected((current) => {
         const ids = content.entries.map((entry) => entry.id);
@@ -674,7 +705,7 @@ function KnowledgeEditor(props: { token: string }) {
   }
 
   function createEntry() {
-    if (!doc) {
+    if (!doc || version === null) {
       return;
     }
     let id = "new_knowledge_entry";
@@ -701,7 +732,7 @@ function KnowledgeEditor(props: { token: string }) {
   }
 
   async function save() {
-    if (!doc) {
+    if (!doc || version === null) {
       return;
     }
     const ids = entries.map((entry) => entry.id.trim());
@@ -717,11 +748,17 @@ function KnowledgeEditor(props: { token: string }) {
     setError("");
     setMessage("");
     try {
-      const record = await api.adminUpdateMetadataDocument(props.token, "business_knowledge", doc);
-      const content = (record.content || { entries: [] }) as BusinessKnowledgeDocument;
+      const response = await api.adminUpdateSemanticDraft(
+        props.token,
+        "business_knowledge",
+        doc,
+        version,
+      );
+      const content = (response.draft.content || { entries: [] }) as BusinessKnowledgeDocument;
       setDoc(content);
+      setVersion(response.draft.version);
       setBaseline(JSON.stringify(content));
-      setMessage("业务知识已保存并触发检索重载");
+      setMessage(`业务知识草稿已保存（v${response.draft.version}）${formatWarnings(response.warnings)}`);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -779,7 +816,7 @@ function KnowledgeEditor(props: { token: string }) {
             label="业务域 domains"
             values={current.domains || []}
             onChange={(values) => patchEntry({ domains: values })}
-            hint={`可选：${SUBJECT_DOMAINS.join(" / ")}`}
+            hint="由当前业务语义定义，可配置多个域"
           />
           <TokenListField
             label="相关表 tables"
@@ -808,6 +845,7 @@ function KnowledgeEditor(props: { token: string }) {
             onSave={() => void save()}
             onReset={reset}
             saveLabel="保存业务知识"
+            idleLabel={version === null ? "草稿未加载" : `草稿 v${version}`}
           />
         </div>
       ) : (
@@ -825,6 +863,7 @@ function emptyJoinPattern(id: string): JoinPatternEntry {
 
 function JoinPatternsEditor(props: { token: string }) {
   const [doc, setDoc] = useState<JoinPatternsDocument | null>(null);
+  const [version, setVersion] = useState<number | null>(null);
   const [baseline, setBaseline] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -836,12 +875,13 @@ function JoinPatternsEditor(props: { token: string }) {
     setLoading(true);
     setError("");
     try {
-      const record = await api.adminGetMetadataDocument(props.token, "join_patterns");
+      const record = await api.adminGetSemanticDraft(props.token, "join_patterns");
       const content = (record.content || { patterns: [] }) as JoinPatternsDocument;
       if (!Array.isArray(content.patterns)) {
         content.patterns = [];
       }
       setDoc(content);
+      setVersion(record.version);
       setBaseline(JSON.stringify(content));
       setSelected((current) => {
         const ids = content.patterns.map((pattern) => pattern.id);
@@ -873,7 +913,7 @@ function JoinPatternsEditor(props: { token: string }) {
   }
 
   function createPattern() {
-    if (!doc) {
+    if (!doc || version === null) {
       return;
     }
     let id = "new_join_pattern";
@@ -900,7 +940,7 @@ function JoinPatternsEditor(props: { token: string }) {
   }
 
   async function save() {
-    if (!doc) {
+    if (!doc || version === null) {
       return;
     }
     const ids = patterns.map((pattern) => pattern.id.trim());
@@ -916,11 +956,17 @@ function JoinPatternsEditor(props: { token: string }) {
     setError("");
     setMessage("");
     try {
-      const record = await api.adminUpdateMetadataDocument(props.token, "join_patterns", doc);
-      const content = (record.content || { patterns: [] }) as JoinPatternsDocument;
+      const response = await api.adminUpdateSemanticDraft(
+        props.token,
+        "join_patterns",
+        doc,
+        version,
+      );
+      const content = (response.draft.content || { patterns: [] }) as JoinPatternsDocument;
       setDoc(content);
+      setVersion(response.draft.version);
       setBaseline(JSON.stringify(content));
-      setMessage("Join pattern 已保存并触发检索重载");
+      setMessage(`Join Pattern 草稿已保存（v${response.draft.version}）${formatWarnings(response.warnings)}`);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -995,7 +1041,7 @@ function JoinPatternsEditor(props: { token: string }) {
             onChange={(values) => patchPattern({ join_path: values })}
             rows={5}
             mono
-            hint="每行一个连接条件，如 a.FGCODE = b.FGCODE"
+            hint="每行一个连接条件，如 source.id = target.source_id"
           />
           <LineListField
             label="说明 notes"
@@ -1012,6 +1058,7 @@ function JoinPatternsEditor(props: { token: string }) {
             onSave={() => void save()}
             onReset={reset}
             saveLabel="保存 join pattern"
+            idleLabel={version === null ? "草稿未加载" : `草稿 v${version}`}
           />
         </div>
       ) : (
@@ -1036,20 +1083,16 @@ type ExampleDraft = {
   result_shape: string;
 };
 
-function recordToDraft(record: ExampleRecord): ExampleDraft {
-  // coverage_tags is derived as ["real", subject_domain, ...tags]; strip the two
-  // derived leading values back to the author-supplied tags.
-  const derived = new Set<string>(["real", record.subject_domain]);
-  const tags = (record.coverage_tags || []).filter((tag) => !derived.has(tag));
+function templateToDraft(record: ExampleTemplateRecord): ExampleDraft {
   return {
-    id: record.id,
+    id: record.id || "",
     isNew: false,
     question: record.question,
     sql: record.sql,
     subject_domain: record.subject_domain || "unknown",
     metrics: record.metrics || [],
     dimensions: record.dimensions || [],
-    tags,
+    tags: record.tags || [],
     notes: record.notes || "",
     result_shape: record.result_shape || "",
   };
@@ -1057,14 +1100,10 @@ function recordToDraft(record: ExampleRecord): ExampleDraft {
 
 function draftToTemplate(draft: ExampleDraft): ExampleTemplateRecord {
   const template: ExampleTemplateRecord = {
+    id: draft.id.trim(),
     question: draft.question.trim(),
     sql: draft.sql.trim(),
   };
-  if (!draft.isNew) {
-    template.id = draft.id;
-  } else if (draft.id.trim()) {
-    template.id = draft.id.trim();
-  }
   if (draft.subject_domain && draft.subject_domain !== "unknown") {
     template.subject_domain = draft.subject_domain;
   }
@@ -1087,7 +1126,8 @@ function draftToTemplate(draft: ExampleDraft): ExampleTemplateRecord {
 }
 
 function ExamplesEditor(props: { token: string }) {
-  const [records, setRecords] = useState<ExampleRecord[]>([]);
+  const [records, setRecords] = useState<ExampleTemplateRecord[]>([]);
+  const [version, setVersion] = useState<number | null>(null);
   const [draft, setDraft] = useState<ExampleDraft | null>(null);
   const [baseline, setBaseline] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -1100,9 +1140,15 @@ function ExamplesEditor(props: { token: string }) {
     setLoading(true);
     setError("");
     try {
-      const response = await api.adminListExamples(props.token);
-      const sorted = response.examples.slice().sort((a, b) => a.id.localeCompare(b.id));
+      const record = await api.adminGetSemanticDraft(props.token, "examples_template");
+      const content = Array.isArray(record.content)
+        ? (record.content as ExampleTemplateRecord[])
+        : [];
+      const sorted = content
+        .map((item, index) => ({ ...item, id: item.id?.trim() || `example_${index + 1}` }))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
       setRecords(sorted);
+      setVersion(record.version);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -1121,7 +1167,7 @@ function ExamplesEditor(props: { token: string }) {
     if (!record) {
       return;
     }
-    const nextDraft = recordToDraft(record);
+    const nextDraft = templateToDraft(record);
     setDraft(nextDraft);
     setBaseline(JSON.stringify(nextDraft));
     setSelected(id);
@@ -1130,8 +1176,13 @@ function ExamplesEditor(props: { token: string }) {
   }
 
   function createExample() {
+    let id = "new_example";
+    let index = 1;
+    while (records.some((record) => record.id === id)) {
+      id = `new_example_${index++}`;
+    }
     const nextDraft: ExampleDraft = {
-      id: "",
+      id,
       isNew: true,
       question: "",
       sql: "",
@@ -1154,11 +1205,15 @@ function ExamplesEditor(props: { token: string }) {
   }
 
   async function save() {
-    if (!draft) {
+    if (!draft || version === null) {
       return;
     }
-    if (!draft.question.trim() || !draft.sql.trim()) {
-      setError("question 和 sql 必填");
+    if (!draft.id.trim() || !draft.question.trim() || !draft.sql.trim()) {
+      setError("ID、question 和 sql 必填");
+      return;
+    }
+    if (records.some((record) => record.id === draft.id.trim() && record.id !== selected)) {
+      setError(`示例 ID 已存在：${draft.id.trim()}`);
       return;
     }
     setSaving(true);
@@ -1166,15 +1221,30 @@ function ExamplesEditor(props: { token: string }) {
     setMessage("");
     try {
       const template = draftToTemplate(draft);
-      const response = draft.isNew
-        ? await api.adminCreateExample(props.token, template)
-        : await api.adminUpdateExample(props.token, draft.id, template);
-      await load();
-      const savedDraft = recordToDraft(response.example);
+      const nextRecords = draft.isNew
+        ? [...records, template]
+        : records.map((record) => (record.id === selected ? template : record));
+      const response = await api.adminUpdateSemanticDraft(
+        props.token,
+        "examples_template",
+        nextRecords,
+        version,
+      );
+      const savedRecords = Array.isArray(response.draft.content)
+        ? (response.draft.content as ExampleTemplateRecord[])
+            .map((item, index) => ({ ...item, id: item.id?.trim() || `example_${index + 1}` }))
+            .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+        : [];
+      const saved = savedRecords.find((record) => record.id === template.id) || template;
+      const savedDraft = templateToDraft(saved);
+      setRecords(savedRecords);
+      setVersion(response.draft.version);
       setDraft(savedDraft);
       setBaseline(JSON.stringify(savedDraft));
-      setSelected(response.example.id);
-      setMessage(draft.isNew ? "示例已新增并触发检索重载" : "示例已更新并触发检索重载");
+      setSelected(saved.id || null);
+      setMessage(
+        `问题示例草稿已保存（v${response.draft.version}）${formatWarnings(response.warnings)}`,
+      );
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -1192,9 +1262,9 @@ function ExamplesEditor(props: { token: string }) {
   }
 
   const items: StudioListItem[] = records.map((record) => ({
-    id: record.id,
-    title: record.question.slice(0, 42) || record.id,
-    subtitle: record.subject_domain,
+    id: record.id || "",
+    title: record.question.slice(0, 42) || record.id || "未命名示例",
+    subtitle: record.subject_domain || "unknown",
   }));
 
   if (loading && !records.length) {
@@ -1218,23 +1288,14 @@ function ExamplesEditor(props: { token: string }) {
               label="ID"
               value={draft.id}
               onChange={(value) => patchDraft({ id: value })}
-              placeholder={draft.isNew ? "留空则由 question 自动生成" : undefined}
-              hint={draft.isNew ? "新增示例可留空自动生成" : "编辑已有示例时不建议修改 id"}
+              hint="草稿内稳定且唯一；修改已有 ID 会作为重命名保存"
             />
-            <div className="studio-domain-picker">
-              <span className="studio-field-label">业务域</span>
-              <select
-                className="studio-input"
-                value={draft.subject_domain}
-                onChange={(event) => patchDraft({ subject_domain: event.target.value })}
-              >
-                {SUBJECT_DOMAINS.map((domain) => (
-                  <option key={domain} value={domain}>
-                    {domain}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <TextField
+              label="业务域 subject_domain"
+              value={draft.subject_domain}
+              onChange={(value) => patchDraft({ subject_domain: value })}
+              hint="填写当前语义版本定义的业务域；无法归类时可填 unknown"
+            />
           </div>
           <AreaField
             label="问题 question"
@@ -1268,7 +1329,7 @@ function ExamplesEditor(props: { token: string }) {
             label="标签 tags"
             values={draft.tags}
             onChange={(values) => patchDraft({ tags: values })}
-            hint="覆盖标签；保存后会自动附加 real 与业务域"
+            hint="用于检索和覆盖分析"
           />
           <TextField
             label="result_shape"
@@ -1290,6 +1351,7 @@ function ExamplesEditor(props: { token: string }) {
             onSave={() => void save()}
             onReset={reset}
             saveLabel={draft.isNew ? "新增示例" : "保存示例"}
+            idleLabel={version === null ? "草稿未加载" : `草稿 v${version}`}
           />
         </div>
       ) : (
@@ -1299,30 +1361,38 @@ function ExamplesEditor(props: { token: string }) {
   );
 }
 
-/* ----------------------------- Data Sources ----------------------------- */
+/* ------------------------ Database and releases ------------------------ */
 
-function DataSourcesEditor(props: { token: string }) {
-  const [sources, setSources] = useState<DataSourceRecord[]>([]);
+function DatabaseStructurePanel(props: { token: string }) {
+  const [status, setStatus] = useState<DatabaseStatusRecord | null>(null);
+  const [drafts, setDrafts] = useState<SemanticAssetDraftRecord[]>([]);
+  const [releases, setReleases] = useState<SemanticReleaseRecord[]>([]);
+  const [activeRelease, setActiveRelease] = useState<SemanticReleaseDetailRecord | null>(null);
+  const [includeViews, setIncludeViews] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  // Warnings surfaced by the most recent sync, keyed by data source id.
-  const [warningsBySource, setWarningsBySource] = useState<Record<string, string[]>>({});
-
-  // New-source form state.
-  const [name, setName] = useState("");
-  const [databaseUrl, setDatabaseUrl] = useState("");
-  const [schemas, setSchemas] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("default");
-  const [domainId, setDomainId] = useState("default");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const record = await api.adminListDataSources(props.token);
-      setSources(record.data_sources || []);
+      const [database, draftCollection, releaseCollection] = await Promise.all([
+        api.adminDatabaseStatus(props.token),
+        api.adminListSemanticDrafts(props.token),
+        api.adminListSemanticReleases(props.token),
+      ]);
+      setStatus(database);
+      setDrafts(draftCollection.drafts || []);
+      setReleases(releaseCollection.releases || []);
+      if (database.active_release_id) {
+        const detail = await api.adminGetSemanticRelease(props.token, database.active_release_id);
+        setActiveRelease(detail.release);
+      } else {
+        setActiveRelease(null);
+      }
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -1334,161 +1404,235 @@ function DataSourcesEditor(props: { token: string }) {
     void load();
   }, [load]);
 
-  async function create() {
-    if (!name.trim() || !databaseUrl.trim()) {
-      setError("请填写名称和 Oracle 数据库 URL");
-      return;
-    }
+  async function syncSchema() {
+    setSyncing(true);
     setError("");
     setMessage("");
     try {
-      const payload: DataSourceCreateRequest = {
-        workspace_id: workspaceId.trim() || "default",
-        domain_id: domainId.trim() || "default",
-        name: name.trim(),
-        database_url: databaseUrl.trim(),
-        schemas: schemas
-          .split(/[\s,，]+/)
-          .map((s) => s.trim())
-          .filter(Boolean),
-      };
-      await api.adminCreateDataSource(props.token, payload);
-      setName("");
-      setDatabaseUrl("");
-      setSchemas("");
-      setMessage("已创建数据源（状态：草稿）。点“同步 schema”开始接入。");
-      await load();
-    } catch (err) {
-      setError(errorText(err));
-    }
-  }
-
-  async function sync(record: DataSourceRecord) {
-    setBusyId(record.id);
-    setError("");
-    setMessage("");
-    try {
-      const syncSchemas = record.schemas || [];
-      const response: SchemaSyncResponse = await api.adminSyncDataSource(
-        props.token,
-        record.id,
-        syncSchemas,
+      const response = await api.adminSyncDatabase(props.token, includeViews);
+      setMessage(
+        `Schema 同步完成：${response.database.table_count} 张表、` +
+          `${response.database.column_count} 列、${response.database.relationship_count} 个物理关系；` +
+          `表结构草稿更新到 v${response.draft_version}${formatWarnings(response.warnings)}`,
       );
-      const warnings = response.warnings || [];
-      setWarningsBySource((prev) => ({ ...prev, [record.id]: warnings }));
-      const userActioned = warnings.some((w) => w.includes("Semantic Studio"));
-      const summary =
-        `同步完成：${response.table_count} 张表、${response.column_count} 列、${response.relationship_count} 物理外键。` +
-        (userActioned
-          ? " 业务字段（说明/时间字段/join）未被覆盖，请在「表结构」里补充。"
-          : " 无新增待补充内容。");
-      setMessage(summary);
       await load();
     } catch (err) {
       setError(errorText(err));
     } finally {
-      setBusyId(null);
+      setSyncing(false);
     }
   }
 
+  async function publish() {
+    if (!window.confirm("发布当前全部语义草稿，并在准备完成后切换为当前生效版本？")) {
+      return;
+    }
+    setPublishing(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await api.adminPublishSemanticRelease(props.token);
+      setMessage(
+        `语义版本 v${response.release.version} 已发布并生效${formatWarnings(response.warnings)}`,
+      );
+      await load();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  const hasUnpublishedChanges = drafts.some(
+    (draft) => activeRelease?.draft_versions[draft.name] !== draft.version,
+  );
+
+  if (loading && !status) {
+    return <div className="studio-loading">加载数据库与语义版本…</div>;
+  }
+
   return (
-    <div className="studio-form">
-      <div className="studio-form-head">
-        <div className="studio-badge">数据源接入</div>
-        <h3>注册 Oracle 数据源并同步物理表结构</h3>
-      </div>
-      <p className="studio-subsection-hint">
-        同步只读取物理事实（表/列/主键/外键），作为占位写入「表结构」。
-        业务内容（表说明、中文列说明、时间字段、join、口径）请到「表结构」里人工补充，
-        再次同步不会覆盖这些人工内容。
-      </p>
-
-      <fieldset className="studio-fieldset">
-        <legend>新建数据源</legend>
-        <TextField
-          label="名称"
-          value={name}
-          onChange={setName}
-          placeholder="业务库 / 一厂产线 Oracle"
-        />
-        <TextField
-          label="Oracle URL"
-          value={databaseUrl}
-          onChange={setDatabaseUrl}
-          placeholder="oracle+oracledb://admin:***@host:1521/?service_name=FREEPDB1"
-        />
-        <TextField
-          label="schema（逗号分隔，留空取默认）"
-          value={schemas}
-          onChange={setSchemas}
-          placeholder="ADMIN, PROD"
-        />
-        <div className="studio-grid-2">
-          <TextField label="workspace_id" value={workspaceId} onChange={setWorkspaceId} />
-          <TextField label="domain_id" value={domainId} onChange={setDomainId} />
-        </div>
-        <button className="primary-button" type="button" onClick={() => void create()}>
-          创建数据源
-        </button>
-      </fieldset>
-
+    <div className="studio-control">
       {(error || message) && (
-        <div className={error ? "studio-error" : "studio-message"}>
-          {error || message}
-        </div>
+        <div className={error ? "studio-error" : "studio-message"}>{error || message}</div>
       )}
 
-      <div className="studio-subsection">
-        <div className="studio-subsection-head">
-          <span>已接入数据源</span>
+      <section className="studio-control-section">
+        <div className="studio-control-head">
+          <div>
+            <h3>当前数据库</h3>
+            <p>连接由部署配置提供，工作台只读取状态并同步允许范围内的物理结构。</p>
+          </div>
           <button
             type="button"
             className="studio-mini-add"
             onClick={() => void load()}
-            disabled={loading}
+            disabled={loading || syncing || publishing}
           >
-            刷新
+            {loading ? "刷新中" : "刷新"}
           </button>
         </div>
-        {loading && sources.length === 0 ? (
-          <div className="studio-loading">加载中…</div>
-        ) : sources.length === 0 ? (
-          <div className="studio-empty">暂无数据源。</div>
+
+        <dl className="studio-definition-grid">
+          <div>
+            <dt>连接状态</dt>
+            <dd className={status?.connected ? "is-positive" : "is-error"}>
+              {status?.connected ? "已连接" : status?.configured ? "连接失败" : "未配置"}
+            </dd>
+          </div>
+          <div>
+            <dt>数据库方言</dt>
+            <dd>{status?.dialect || "oracle"}</dd>
+          </div>
+          <div>
+            <dt>Schema 范围</dt>
+            <dd>{status?.schema_scope.length ? status.schema_scope.join(", ") : "默认 schema"}</dd>
+          </div>
+          <div>
+            <dt>同步状态</dt>
+            <dd>{SYNC_STATUS_LABELS[status?.sync_status || "not_synced"]}</dd>
+          </div>
+          <div>
+            <dt>物理目录</dt>
+            <dd>
+              {status?.table_count || 0} 表 / {status?.column_count || 0} 列 /{" "}
+              {status?.relationship_count || 0} 关系
+            </dd>
+          </div>
+          <div>
+            <dt>最近同步</dt>
+            <dd>{formatDateTime(status?.last_sync_at)}</dd>
+          </div>
+          <div>
+            <dt>Catalog hash</dt>
+            <dd>
+              <code title={status?.catalog_hash || undefined}>
+                {status?.catalog_hash ? status.catalog_hash.slice(0, 12) : "-"}
+              </code>
+            </dd>
+          </div>
+          <div>
+            <dt>当前语义版本</dt>
+            <dd>{activeRelease ? `v${activeRelease.version}` : "尚未发布"}</dd>
+          </div>
+        </dl>
+
+        {status?.last_error ? <div className="studio-inline-error">{status.last_error}</div> : null}
+
+        <div className="studio-control-actions">
+          <label className="studio-check">
+            <input
+              type="checkbox"
+              checked={includeViews}
+              onChange={(event) => setIncludeViews(event.target.checked)}
+              disabled={syncing}
+            />
+            <span>包含视图</span>
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void syncSchema()}
+            disabled={syncing || !status?.configured}
+          >
+            {syncing ? "正在同步" : "同步 Schema"}
+          </button>
+        </div>
+      </section>
+
+      <section className="studio-control-section">
+        <div className="studio-control-head">
+          <div>
+            <h3>语义草稿</h3>
+            <p>各编辑器保存到独立草稿版本；发布时生成完整、不可变的语义快照。</p>
+          </div>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void publish()}
+            disabled={publishing || status?.sync_status !== "ready" || !hasUnpublishedChanges}
+          >
+            {publishing ? "正在发布" : "发布新版本"}
+          </button>
+        </div>
+
+        <div className="studio-table-wrap">
+          <table className="studio-control-table">
+            <thead>
+              <tr>
+                <th>资产</th>
+                <th>草稿版本</th>
+                <th>发布状态</th>
+                <th>最近保存</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drafts.map((draft) => {
+                const publishedVersion = activeRelease?.draft_versions[draft.name];
+                const state =
+                  publishedVersion === undefined
+                    ? "未发布"
+                    : publishedVersion === draft.version
+                      ? "已发布"
+                      : `有新修改（已发布 v${publishedVersion}）`;
+                return (
+                  <tr key={draft.name}>
+                    <td>{ASSET_LABELS[draft.name] || draft.name}</td>
+                    <td>v{draft.version}</td>
+                    <td className={publishedVersion === draft.version ? "is-muted" : "is-pending"}>
+                      {state}
+                    </td>
+                    <td>{formatDateTime(draft.updated_at)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="studio-control-section">
+        <div className="studio-control-head">
+          <div>
+            <h3>发布历史</h3>
+            <p>历史版本只读；失败的发布不会改变当前生效版本。</p>
+          </div>
+        </div>
+
+        {releases.length ? (
+          <div className="studio-table-wrap">
+            <table className="studio-control-table">
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>状态</th>
+                  <th>发布人</th>
+                  <th>创建时间</th>
+                  <th>生效时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {releases.map((release) => (
+                  <tr key={release.id}>
+                    <td>
+                      <strong>v{release.version}</strong>
+                    </td>
+                    <td className={release.status === "failed" ? "is-error" : ""}>
+                      {RELEASE_STATUS_LABELS[release.status] || release.status}
+                      {release.error ? <div className="studio-cell-error">{release.error}</div> : null}
+                    </td>
+                    <td>{release.created_by || "-"}</td>
+                    <td>{formatDateTime(release.created_at)}</td>
+                    <td>{formatDateTime(release.activated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <ul className="studio-list-rows">
-            {sources.map((record) => (
-              <li key={record.id} className="studio-list-row">
-                <div className="studio-list-row-main">
-                  <div className="studio-list-row-title">{record.name}</div>
-                  <div className="studio-list-row-meta">
-                    {record.dialect} · 状态 {record.status}
-                    {record.schemas?.length ? ` · schema ${record.schemas.join(", ")}` : ""}
-                    {record.last_sync_at ? ` · 最近同步 ${record.last_sync_at}` : ""}
-                  </div>
-                  {record.last_error ? (
-                    <div className="studio-list-row-error">{record.last_error}</div>
-                  ) : null}
-                  {warningsBySource[record.id]?.length ? (
-                    <div className="studio-list-row-warnings">
-                      {warningsBySource[record.id].map((w, i) => (
-                        <div key={i}>· {w}</div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <button
-                  className="primary-button"
-                  type="button"
-                  disabled={busyId === record.id}
-                  onClick={() => void sync(record)}
-                >
-                  {busyId === record.id ? "同步中…" : "同步 schema"}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="studio-empty-inline">尚无发布记录。</div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
@@ -1496,7 +1640,7 @@ function DataSourcesEditor(props: { token: string }) {
 /* ------------------------------- Container ------------------------------- */
 
 export function SemanticStudio(props: { token: string; onAuthFailure?: () => void }) {
-  const [tab, setTab] = useState<AssetTab>("tables");
+  const [tab, setTab] = useState<AssetTab>("database");
 
   // Surface auth failures to the parent so it can clear the session.
   useEffect(() => {
@@ -1510,12 +1654,11 @@ export function SemanticStudio(props: { token: string; onAuthFailure?: () => voi
   }, [props]);
 
   return (
-    <div className="studio-root" id="admin-semantic">
+    <div className="studio-root">
       <div className="studio-head">
         <div>
-          <div className="studio-badge">语义资产</div>
-          <h2>表结构 / 业务知识 / Join Pattern / 示例</h2>
-          <p>直接维护 SQL 生成依赖的语义事实。保存后自动触发检索重载，无需重启服务。</p>
+          <h2>语义工作台</h2>
+          <p>同步当前数据库结构，维护语义草稿，并将完整快照发布给新的查询会话。</p>
         </div>
       </div>
       <div className="studio-tabs">
@@ -1532,7 +1675,7 @@ export function SemanticStudio(props: { token: string; onAuthFailure?: () => voi
         ))}
       </div>
       <div className="studio-body">
-        {tab === "data_sources" ? <DataSourcesEditor token={props.token} /> : null}
+        {tab === "database" ? <DatabaseStructurePanel token={props.token} /> : null}
         {tab === "tables" ? <TablesEditor token={props.token} /> : null}
         {tab === "knowledge" ? <KnowledgeEditor token={props.token} /> : null}
         {tab === "joins" ? <JoinPatternsEditor token={props.token} /> : null}

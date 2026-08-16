@@ -26,6 +26,7 @@
     },
     {
       "id": "demand_horizontal_month_mapping",
+      "priority": 5,
       "domains": ["demand"],
       "tables": ["p_demand", "v_demand"],
       "keywords": ["MONTH", "REQUIREMENT_QTY", "NEXT_REQUIREMENT", "LAST_REQUIREMENT", "MONTH4", "MONTH5", "MONTH6", "MONTH7", "PM_VERSION", "最新P版", "需求量", "demand_month"],
@@ -93,6 +94,7 @@
     },
     {
       "id": "inventory_oms_age_bucket_distribution",
+      "always_include": true,
       "domains": ["inventory"],
       "tables": ["oms_inventory"],
       "keywords": ["OMS库存", "TTL物量", "库龄分布", "<3M", "3-6M", "6-12M", ">12M"],

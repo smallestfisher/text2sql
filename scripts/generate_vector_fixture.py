@@ -49,10 +49,9 @@ def _text_key(text: str) -> str:
 def main() -> None:
     _load_dotenv()
 
-    from backend.app.services.domain_config_loader import DomainConfigLoader
     from backend.app.services.retrieval_service import RetrievalService
-    from backend.app.services.semantic_runtime import SemanticRuntime
     from backend.app.services.vector_retriever import VectorRetriever
+    from tests.fixture_metadata import fixture_semantic_runtime
 
     api_key = os.environ.get("VECTOR_API_KEY")
     api_base = os.environ.get("VECTOR_API_BASE")
@@ -73,11 +72,11 @@ def main() -> None:
         dimensions=dimensions,
     )
 
-    domain_config = DomainConfigLoader().load()
-    semantic_runtime = SemanticRuntime(domain_config)
+    domain_config, metadata_registry, semantic_runtime = fixture_semantic_runtime()
     service = RetrievalService(
         domain_config=domain_config,
         semantic_runtime=semantic_runtime,
+        metadata_registry=metadata_registry,
     )
 
     texts: set[str] = {doc["text"] for doc in service.corpus_documents}

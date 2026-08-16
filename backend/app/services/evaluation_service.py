@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
-import json
-from pathlib import Path
-import threading
 import uuid
 
-from backend.app.config import EVAL_CASES_PATH
 from backend.app.models.api import ChatRequest
 from backend.app.models.conversation import ChatMessage
 from backend.app.models.example_library import ExampleTemplateRecord
@@ -25,14 +21,13 @@ from backend.app.models.evaluation import (
     RuntimeQueryLogMaterializeCaseRequest,
 )
 from backend.app.models.sql_generation_context import SqlGenerationContext
-from backend.app.utils import atomic_write_text
 
 
 class EvaluationService:
     def __init__(
         self,
         orchestrator,
-        eval_cases_path: Path = EVAL_CASES_PATH,
+        evaluation_case_repository,
         evaluation_run_repository=None,
         session_repository=None,
         runtime_log_repository=None,
@@ -40,31 +35,22 @@ class EvaluationService:
         response_restore_service=None,
     ) -> None:
         self.orchestrator = orchestrator
-        self.eval_cases_path = eval_cases_path
+        self.evaluation_case_repository = evaluation_case_repository
         self.evaluation_run_repository = evaluation_run_repository
         self.session_repository = session_repository
         self.runtime_log_repository = runtime_log_repository
         self.auth_service = auth_service
         self.response_restore_service = response_restore_service
-        self._cases_lock = threading.RLock()
-        self.eval_cases_path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.eval_cases_path.exists():
-            atomic_write_text(self.eval_cases_path, '[]\n')
 
     def list_cases(self) -> EvaluationCaseCollection:
-        with self._cases_lock:
-            cases = self._load_cases()
+        cases = self.evaluation_case_repository.list_cases()
         return EvaluationCaseCollection(cases=cases, count=len(cases))
 
     def create_case(self, payload: dict | EvaluationCase) -> EvaluationCase:
-        with self._cases_lock:
-            case = payload if isinstance(payload, EvaluationCase) else EvaluationCase(**payload)
-            cases = self._load_cases()
-            if any(item.id == case.id for item in cases):
-                raise ValueError(f"evaluation case id already exists: {case.id}")
-            cases.append(case)
-            self._save_cases(cases)
-        return case
+        case = payload if isinstance(payload, EvaluationCase) else EvaluationCase(**payload)
+        if self.evaluation_case_repository.get(case.id) is not None:
+            raise ValueError(f"evaluation case id already exists: {case.id}")
+        return self.evaluation_case_repository.create(case)
 
     def list_runs(self) -> list[EvaluationRunRecord]:
         if self.evaluation_run_repository is not None:
@@ -80,11 +66,17 @@ class EvaluationService:
         case_count = 0
         passed_count = 0
         failed_count = 0
+        context_valid_count = 0
+        sql_valid_count = 0
+        executed_count = 0
         for run in runs:
             case_count += run.case_count
             passed_count += run.passed_count
             failed_count += run.failed_count
             for item in run.items:
+                context_valid_count += int(item.context_valid)
+                sql_valid_count += int(item.sql_valid)
+                executed_count += int(item.executed)
                 self._accumulate_dimension(by_domain, item.classification_domain or "unknown", item.passed)
                 self._accumulate_dimension(
                     by_question_type,
@@ -102,6 +94,12 @@ class EvaluationService:
             case_count=case_count,
             passed_count=passed_count,
             failed_count=failed_count,
+            context_valid_count=context_valid_count,
+            sql_valid_count=sql_valid_count,
+            executed_count=executed_count,
+            context_valid_rate=self._rate(context_valid_count, case_count),
+            sql_valid_rate=self._rate(sql_valid_count, case_count),
+            execution_rate=self._rate(executed_count, case_count),
             by_domain=self._materialize_dimension(by_domain),
             by_question_type=self._materialize_dimension(by_question_type),
             by_answer_status=self._materialize_dimension(by_answer_status),
@@ -192,6 +190,7 @@ class EvaluationService:
             coverage_tags=list(dict.fromkeys(request.coverage_tags)),
             expected_domain=snapshot.classification.subject_domain,
             expected_question_type=snapshot.classification.question_type,
+            expected_tables=self._response_tables(snapshot),
             expected_metrics=self._response_metrics(snapshot),
             expected_dimensions=self._response_dimensions(snapshot),
             expected_sort_fields=self._response_sort_fields(snapshot),
@@ -253,8 +252,7 @@ class EvaluationService:
         )
 
     def run(self, request: EvaluationRunRequest) -> EvaluationRunRecord:
-        with self._cases_lock:
-            cases = self._load_cases()
+        cases = self.evaluation_case_repository.list_cases()
         if request.case_ids:
             case_lookup = {item.id: item for item in cases}
             selected = [case_lookup[item] for item in request.case_ids if item in case_lookup]
@@ -278,10 +276,13 @@ class EvaluationService:
                     classification_domain=response.classification.subject_domain,
                     answer_status=response.answer.status if response.answer else None,
                     actual_reason_code=response.classification.reason_code,
+                    actual_tables=self._response_tables(response),
                     actual_metrics=self._response_metrics(response),
                     actual_dimensions=self._response_dimensions(response),
                     actual_filter_fields=self._extract_filter_fields(response),
+                    actual_sort_fields=self._response_sort_fields(response),
                     actual_warnings=actual_warnings,
+                    elapsed_ms=self._response_elapsed_ms(response),
                     context_valid=response.context_validation.valid,
                     sql_valid=response.sql_validation.valid,
                     executed=bool(response.execution and response.execution.executed),
@@ -351,8 +352,10 @@ class EvaluationService:
         answer_status = response.answer.status if response.answer else None
         terminal_non_sql_statuses = {"clarification_needed", "invalid"}
         actual_metrics = self._response_metrics(response)
+        actual_tables = self._response_tables(response)
         actual_dimensions = self._response_dimensions(response)
         actual_filter_fields = self._extract_filter_fields(response)
+        actual_sort_fields = self._response_sort_fields(response)
         actual_reason_code = response.classification.reason_code
         actual_warnings = self._collect_response_warnings(response)
         if case.expected_domain and response.classification.subject_domain != case.expected_domain:
@@ -375,10 +378,30 @@ class EvaluationService:
             unexpected_metrics = [item for item in case.unexpected_metrics if item in actual_metrics]
             if unexpected_metrics:
                 failures.append("unexpected_metrics=" + ",".join(unexpected_metrics))
+        if case.expected_tables:
+            missing_tables = [item for item in case.expected_tables if item not in actual_tables]
+            if missing_tables:
+                failures.append("missing_tables=" + ",".join(missing_tables))
+        if case.unexpected_tables:
+            unexpected_tables = [item for item in case.unexpected_tables if item in actual_tables]
+            if unexpected_tables:
+                failures.append("unexpected_tables=" + ",".join(unexpected_tables))
         if case.expected_dimensions:
             missing_dimensions = [item for item in case.expected_dimensions if item not in actual_dimensions]
             if missing_dimensions:
                 failures.append("missing_dimensions=" + ",".join(missing_dimensions))
+        if case.unexpected_dimensions:
+            unexpected_dimensions = [item for item in case.unexpected_dimensions if item in actual_dimensions]
+            if unexpected_dimensions:
+                failures.append("unexpected_dimensions=" + ",".join(unexpected_dimensions))
+        if case.expected_sort_fields:
+            missing_sort_fields = [item for item in case.expected_sort_fields if item not in actual_sort_fields]
+            if missing_sort_fields:
+                failures.append("missing_sort_fields=" + ",".join(missing_sort_fields))
+        if case.unexpected_sort_fields:
+            unexpected_sort_fields = [item for item in case.unexpected_sort_fields if item in actual_sort_fields]
+            if unexpected_sort_fields:
+                failures.append("unexpected_sort_fields=" + ",".join(unexpected_sort_fields))
         if case.expected_filter_fields:
             missing_filter_fields = [
                 item for item in case.expected_filter_fields if item not in actual_filter_fields
@@ -412,6 +435,10 @@ class EvaluationService:
         state = getattr(response, "next_session_state", None)
         return list(getattr(state, "metrics", []) or [])
 
+    def _response_tables(self, response) -> list[str]:
+        state = getattr(response, "next_session_state", None)
+        return list(getattr(state, "tables", []) or [])
+
     def _response_dimensions(self, response) -> list[str]:
         state = getattr(response, "next_session_state", None)
         return list(getattr(state, "dimensions", []) or [])
@@ -419,6 +446,21 @@ class EvaluationService:
     def _response_sort_fields(self, response) -> list[str]:
         state = getattr(response, "next_session_state", None)
         return [item.field for item in list(getattr(state, "sort", []) or [])]
+
+    def _response_elapsed_ms(self, response) -> int | None:
+        trace = getattr(response, "trace", None)
+        for step in reversed(list(getattr(trace, "steps", []) or [])):
+            if getattr(step, "name", None) != "chat_total":
+                continue
+            value = (getattr(step, "metadata", {}) or {}).get("elapsed_ms")
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _rate(self, numerator: int, denominator: int) -> float:
+        return round(numerator / denominator, 4) if denominator else 0.0
 
     def _collect_response_warnings(self, response) -> list[str]:
         warnings: list[str] = []
@@ -447,11 +489,10 @@ class EvaluationService:
         return f"runtime_{domain_prefix}_{question_prefix}_{trace_id[-8:]}"
 
     def _get_case(self, case_id: str) -> EvaluationCase:
-        with self._cases_lock:
-            for item in self._load_cases():
-                if item.id == case_id:
-                    return item
-        raise KeyError(case_id)
+        case = self.evaluation_case_repository.get(case_id)
+        if case is None:
+            raise KeyError(case_id)
+        return case
 
     def _resolve_replay_user(
         self,
@@ -558,6 +599,7 @@ class EvaluationService:
         answer_status = normalize_answer_status(query_log.answer_status, executed=bool(query_log.executed))
         answer = AnswerPayload(status=answer_status, summary=query_log.answer_status or answer_status)
         return ChatResponse(
+            semantic_release_id=query_log.semantic_release_id,
             classification=classification,
             context_summary=ContextSummary(
                 question_type=sql_context.question_type,
@@ -580,6 +622,7 @@ class EvaluationService:
             execution=execution,
             next_session_state=SessionState(
                 session_id=query_log.session_id,
+                semantic_release_id=query_log.semantic_release_id,
                 subject_domain=sql_context.subject_domain,
                 entities=list(sql_context.entities),
                 tables=list(sql_context.tables),
@@ -671,16 +714,6 @@ class EvaluationService:
             if step.name == step_name and step.metadata:
                 return step.metadata
         return {}
-
-    def _load_cases(self) -> list[EvaluationCase]:
-        payload = json.loads(self.eval_cases_path.read_text(encoding='utf-8'))
-        return [EvaluationCase(**item) for item in payload]
-
-    def _save_cases(self, cases: list[EvaluationCase]) -> None:
-        atomic_write_text(
-            self.eval_cases_path,
-            json.dumps([item.model_dump(mode='json') for item in cases], ensure_ascii=False, indent=2) + "\n",
-        )
 
     def _accumulate_dimension(
         self,

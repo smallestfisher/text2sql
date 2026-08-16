@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.app.services.domain_config_loader import DomainConfigLoader
 
-TABLES_METADATA_PATH = REPO_ROOT / "semantic" / "tables.json"
+TABLES_METADATA_PATH = REPO_ROOT / "tests" / "fixtures" / "tables.json"
 
 
 def load_json(path: Path) -> dict:
@@ -32,7 +32,7 @@ def lint_schema_boundary(data: dict, tables_metadata: dict) -> list[str]:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     if sorted(nodes) != sorted(tables_metadata.keys()):
-        issues.append("semantic_graph.nodes must match semantic/tables.json table names")
+        issues.append("semantic_graph.nodes must match the fixture tables_metadata names")
 
     known_tables = set(tables_metadata.keys())
     for edge in edges:
@@ -49,8 +49,8 @@ def lint_schema_boundary(data: dict, tables_metadata: dict) -> list[str]:
 
 
 def main() -> int:
-    domain_config = DomainConfigLoader().load()
     tables_metadata = load_json(TABLES_METADATA_PATH)
+    domain_config = DomainConfigLoader(tables_metadata_path=TABLES_METADATA_PATH).load()
     issues = lint_schema_boundary(domain_config, tables_metadata)
     if not issues:
         print("schema boundary lint: ok")

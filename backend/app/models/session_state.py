@@ -43,6 +43,7 @@ class SessionStateUpdate(BaseModel):
 
 class SessionState(BaseModel):
     session_id: str
+    semantic_release_id: str | None = None
     topic: str | None = None
     conversation_summary: str | None = None
     subject_domain: SubjectDomain = "unknown"

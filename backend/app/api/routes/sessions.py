@@ -30,10 +30,13 @@ def create_session(
         container,
         default_user_context=request.user_context,
     )
-    session = container.session_service.create_session(
-        user_id=user_context.user_id if user_context else None,
-        title=request.title,
-    )
+    try:
+        session = container.session_service.create_session(
+            user_id=user_context.user_id if user_context else None,
+            title=request.title,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return SessionCreateResponse(session=session)
 
 

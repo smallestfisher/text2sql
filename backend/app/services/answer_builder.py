@@ -20,7 +20,7 @@ class AnswerBuilder:
                 status="invalid",
                 summary=summary,
                 detail=classification.reason,
-                follow_up_hint="请改成库存、需求、计划/实际、销售等业务数据查询，并尽量带上指标、对象和时间范围。",
+                follow_up_hint="请改成当前发布版本支持的业务数据查询，并尽量带上指标、对象和时间范围。",
             )
 
         if classification.need_clarification:

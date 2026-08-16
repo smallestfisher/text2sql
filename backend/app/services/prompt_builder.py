@@ -39,7 +39,10 @@ class PromptBuilder:
         metadata_registry: MetadataRegistry | None = None,
     ) -> None:
         self.semantic_runtime = semantic_runtime
-        self.metadata_registry = metadata_registry or MetadataRegistry()
+        self.metadata_registry = metadata_registry or (
+            getattr(semantic_runtime, "metadata_registry", None)
+            or MetadataRegistry(documents={})
+        )
         self.sql_dialect = SqlDialect.from_name("oracle")
         self.sql_ast_validator = SqlAstValidator()
         example_factory = (

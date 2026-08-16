@@ -24,9 +24,6 @@ _BUSINESS_FIELDS = (
     "description",
     "columns",
     "time_fields",
-    "month_col",
-    "version_col",
-    "date_col",
     "relationships",
 )
 
@@ -34,8 +31,8 @@ _BUSINESS_FIELDS = (
 def _column_name(item: str) -> str:
     """Extract the bare physical column name from a ``columns`` entry.
 
-    Semantic Studio stores columns either as a plain name (``"MONTH"``) or as
-    a name with a business annotation in parens (``"MONTH (需求起始月份)"``).
+    Semantic Studio stores columns either as a plain name (``"PERIOD"``) or as
+    a name with a business annotation in parens (``"PERIOD (业务时间字段)"``).
     The physical name is what precedes the first ``" ("``.
     """
     text = str(item).strip()
@@ -45,11 +42,7 @@ def _column_name(item: str) -> str:
     return text[:paren].strip().upper() if paren != -1 else text.upper()
 
 
-def merge_tables_metadata(
-    existing: dict,
-    introspected: dict,
-    data_source_id: str,
-) -> tuple[dict, list[str]]:
+def merge_tables_metadata(existing: dict, introspected: dict) -> tuple[dict, list[str]]:
     """Three-way merge introspected physical facts into stored tables_metadata.
 
     The stored document mixes physical facts (column names, PK, schema) with
@@ -60,32 +53,18 @@ def merge_tables_metadata(
 
     Args:
         existing: the current ``tables_metadata`` document (all sources).
-        introspected: per-table dicts from ``OracleSchemaIntrospector.inspect``
-            (already tagged with ``data_source_id``/``dialect`` by the caller).
-        data_source_id: the source whose tables are being merged.
+        introspected: per-table physical facts from ``OracleSchemaIntrospector``.
 
     Returns:
         ``(merged_document, warnings)`` — the new full ``tables_metadata`` and
         a list of human-facing suggestions/drift notices for the UI.
     """
     warnings: list[str] = []
-    # Index existing tables that belong to THIS source, so tables owned by
-    # other sources (or hand-authored tables with no data_source_id) are left
-    # untouched as a single global document region.
-    owned: dict[str, dict] = {}
-    for name, entry in (existing or {}).items():
-        if isinstance(entry, dict) and entry.get("data_source_id") == data_source_id:
-            owned[name] = entry
-
     merged: dict[str, object] = {}
-    # Carry over every existing table that is NOT owned by this source verbatim.
-    for name, entry in (existing or {}).items():
-        if name not in owned:
-            merged[name] = deepcopy(entry)
 
     for name, physical in (introspected or {}).items():
         physical = physical or {}
-        old = owned.get(name)
+        old = (existing or {}).get(name)
         if old is None:
             # New table: physical facts become the placeholder; business fields
             # that a human owns (description / time_fields / relationships) stay
@@ -107,7 +86,6 @@ def merge_tables_metadata(
                 older[field] = deepcopy(physical[field])
             else:
                 older.pop(field, None)
-        older["data_source_id"] = physical.get("data_source_id", data_source_id)
         older["dialect"] = physical.get("dialect", "oracle")
         older["source"] = "oracle_introspection"
 
@@ -145,11 +123,10 @@ def merge_tables_metadata(
 
         merged[name] = older
 
-    # Tables that this source used to own but introspection no longer sees.
-    for name in owned:
+    for name in existing or {}:
         if name not in introspected:
             # Preserve the human-authored asset verbatim; only surface drift.
-            merged[name] = deepcopy(owned[name])
+            merged[name] = deepcopy(existing[name])
             warnings.append(f"{name} 未在本次同步中读到（可能已在 Oracle 中删除，保留人工资产，未自动删除）")
 
     return merged, warnings
@@ -166,8 +143,20 @@ class OracleSchemaIntrospector:
         include_views: bool = True,
     ) -> dict:
         connector = DatabaseConnector(database_url=database_url, sql_dialect="oracle")
+        try:
+            return self.inspect_connector(connector, schemas, include_views=include_views)
+        finally:
+            connector.dispose()
+
+    def inspect_connector(
+        self,
+        connector: DatabaseConnector,
+        schemas: list[str] | None = None,
+        *,
+        include_views: bool = True,
+    ) -> dict:
         if connector.engine is None:
-            raise RuntimeError("Oracle data source is not configured")
+            raise RuntimeError("Oracle business database is not configured")
 
         inspector = inspect(connector.engine)
         selected_schemas = [item.strip().upper() for item in (schemas or []) if item.strip()]
@@ -178,6 +167,7 @@ class OracleSchemaIntrospector:
         relationship_count = 0
         column_count = 0
         warnings: list[str] = []
+        qualify_table_names = len(selected_schemas) > 1
 
         for schema in selected_schemas:
             try:
@@ -189,7 +179,9 @@ class OracleSchemaIntrospector:
                 continue
 
             for table_name in sorted(set(object_names)):
-                qualified_name = f"{schema}.{table_name}"
+                qualified_name = (
+                    f"{schema}.{table_name}" if qualify_table_names else table_name
+                )
                 columns = inspector.get_columns(table_name, schema=schema)
                 primary_key = inspector.get_pk_constraint(table_name, schema=schema) or {}
                 foreign_keys = inspector.get_foreign_keys(table_name, schema=schema) or []
@@ -217,9 +209,12 @@ class OracleSchemaIntrospector:
                     if not remote_table or len(local_columns) != len(remote_columns):
                         continue
                     for local_column, remote_column in zip(local_columns, remote_columns):
-                        relationships[str(local_column)] = (
-                            f"{remote_schema}.{remote_table}.{remote_column}"
+                        remote_name = (
+                            f"{remote_schema}.{remote_table}"
+                            if qualify_table_names
+                            else str(remote_table)
                         )
+                        relationships[str(local_column)] = f"{remote_name}.{remote_column}"
                         relationship_count += 1
 
                 comment = inspector.get_table_comment(table_name, schema=schema) or {}
@@ -232,6 +227,7 @@ class OracleSchemaIntrospector:
                     "column_details": column_details,
                     "MAIN_KEY": ",".join(primary_columns),
                     "relationships": relationships,
+                    "dialect": "oracle",
                     "source": "oracle_introspection",
                 }
                 column_count += len(columns)

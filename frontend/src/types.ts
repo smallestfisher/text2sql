@@ -60,6 +60,8 @@ export interface DomainSummary {
   entities: string[];
   metrics: string[];
   tables: string[];
+  starter_questions?: string[];
+  published?: boolean;
 }
 
 export interface FilterItem {
@@ -455,11 +457,6 @@ export interface RetrievalCorpusStatus {
   vector_sync?: VectorSyncStatus | null;
 }
 
-export interface AdminMetadataReloadResponse {
-  semantic_version?: string | null;
-  reloaded: boolean;
-}
-
 export interface AdminVectorPrewarmResponse {
   accepted: boolean;
   vector_enabled: boolean;
@@ -482,16 +479,6 @@ export interface UserUpsertPayload {
   is_active: boolean;
 }
 
-export interface MetadataDocumentRecord {
-  name: string;
-  path: string;
-  content: unknown;
-}
-
-export interface MetadataDocumentListResponse {
-  documents: string[];
-}
-
 export interface ConfigFieldRecord {
   name: string;
   group: string;
@@ -506,60 +493,96 @@ export interface ConfigCollectionResponse {
   fields: ConfigFieldRecord[];
 }
 
-export interface ConfigUpdateResponse {
-  updated: boolean;
-  reloaded: boolean;
-  fields: ConfigFieldRecord[];
-}
+export type CatalogSyncStatus = "not_synced" | "syncing" | "ready" | "error";
+export type SemanticReleaseStatus = "building" | "active" | "inactive" | "failed";
 
-export interface DataSourceRecord {
-  id: string;
-  workspace_id: string;
-  domain_id: string;
-  name: string;
-  dialect: "oracle";
-  schemas: string[];
-  description?: string | null;
-  status: "draft" | "ready" | "syncing" | "error" | "disabled";
-  enabled: boolean;
-  last_sync_at?: string | null;
-  last_error?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface DataSourceCollectionResponse {
-  data_sources: DataSourceRecord[];
-  count: number;
-}
-
-export interface DataSourceCreateRequest {
-  workspace_id: string;
-  domain_id: string;
-  name: string;
-  database_url: string;
-  schemas: string[];
-  description?: string | null;
-}
-
-export interface SchemaSyncResponse {
-  data_source: DataSourceRecord;
+export interface DatabaseStatusRecord {
+  configured: boolean;
+  connected: boolean;
+  dialect: string;
+  schema_scope: string[];
+  sync_status: CatalogSyncStatus;
   table_count: number;
   column_count: number;
   relationship_count: number;
-  tables_metadata: TablesDocument;
+  catalog_hash?: string | null;
+  active_release_id?: string | null;
+  last_sync_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface PhysicalCatalogRecord {
+  schema_scope: string[];
+  status: CatalogSyncStatus;
+  catalog: Record<string, unknown>;
+  catalog_hash?: string | null;
+  warnings: string[];
+  last_error?: string | null;
+  synced_at?: string | null;
+  updated_at: string;
+}
+
+export interface SchemaSyncResponse {
+  database: DatabaseStatusRecord;
+  catalog: PhysicalCatalogRecord;
+  draft_version: number;
+  warnings: string[];
+}
+
+export interface SemanticAssetDraftRecord {
+  name: string;
+  content: unknown;
+  version: number;
+  updated_at: string;
+}
+
+export interface SemanticDraftCollectionResponse {
+  drafts: SemanticAssetDraftRecord[];
+  count: number;
+}
+
+export interface SemanticDraftUpdateResponse {
+  draft: SemanticAssetDraftRecord;
+  warnings: string[];
+}
+
+export interface SemanticReleaseRecord {
+  id: string;
+  version: number;
+  status: SemanticReleaseStatus;
+  catalog_hash: string;
+  created_by?: string | null;
+  error?: string | null;
+  created_at: string;
+  activated_at?: string | null;
+}
+
+export interface SemanticReleaseDetailRecord extends SemanticReleaseRecord {
+  snapshot: Record<string, unknown>;
+  draft_versions: Record<string, number>;
+}
+
+export interface SemanticReleaseCollectionResponse {
+  releases: SemanticReleaseRecord[];
+  count: number;
+}
+
+export interface SemanticReleaseDetailResponse {
+  release: SemanticReleaseDetailRecord;
+}
+
+export interface SemanticPublishResponse {
+  release: SemanticReleaseDetailRecord;
   warnings: string[];
 }
 
 export interface TableTimeField {
   grain?: string;
   format?: string;
+  semantic_names?: string[];
 }
 
 export interface TableSchemaEntry {
-  workspace_id?: string;
-  domain_id?: string;
-  data_source_id?: string;
   dialect?: "oracle";
   schema?: string;
   table_name?: string;
@@ -567,9 +590,6 @@ export interface TableSchemaEntry {
   description?: string;
   columns?: string[];
   MAIN_KEY?: string;
-  month_col?: string;
-  date_col?: string;
-  version_col?: string;
   time_fields?: Record<string, TableTimeField>;
   relationships?: Record<string, string>;
   [key: string]: unknown;
@@ -617,37 +637,4 @@ export interface ExampleTemplateRecord {
   tags?: string[];
   notes?: string | null;
   result_shape?: string | null;
-}
-
-export interface ExampleRecord {
-  id: string;
-  question: string;
-  normalized_question: string;
-  intent: string;
-  scenario?: string | null;
-  coverage_tags: string[];
-  subject_domain: string;
-  question_type: string;
-  tables: string[];
-  entities: string[];
-  metrics: string[];
-  dimensions: string[];
-  filters: FilterItem[];
-  join_path: string[];
-  sql: string;
-  result_shape?: string | null;
-  notes?: string | null;
-}
-
-export interface ExampleCollectionResponse {
-  examples: ExampleRecord[];
-  count: number;
-}
-
-export interface ExampleMutationResponse {
-  created?: boolean | null;
-  updated?: boolean | null;
-  example: ExampleRecord;
-  template: ExampleTemplateRecord;
-  count?: number | null;
 }

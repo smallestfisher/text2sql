@@ -1,84 +1,61 @@
-# 待办项
+# 工程待办
 
-这里记录尚未实现、但已经形成方向约束的工程待办。待办不等同于当前架构事实；落地前需要按风险补测试和 trace 验证。
+本文只记录当前代码尚未完成的增强项和验证缺口。已放弃的多数据源、MySQL runtime、文件语义配置和兼容层不会恢复。
 
-## PromptBuilder 供应链拆分
+状态核对日期：2026-08-16。
 
-状态：进行中。第一阶段 facade 拆分已完成，SQL prompt 证据上下文组装已抽出；后续继续拆通用 metadata provider 和 renderer/helper。
+## 已完成的架构收敛
 
-目标：降低 `PromptBuilder` 膨胀风险，把 prompt 相关的工程职责拆开，但保持当前 LLM-first 架构，不把业务理解改造成代码规则引擎。
+- [x] 单实例只创建一个由 `BUSINESS_DATABASE_URL` 配置的 Oracle 业务连接器。
+- [x] 删除 workspace/domain/data source 多租户模型、连接凭据存储和“创建数据源”UI。
+- [x] runtime store 收敛为 SQLite/WAL，部署配置只来自环境变量或 Secret。
+- [x] 物理目录支持 Oracle Schema 同步、catalog hash、漂移提示和幂等合并，不覆盖人工语义。
+- [x] 四类语义草稿保存到 SQLite，并使用 optimistic version 防止并发覆盖。
+- [x] 发布生成包含 catalog hash、draft version 和 asset schema version 的不可变 snapshot。
+- [x] 发布执行结构、引用和样例 SQL 校验；检索语料准备完成后才原子激活，失败不切换 active release。
+- [x] 会话绑定 `semantic_release_id`，retrieval、prompt、validator、example 和向量缓存都按该 release 加载。
+- [x] 删除 `semantic_assets`、`app_config`、数据库向量表以及仓库语义 JSON 的生产双读/fallback。
+- [x] 删除生产前后端中的固定业务域枚举、表名推断和具体业务表名分支。
+- [x] 时间字段的 `grain`、`format` 和 `semantic_names` 由发布版本配置，并可在 Semantic Studio 中编辑。
+- [x] 空 runtime 首次启动不会导入模拟资产，必须 Schema 同步后由用户显式发布 v1。
 
-### 背景
+## 语义建模增强
 
-当前链路已经是检索必要证据后再组装 prompt，不是把全部语义资产无差别塞给大模型。风险点不在 token 是否全量输入，而在 `PromptBuilder` 容易继续承载过多职责：任务规则、上下文选择、上下文渲染、方言约束、预算裁剪和最终 payload 组装。
+- [ ] 为指标公式、聚合方式、去重粒度和默认过滤增加独立的结构化 schema 与编辑器。目前可通过业务知识和样例表达，但缺少专门模型。
+- [ ] 为枚举值、自然语言同义词和数据库值映射增加结构化编辑器与引用校验。
+- [ ] 为表/字段启停和“允许查询范围”提供显式开关，代替当前通过草稿内容增删控制。
+- [ ] 把结构漂移从同步 warning 升级为可逐项确认的 UI 工作流。
+- [ ] 增加高风险语义缺口提示，例如事实表无时间语义、多表关系无 join pattern、关键知识无关键词。
 
-### 非目标
+## 发布与评测
 
-- 不新增按业务关键词分支的 Python 规则，例如基于“库存”“账龄”“周转率”等自然语言关键词强制选择表、字段、公式或过滤条件。
-- 不把业务口径、指标定义、默认过滤、禁忌、join 方式写进代码。
-- 不把 `SqlValidator` 扩展成业务正确性裁判；validator 继续只负责只读、安全、真实表字段、Oracle 语法和结果限制等硬边界。
-- 不引入 `InventoryPromptBuilder`、`DemandPromptBuilder` 这类按业务域硬拆的 prompt builder，避免演化为场景化规则引擎。
+- [ ] 在发布流程中自动运行选定 eval 集，并把结果写入 release；当前 eval 由管理员独立触发。
+- [ ] 增加 release diff API 和 UI，展示表字段、知识、join pattern、样例及 catalog hash 的变化。
+- [ ] 增加发布原子性、失败不影响 active release、并发发布和会话版本隔离的专门集成测试。
+- [ ] 在 UI 中关联发布版本、评测运行和失败原因，支持从发布历史直接重跑。
 
-### 原则
+## 查询准确率
 
-- 业务事实继续来自 `semantic/tables.json`、`semantic/business_knowledge.json`、`semantic/join_patterns.json`、`examples/`、检索结果和向量语料。
-- 代码只负责加载、检索、排序、裁剪、渲染、组装、安全校验和审计。
-- selector 只能基于 retrieval score、source type、表覆盖度和上下文预算等证据排序，不能发明业务语义。
-- renderer 只做机械渲染，不判断具体业务问题应该怎么查。
-- 业务修复优先沉淀到语义资产、样例、join pattern、retrieval 和 prompt asset，而不是新增 Python if/else。
+- [ ] 为真实业务上线前建立不含模拟名称的客户验收集，覆盖其表结构、业务词、时间口径和高频问题。
+- [ ] 配置可用的 embedding 服务并验证 keyword/vector 融合分数；未配置时系统会降级到 BM25。
+- [ ] 持续补充“错误问题 -> trace 定位 -> draft 修复 -> 发布 -> replay/eval”的回归闭环。
+- [ ] 建立按 subject domain、问题类型和失败层级统计的准确率看板。
 
-### 当前实现
+## 最终验证
 
-已落地的第一阶段保持对外接口不变：
+- [x] 后端全量单元测试通过：183 tests，2 skipped。
+- [x] `python3 backend/domain_config_lint.py` 通过。
+- [x] 前端 `npm run build` 通过。
+- [x] Compose 后端镜像可构建，`GET /health` 返回正常。
+- [x] README、架构、项目指南和维护约束已按 release-only 运行时更新。
+- [ ] 自动化覆盖“同步 -> 配置 -> 发布 -> 新建会话 -> 查询”的完整端到端流程。
+- [ ] 自动化覆盖 Oracle 连接切换后的全新 runtime 初始化流程。
+- [ ] 补充桌面和移动视口的浏览器回归，确保 Semantic Studio 表单、历史列表和错误信息不重叠。
 
-```text
-PromptBuilder  # facade，保留现有调用入口
-  -> QuestionContextPromptBuilder
-  -> SqlGenerationPromptBuilder
-       -> SqlPromptContextAssembler
-```
+## 暂不实施
 
-`SqlPromptContextAssembler` 只组装现有 SQL prompt 证据上下文，包括 `selected_sources`、`selected_join_patterns`、`retrieved_examples`、`business_knowledge`、`context_budget`、`context_summary` 和 `evidence_context`。它不是业务域 selector，不新增按业务关键词、业务域或指标口径分支。
-
-已经补充的回归测试覆盖：
-
-- `PromptBuilder` facade 与 `QuestionContextPromptBuilder` 输出一致。
-- `PromptBuilder` facade 与 `SqlGenerationPromptBuilder` 输出一致。
-- `SqlPromptContextAssembler` 输出与最终 SQL prompt payload 字段映射一致。
-- 现有 prompt compaction、runtime rules、time format、inventory distribution 和 SQL dialect 行为继续通过。
-
-### 后续拆分
-
-后续继续保持对外接口不变，只做无行为变化拆分：
-
-```text
-PromptBuilder shared helpers
-  -> PromptMetadataProvider
-  -> TableSchemaRenderer
-  -> BusinessKnowledgeRenderer
-  -> ExampleRenderer
-  -> JoinPatternRenderer
-  -> PromptPayloadAssembler
-```
-
-如果继续拆 SQL generation 内部，可以演进为：
-
-```text
-SqlGenerationPromptBuilder
-  -> SqlPromptContextAssembler
-  -> PromptPayloadAssembler
-```
-
-这些模块必须保持通用，不能变成业务域规则模块。命名上避免 `InventoryPromptBuilder`、`DemandPromptBuilder` 或类似业务域 builder。
-
-### Trace 与测试要求
-
-落地时需要补充或调整测试，至少覆盖：
-
-- 重构前后关键 SQL prompt payload 行为不变。
-- `QuestionContext` prompt 不包含 SQL 生成指令。
-- SQL prompt 只渲染选中表和检索证据。
-- business knowledge、few-shot、join pattern 的进入 prompt 过程可在 trace 中定位。
-- prompt metadata 记录 task、版本、命中的 knowledge/example/join pattern id 和上下文预算。
-
-验收标准：拆分后线上排错能更清楚地回答“哪些证据进了 prompt、每块证据从哪里来、为什么被选中”，同时没有新增业务场景硬编码。
+- 多业务数据库动态注册和请求级切换。
+- workspace/data source 多租户权限模型。
+- 跨数据库或跨实例联邦查询。
+- 在线迁移旧会话和旧语义版本。
+- 为旧 API、旧 runtime schema 或仓库 JSON 配置提供兼容适配器。

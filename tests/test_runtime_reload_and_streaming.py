@@ -26,7 +26,6 @@ from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.database_connector import DatabaseConnector
 from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.metadata_registry import MetadataRegistry
-from backend.app.repositories.metadata_repository import MetadataDocumentRepository
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.progress_service import ProgressService
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
@@ -36,6 +35,17 @@ from backend.app.services.semantic_runtime import SemanticRuntime
 from backend.app.services.llm_client import LLMClient, sqlglot as llm_sqlglot
 from backend.app.services.vector_retriever import VectorRetriever
 from backend.app.utils import atomic_write_text
+from tests.fixture_metadata import fixture_semantic_runtime
+
+
+def fixture_retrieval_service(**kwargs) -> tuple[dict, RetrievalService]:
+    domain_config, metadata_registry, semantic_runtime = fixture_semantic_runtime()
+    return domain_config, RetrievalService(
+        domain_config=domain_config,
+        semantic_runtime=semantic_runtime,
+        metadata_registry=metadata_registry,
+        **kwargs,
+    )
 
 
 class ContainerResetTests(unittest.TestCase):
@@ -167,8 +177,7 @@ class VectorRetrieverTests(unittest.TestCase):
 
 class RetrievalServiceFailFastTests(unittest.TestCase):
     def test_retrieval_corpus_excludes_domain_config_metrics(self) -> None:
-        domain_config = DomainConfigLoader().load()
-        service = RetrievalService(domain_config=domain_config)
+        _domain_config, service = fixture_retrieval_service()
 
         source_types = {document["source_type"] for document in service.corpus_documents}
 
@@ -195,16 +204,14 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         )
 
     def test_health_omits_removed_vector_indexing_field(self) -> None:
-        domain_config = DomainConfigLoader().load()
-        service = RetrievalService(domain_config=domain_config)
+        _domain_config, service = fixture_retrieval_service()
 
         health = service.health()
 
         self.assertNotIn("vector_indexing", health)
 
     def test_example_vector_documents_include_sql_structure(self) -> None:
-        domain_config = DomainConfigLoader().load()
-        service = RetrievalService(domain_config=domain_config)
+        _domain_config, service = fixture_retrieval_service()
 
         document = next(
             item
@@ -225,8 +232,7 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         self.assertIn("union_all_unpivot", sql_features["sql_patterns"])
 
     def test_business_knowledge_vector_documents_include_note_chunks(self) -> None:
-        domain_config = DomainConfigLoader().load()
-        service = RetrievalService(domain_config=domain_config)
+        _domain_config, service = fixture_retrieval_service()
 
         note_document = next(
             item
@@ -319,12 +325,10 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
         self.assertIn("example", {hit.source_type for hit in top_hits})
 
     def test_retrieval_service_raises_when_vector_client_is_missing(self) -> None:
-        domain_config = DomainConfigLoader().load()
         retriever = VectorRetriever(provider="siliconflow", api_key=None, dimensions=128)
 
         with self.assertRaisesRegex(RuntimeError, "vector embedding client is not configured"):
-            RetrievalService(
-                domain_config=domain_config,
+            fixture_retrieval_service(
                 vector_retriever=retriever,
             )
 
@@ -351,11 +355,8 @@ class RetrievalServiceFailFastTests(unittest.TestCase):
             def sync(self, corpus_documents):
                 raise RuntimeError("boom")
 
-        domain_config = DomainConfigLoader().load()
-
         # Construction succeeds despite the prewarm failure.
-        service = RetrievalService(
-            domain_config=domain_config,
+        _domain_config, service = fixture_retrieval_service(
             vector_retriever=FakeVectorRetriever(),
             vector_corpus_store_service=FakeVectorCorpusStoreService(),
             prewarm_vector_index=True,
@@ -676,7 +677,6 @@ FETCH FIRST 50 ROWS ONLY
 class MetadataRegistryFailFastTests(unittest.TestCase):
     def test_semantic_runtime_does_not_expose_deprecated_config_stub_api(self) -> None:
         deprecated_methods = {
-            "is_known_domain",
             "max_limit",
             "query_profile",
             "domain_tables",
@@ -711,19 +711,16 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
             tables_path = Path(temp_dir) / "tables.json"
             business_path = Path(temp_dir) / "business.json"
             join_path = Path(temp_dir) / "join.json"
-            session_state_path = Path(temp_dir) / "session_state.schema.json"
             atomic_write_text(examples_path, "[]\n")
             atomic_write_text(tables_path, '{"stable_table": {"columns": ["id"]}}\n')
             atomic_write_text(business_path, '{"entries": [{"id": "old_kb", "notes": ["old"]}]}\n')
             atomic_write_text(join_path, '{"patterns": []}\n')
-            atomic_write_text(session_state_path, "{}\n")
             registry = MetadataRegistry(
                 {
                     "business_knowledge": business_path,
                     "examples_template": examples_path,
                     "tables_metadata": tables_path,
                     "join_patterns": join_path,
-                    "session_state_schema": session_state_path,
                 }
             )
 
@@ -739,85 +736,22 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
                 [{"id": "old_kb", "notes": ["old"]}],
             )
 
-    def test_repository_exposes_document_paths_without_private_method_access(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            examples_path = Path(temp_dir) / "examples.json"
-            tables_path = Path(temp_dir) / "tables.json"
-            business_path = Path(temp_dir) / "business.json"
-            join_path = Path(temp_dir) / "join.json"
-            session_state_path = Path(temp_dir) / "session_state.schema.json"
-            atomic_write_text(examples_path, "[]\n")
-            atomic_write_text(tables_path, '{"stable_table": {"columns": ["id"]}}\n')
-            atomic_write_text(business_path, '{"entries": []}\n')
-            atomic_write_text(join_path, '{"patterns": []}\n')
-            atomic_write_text(session_state_path, "{}\n")
-            registry = MetadataRegistry(
-                {
-                    "business_knowledge": business_path,
-                    "examples_template": examples_path,
-                    "tables_metadata": tables_path,
-                    "join_patterns": join_path,
-                    "session_state_schema": session_state_path,
-                }
-            )
-            repository = MetadataDocumentRepository(registry)
-
-            self.assertEqual(repository.resolve_path("business_knowledge"), business_path)
-            with self.assertRaises(KeyError):
-                repository.resolve_path("missing")
-
-    def test_repository_write_validates_json_shape_before_overwriting_file(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            examples_path = Path(temp_dir) / "examples.json"
-            tables_path = Path(temp_dir) / "tables.json"
-            business_path = Path(temp_dir) / "business.json"
-            join_path = Path(temp_dir) / "join.json"
-            session_state_path = Path(temp_dir) / "session_state.schema.json"
-            original_business = '{"entries": [{"id": "old_kb", "notes": ["old"]}]}\n'
-            atomic_write_text(examples_path, "[]\n")
-            atomic_write_text(tables_path, '{"stable_table": {"columns": ["id"]}}\n')
-            atomic_write_text(business_path, original_business)
-            atomic_write_text(join_path, '{"patterns": []}\n')
-            atomic_write_text(session_state_path, "{}\n")
-            registry = MetadataRegistry(
-                {
-                    "business_knowledge": business_path,
-                    "examples_template": examples_path,
-                    "tables_metadata": tables_path,
-                    "join_patterns": join_path,
-                    "session_state_schema": session_state_path,
-                }
-            )
-            repository = MetadataDocumentRepository(registry)
-
-            with self.assertRaisesRegex(RuntimeError, "business_knowledge.entries"):
-                repository.write("business_knowledge", {"entries": {}})
-
-            self.assertEqual(business_path.read_text(encoding="utf-8"), original_business)
-            self.assertEqual(
-                registry.business_knowledge_entries,
-                [{"id": "old_kb", "notes": ["old"]}],
-            )
-
     def test_retrieval_reload_refreshes_semantic_runtime_table_catalog(self) -> None:
         with TemporaryDirectory() as temp_dir:
             examples_path = Path(temp_dir) / "examples.json"
             tables_path = Path(temp_dir) / "tables.json"
             business_path = Path(temp_dir) / "business.json"
             join_path = Path(temp_dir) / "join.json"
-            session_state_path = Path(temp_dir) / "session_state.schema.json"
             atomic_write_text(examples_path, "[]\n")
             atomic_write_text(tables_path, '{"old_table": {"columns": ["id"]}}\n')
             atomic_write_text(business_path, '{"entries": []}\n')
             atomic_write_text(join_path, '{"patterns": []}\n')
-            atomic_write_text(session_state_path, "{}\n")
             registry = MetadataRegistry(
                 {
                     "business_knowledge": business_path,
                     "examples_template": examples_path,
                     "tables_metadata": tables_path,
                     "join_patterns": join_path,
-                    "session_state_schema": session_state_path,
                 }
             )
             domain_config = DomainConfigLoader(tables_path).load()
@@ -842,24 +776,18 @@ class MetadataRegistryFailFastTests(unittest.TestCase):
             tables_path = Path(temp_dir) / "tables.json"
             business_path = Path(temp_dir) / "business.json"
             join_path = Path(temp_dir) / "join.json"
-            session_state_path = Path(temp_dir) / "session_state.schema.json"
-            domain_config_path = Path(temp_dir) / "domain.json"
             atomic_write_text(examples_path, "{bad json\n")
             atomic_write_text(tables_path, "{}\n")
             atomic_write_text(business_path, "{\"entries\": []}\n")
             atomic_write_text(join_path, "{\"patterns\": []}\n")
-            atomic_write_text(session_state_path, "{}\n")
-            atomic_write_text(domain_config_path, "{}\n")
 
             with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
                 MetadataRegistry(
                     {
-                        "domain_config": domain_config_path,
                         "business_knowledge": business_path,
                         "examples_template": examples_path,
                         "tables_metadata": tables_path,
                         "join_patterns": join_path,
-                        "session_state_schema": session_state_path,
                     }
                 )
 

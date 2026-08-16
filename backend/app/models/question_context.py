@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from .semantic_types import FilterItem, SortItem, TimeContext, VersionContext
+
 
 QuestionDecision = Literal["answerable", "clarification_needed", "invalid"]
 ContextRelation = Literal["new", "follow_up", "ambiguous"]
@@ -22,3 +24,12 @@ class QuestionContext(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
     subject_domain: str = "unknown"
+    entities: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    filters: list[FilterItem] = Field(default_factory=list)
+    sort: list[SortItem] = Field(default_factory=list)
+    time_context: TimeContext = Field(default_factory=TimeContext)
+    version_context: VersionContext | None = None
+    limit: int | None = None
+    analysis_mode: str | None = None

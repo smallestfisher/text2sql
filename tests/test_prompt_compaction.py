@@ -9,24 +9,17 @@ from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
 from backend.app.models.api import ExecutionResponse
-from backend.app.repositories.metadata_repository import MetadataDocumentRepository
 from backend.app.services.metadata_registry import MetadataRegistry
-from backend.app.services.metadata_service import MetadataService
 from backend.app.services.orchestrator import ConversationOrchestrator
-from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.example_factory import ExampleFactory
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_analysis_service import QuestionAnalysisService
 from backend.app.services.semantic_runtime import SemanticRuntime
+from tests.fixture_metadata import fixture_semantic_runtime
 
 
 def sql_context(sql_context_value: SqlGenerationContext) -> SqlGenerationContext:
     return SqlGenerationContext(**sql_context_value.model_dump(mode="python"))
-
-
-class EmptyAuditRepository:
-    def list_records(self):
-        return []
 
 
 class StaticExampleRegistry:
@@ -109,9 +102,7 @@ class ContextEchoDetailLLMClient(QuestionContextDetailLLMClient):
 class PromptCompactionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        domain_config = DomainConfigLoader().load()
-        cls.domain_config = domain_config
-        cls.semantic_runtime = SemanticRuntime(domain_config)
+        cls.domain_config, cls.metadata_registry, cls.semantic_runtime = fixture_semantic_runtime()
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
 
     def test_question_context_prompt_uses_conversation_summary_and_table_metadata(self) -> None:
@@ -382,8 +373,9 @@ class PromptCompactionTests(unittest.TestCase):
 
         self.assertEqual(
             instructions["subject_domain_values"],
-            ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"],
+            [*self.semantic_runtime.subject_domains(), "unknown"],
         )
+        self.assertNotIn("dimension", self.semantic_runtime.subject_domains())
         self.assertIn("subject_domain 只能输出 subject_domain_values 中的一个值", constraints)
 
     def test_question_context_prompt_includes_pending_clarification(self) -> None:
@@ -1265,139 +1257,6 @@ FETCH FIRST 200 ROWS ONLY
                     "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 1 ROW ONLY",
                 }
             )
-
-    def test_metadata_create_example_persists_template_shape_only(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            examples_path = Path(temp_dir) / "examples.json"
-            examples_path.write_text("[]\n", encoding="utf-8")
-            registry = MetadataRegistry(
-                paths={
-                    "examples_template": examples_path,
-                    "tables_metadata": Path("semantic/tables.json"),
-                    "business_knowledge": Path("semantic/business_knowledge.json"),
-                    "join_patterns": Path("semantic/join_patterns.json"),
-                    "session_state_schema": Path("schemas/session_state.schema.json"),
-                }
-            )
-            retrieval_service = type(
-                "FakeRetrievalService",
-                (),
-                {
-                    "validate_example": lambda _self, payload: ExampleFactory(self.domain_config, self.semantic_runtime).normalize(payload),
-                    "dump_example_template": lambda _self, payload: ExampleFactory(self.domain_config, self.semantic_runtime).dump_template(payload),
-                    "reload": lambda _self: None,
-                },
-            )()
-            service = MetadataService(
-                metadata_repository=MetadataDocumentRepository(registry),
-                domain_config_loader=DomainConfigLoader(),
-                audit_repository=EmptyAuditRepository(),
-            )
-
-            response = service.create_example(
-                {
-                    "question": "最新 OMS 库存",
-                    "sql": "SELECT report_month FROM oms_inventory FETCH FIRST 1 ROW ONLY",
-                    "subject_domain": "inventory",
-                    "metrics": ["inventory_qty"],
-                    "tags": ["smoke"],
-                },
-                retrieval_service=retrieval_service,
-            )
-
-            stored = registry.read("examples_template")
-            self.assertEqual(len(stored), 1)
-            self.assertEqual(stored[0]["question"], "最新 OMS 库存")
-            self.assertEqual(stored[0]["tags"], ["smoke"])
-            self.assertEqual(response.template.tags, ["smoke"])
-            self.assertNotIn("normalized_question", stored[0])
-            self.assertNotIn("question_type", stored[0])
-            self.assertNotIn("tables", stored[0])
-            self.assertNotIn("filters", stored[0])
-
-    def test_metadata_update_document_triggers_retrieval_reload(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            knowledge_path = Path(temp_dir) / "business_knowledge.json"
-            knowledge_path.write_text('{"entries": []}\n', encoding="utf-8")
-            registry = MetadataRegistry(
-                paths={
-                    "examples_template": Path("examples/nl2sql_examples.template.json"),
-                    "tables_metadata": Path("semantic/tables.json"),
-                    "business_knowledge": knowledge_path,
-                    "join_patterns": Path("semantic/join_patterns.json"),
-                    "session_state_schema": Path("schemas/session_state.schema.json"),
-                }
-            )
-            retrieval_service = type(
-                "ReloadTrackingRetrievalService",
-                (),
-                {
-                    "reload_calls": 0,
-                    "reload": lambda self: setattr(self, "reload_calls", self.reload_calls + 1),
-                },
-            )()
-            service = MetadataService(
-                metadata_repository=MetadataDocumentRepository(registry),
-                domain_config_loader=DomainConfigLoader(),
-                audit_repository=EmptyAuditRepository(),
-            )
-
-            document = service.update_document(
-                "business_knowledge",
-                {"entries": [{"id": "kb_1", "notes": ["test"]}]},
-                retrieval_service=retrieval_service,
-            )
-
-            self.assertEqual(document.name, "business_knowledge")
-            self.assertEqual(retrieval_service.reload_calls, 1)
-            self.assertEqual(registry.read("business_knowledge"), {"entries": [{"id": "kb_1", "notes": ["test"]}]})
-
-    def test_metadata_update_tables_metadata_clears_domain_summary_cache(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            examples_path = Path(temp_dir) / "examples.json"
-            tables_path = Path(temp_dir) / "tables.json"
-            business_path = Path(temp_dir) / "business_knowledge.json"
-            join_path = Path(temp_dir) / "join_patterns.json"
-            examples_path.write_text("[]\n", encoding="utf-8")
-            tables_path.write_text('{"old_table": {"columns": ["id"]}}\n', encoding="utf-8")
-            business_path.write_text('{"entries": []}\n', encoding="utf-8")
-            join_path.write_text('{"patterns": []}\n', encoding="utf-8")
-            registry = MetadataRegistry(
-                paths={
-                    "examples_template": examples_path,
-                    "tables_metadata": tables_path,
-                    "business_knowledge": business_path,
-                    "join_patterns": join_path,
-                    "session_state_schema": Path("schemas/session_state.schema.json"),
-                }
-            )
-            domain_config_loader = DomainConfigLoader(tables_path)
-            service = MetadataService(
-                metadata_repository=MetadataDocumentRepository(registry),
-                domain_config_loader=domain_config_loader,
-                audit_repository=EmptyAuditRepository(),
-            )
-            retrieval_service = type(
-                "ReloadTrackingRetrievalService",
-                (),
-                {
-                    "reload_calls": 0,
-                    "reload": lambda self: setattr(self, "reload_calls", self.reload_calls + 1),
-                },
-            )()
-
-            self.assertEqual(service.overview().table_count, 1)
-            service.update_document(
-                "tables_metadata",
-                {
-                    "new_table": {"columns": ["id"]},
-                    "second_table": {"columns": ["id"]},
-                },
-                retrieval_service=retrieval_service,
-            )
-
-            self.assertEqual(service.overview().table_count, 2)
-            self.assertEqual(retrieval_service.reload_calls, 1)
 
     def test_sql_prompt_includes_safe_oracle_example_sql(self) -> None:
         prompt_builder = PromptBuilder(

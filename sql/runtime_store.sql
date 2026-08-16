@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   user_id VARCHAR(64) NULL,
   title TEXT NULL,
   status VARCHAR(32) NOT NULL,
+  semantic_release_id VARCHAR(64) NULL,
   current_state_json LONGTEXT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS session_state_snapshots (
 CREATE TABLE IF NOT EXISTS query_logs (
   trace_id VARCHAR(64) PRIMARY KEY,
   session_id VARCHAR(64) NULL,
+  semantic_release_id VARCHAR(64) NULL,
   user_id VARCHAR(64) NULL,
   question LONGTEXT NULL,
   effective_question LONGTEXT NULL,
@@ -85,6 +87,7 @@ CREATE TABLE IF NOT EXISTS query_risk_flags (
 CREATE TABLE IF NOT EXISTS retrieval_logs (
   retrieval_log_id VARCHAR(64) PRIMARY KEY,
   trace_id VARCHAR(64) NOT NULL,
+  semantic_release_id VARCHAR(64) NULL,
   rank_position INT NOT NULL,
   source_type VARCHAR(64) NOT NULL,
   source_id VARCHAR(191) NOT NULL,
@@ -100,6 +103,7 @@ CREATE TABLE IF NOT EXISTS retrieval_logs (
 CREATE TABLE IF NOT EXISTS sql_audit_logs (
   sql_audit_id VARCHAR(64) PRIMARY KEY,
   trace_id VARCHAR(64) NOT NULL,
+  semantic_release_id VARCHAR(64) NULL,
   sql_text LONGTEXT NULL,
   context_valid BOOLEAN NOT NULL,
   context_risk_level VARCHAR(16) NULL,
@@ -133,49 +137,88 @@ CREATE TABLE IF NOT EXISTS evaluation_runs (
   created_at DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS vector_corpus_documents (
-  document_id VARCHAR(64) PRIMARY KEY,
-  source_type VARCHAR(64) NOT NULL,
-  source_id VARCHAR(191) NOT NULL,
-  summary TEXT NULL,
-  text_content LONGTEXT NOT NULL,
-  metadata_json LONGTEXT NULL,
-  content_hash VARCHAR(64) NOT NULL,
-  embedding_provider VARCHAR(64) NOT NULL,
-  embedding_backend VARCHAR(64) NOT NULL,
-  embedding_model VARCHAR(191) NOT NULL,
-  embedding_dimensions INT NOT NULL,
-  vector_json LONGTEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS evaluation_cases (
+  case_id VARCHAR(191) PRIMARY KEY,
+  case_json LONGTEXT NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS semantic_assets (
+CREATE TABLE IF NOT EXISTS physical_catalogs (
+  catalog_key VARCHAR(32) PRIMARY KEY,
+  schema_scope_json LONGTEXT NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  catalog_json LONGTEXT NOT NULL,
+  catalog_hash VARCHAR(64) NULL,
+  warnings_json LONGTEXT NULL,
+  last_error TEXT NULL,
+  synced_at DATETIME NULL,
+  updated_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS semantic_asset_drafts (
   name VARCHAR(64) PRIMARY KEY,
   content_json LONGTEXT NOT NULL,
-  version VARCHAR(64) NULL,
+  version INT NOT NULL DEFAULT 1,
   updated_at DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS data_sources (
+CREATE TABLE IF NOT EXISTS semantic_releases (
   id VARCHAR(64) PRIMARY KEY,
-  workspace_id VARCHAR(64) NOT NULL,
-  domain_id VARCHAR(64) NOT NULL,
-  name VARCHAR(191) NOT NULL,
-  database_url TEXT NOT NULL,
-  dialect VARCHAR(32) NOT NULL,
-  schemas_json LONGTEXT NULL,
-  description TEXT NULL,
+  version INT NOT NULL UNIQUE,
   status VARCHAR(16) NOT NULL,
-  enabled BOOLEAN NOT NULL,
-  last_sync_at DATETIME NULL,
-  last_error TEXT NULL,
+  snapshot_json LONGTEXT NOT NULL,
+  catalog_hash VARCHAR(64) NOT NULL,
+  draft_versions_json LONGTEXT NOT NULL,
+  created_by VARCHAR(64) NULL,
+  error TEXT NULL,
   created_at DATETIME NOT NULL,
+  activated_at DATETIME NULL
+);
+
+CREATE TABLE IF NOT EXISTS semantic_release_state (
+  state_key VARCHAR(32) PRIMARY KEY,
+  active_release_id VARCHAR(64) NULL,
   updated_at DATETIME NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS app_config (
-  name VARCHAR(64) PRIMARY KEY,
-  value_text TEXT NULL,
-  updated_at DATETIME NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at
+  ON chat_sessions (updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id
+  ON chat_sessions (user_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
+  ON chat_messages (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_trace_id
+  ON chat_messages (trace_id);
+CREATE INDEX IF NOT EXISTS idx_session_state_snapshots_session_created
+  ON session_state_snapshots (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_session_state_snapshots_trace_id
+  ON session_state_snapshots (trace_id);
+CREATE INDEX IF NOT EXISTS idx_query_logs_session_created
+  ON query_logs (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_user_created
+  ON query_logs (user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_domain_created
+  ON query_logs (subject_domain, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_decision_created
+  ON query_logs (question_decision, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_sql_risk_created
+  ON query_logs (sql_risk_level, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_risk_flags_flag_created
+  ON query_risk_flags (flag, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_risk_flags_trace
+  ON query_risk_flags (trace_id);
+CREATE INDEX IF NOT EXISTS idx_retrieval_logs_trace_rank
+  ON retrieval_logs (trace_id, rank_position);
+CREATE INDEX IF NOT EXISTS idx_retrieval_logs_channel_created
+  ON retrieval_logs (retrieval_channel, created_at);
+CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_trace_created
+  ON sql_audit_logs (trace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_logs_session_created
+  ON feedback_logs (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_logs_trace_created
+  ON feedback_logs (trace_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_logs_user_created
+  ON feedback_logs (user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evaluation_runs_created_at
+  ON evaluation_runs (created_at);

@@ -20,11 +20,10 @@
     "time_fields": {
       "MONTH": {
         "grain": "month",
-        "format": "YYYYMM"
+        "format": "YYYYMM",
+        "semantic_names": ["demand_month", "biz_month"]
       }
     },
-    "month_col": "MONTH",
-    "version_col": "PM_VERSION",
     "relationships": {
       "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
     }
@@ -51,11 +50,10 @@
     "time_fields": {
       "MONTH": {
         "grain": "month",
-        "format": "YYYYMM"
+        "format": "YYYYMM",
+        "semantic_names": ["demand_month", "biz_month"]
       }
     },
-    "month_col": "MONTH",
-    "version_col": "PM_VERSION",
     "relationships": {
       "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
     }
@@ -79,10 +77,10 @@
     "time_fields": {
       "report_date": {
         "grain": "day",
-        "format": "YYYYMMDD"
+        "format": "YYYYMMDD",
+        "semantic_names": ["biz_date", "biz_month"]
       }
     },
-    "date_col": "report_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID"
     }
@@ -104,10 +102,10 @@
     "time_fields": {
       "PLAN_date": {
         "grain": "day",
-        "format": "YYYYMMDD"
+        "format": "YYYYMMDD",
+        "semantic_names": ["biz_date", "biz_month"]
       }
     },
-    "date_col": "PLAN_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID, product_mapping.FGCODE"
     }
@@ -130,15 +128,15 @@
     "time_fields": {
       "plan_month": {
         "grain": "month",
-        "format": "YYYYMM"
+        "format": "YYYYMM",
+        "semantic_names": ["biz_month"]
       },
       "PLAN_date": {
         "grain": "day",
-        "format": "YYYYMMDD"
+        "format": "YYYYMMDD",
+        "semantic_names": ["biz_date", "biz_month"]
       }
     },
-    "month_col": "plan_month",
-    "date_col": "PLAN_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID"
     }
@@ -173,10 +171,10 @@
     "time_fields": {
       "report_month": {
         "grain": "month",
-        "format": "YYYYMM"
+        "format": "YYYYMM",
+        "semantic_names": ["biz_month"]
       }
     },
-    "month_col": "report_month",
     "relationships": {
       "product_ID": "product_attributes.product_ID"
     }
@@ -228,10 +226,10 @@
     "time_fields": {
       "work_date": {
         "grain": "day",
-        "format": "YYYYMMDD"
+        "format": "YYYYMMDD",
+        "semantic_names": ["biz_date", "biz_month"]
       }
     },
-    "date_col": "work_date",
     "relationships": {
       "product_ID": "product_attributes.product_ID, product_mapping.FGCODE"
     }
@@ -252,10 +250,10 @@
     "time_fields": {
       "report_month": {
         "grain": "month",
-        "format": "YYYYMM"
+        "format": "YYYYMM",
+        "semantic_names": ["biz_month"]
       }
     },
-    "month_col": "report_month",
     "relationships": {
       "FGCODE": "product_attributes.product_ID, product_mapping.FGCODE"
     }
@@ -274,11 +272,10 @@
     "time_fields": {
       "plan_date": {
         "grain": "day",
-        "format": "YYYYMMDD"
+        "format": "YYYYMMDD",
+        "semantic_names": ["biz_date", "biz_month"]
       }
     },
-    "date_col": "plan_date",
-    "version_col": "PM_VERSION",
     "relationships": {
       "product_ID": "product_attributes.product_ID"
     }

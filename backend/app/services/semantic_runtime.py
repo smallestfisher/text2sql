@@ -29,6 +29,7 @@ class SemanticRuntime:
 
     def reload(self) -> None:
         self.tables_metadata = self._load_tables_metadata()
+        self.subject_domain_catalog = self.metadata_registry.subject_domains
         self.graph_nodes = set(self.tables_metadata.keys())
         self.graph_edges = self._relationship_edges(self.tables_metadata)
         self.table_field_catalog = {
@@ -46,6 +47,12 @@ class SemanticRuntime:
     def default_limit(self, domain_name: str, default_value: int = 200) -> int:
         _ = domain_name
         return default_value
+
+    def subject_domains(self) -> list[str]:
+        return list(self.subject_domain_catalog)
+
+    def is_known_domain(self, domain_name: str | None) -> bool:
+        return bool(domain_name and domain_name in self.subject_domain_catalog)
 
     def clamp_limit(self, domain_name: str, limit: int | None, default_value: int = 200) -> int:
         _ = domain_name
@@ -149,14 +156,16 @@ class SemanticRuntime:
         self,
         domain_name: str,
         table_names: list[str],
-        logical_field: str,
+        logical_field: str | None = None,
+        *,
+        grain: str | None = None,
     ) -> list[dict]:
         _ = domain_name
         candidates: list[dict] = []
         seen: set[tuple[str, str]] = set()
         for table_name in table_names:
             for field_name, metadata in self.table_time_field_catalog.get(table_name, {}).items():
-                if not self._time_field_matches_logical_field(field_name, metadata, logical_field):
+                if not self._time_field_matches_logical_field(field_name, metadata, logical_field, grain=grain):
                     continue
                 key = (table_name, field_name)
                 if key in seen:
@@ -169,6 +178,7 @@ class SemanticRuntime:
                         "qualified_field": f"{table_name}.{field_name}",
                         "grain": metadata.get("grain"),
                         "format": metadata.get("format"),
+                        "semantic_names": list(metadata.get("semantic_names", [])),
                     }
                 )
         return candidates
@@ -255,12 +265,18 @@ class SemanticRuntime:
         _ = domain_name
         candidates = {logical_field}
         lowered_field = logical_field.lower()
-        aliases = self._logical_field_aliases(logical_field)
-        candidates.update(aliases)
-        lowered_aliases = {item.lower() for item in aliases}
         for table_name in table_names:
             for column_name in self.table_fields(table_name):
-                if column_name.lower() == lowered_field or column_name.lower() in lowered_aliases:
+                time_metadata = self.table_time_field(table_name, column_name) or {}
+                semantic_names = {
+                    str(item).strip().lower()
+                    for item in time_metadata.get("semantic_names", [])
+                    if str(item).strip()
+                }
+                if (
+                    column_name.lower() == lowered_field
+                    or lowered_field in semantic_names
+                ):
                     candidates.add(column_name)
         return {item for item in candidates if item}
 
@@ -352,26 +368,24 @@ class SemanticRuntime:
         self,
         field_name: str,
         metadata: dict,
-        logical_field: str,
+        logical_field: str | None,
+        *,
+        grain: str | None = None,
     ) -> bool:
-        grain = str(metadata.get("grain") or "").lower()
-        lowered = field_name.lower()
-        if logical_field == "biz_date":
-            return grain == "day" or "date" in lowered
-        if logical_field == "biz_month":
-            return grain == "month" or "month" in lowered or grain == "day"
-        if logical_field == "demand_month":
-            return grain == "month" or lowered == "month" or "month" in lowered
-        return lowered == logical_field.lower()
-
-    def _logical_field_aliases(self, logical_field: str) -> set[str]:
-        if logical_field == "biz_date":
-            return {"work_date", "report_date", "PLAN_date", "SALE_date"}
-        if logical_field == "biz_month":
-            return {"work_date", "report_date", "PLAN_date", "plan_month", "MONTH", "SALE_date"}
-        if logical_field == "demand_month":
-            return {"MONTH"}
-        return set()
+        configured_grain = str(metadata.get("grain") or "").lower()
+        if grain and configured_grain != str(grain).strip().lower():
+            return False
+        if not logical_field:
+            return True
+        lowered = logical_field.strip().lower()
+        if field_name.lower() == lowered:
+            return True
+        semantic_names = {
+            str(item).strip().lower()
+            for item in metadata.get("semantic_names", []) or []
+            if str(item).strip()
+        }
+        return lowered in semantic_names
 
     def _compact_month_value(self, value: str | None) -> str | None:
         if not value:
@@ -410,20 +424,25 @@ class SemanticRuntime:
                 normalized[field_name] = {
                     "grain": grain,
                     "format": value_format,
+                    "semantic_names": self._extract_semantic_names(raw_metadata),
                 }
 
-        configured_time_columns = [
-            ("date_col", "day"),
-            ("month_col", "month"),
-        ]
-        for key, grain in configured_time_columns:
-            field_name = str(payload.get(key, "")).strip()
-            if field_name and field_name in fields and field_name not in normalized:
-                normalized[field_name] = {
-                    "grain": grain,
-                    "format": None,
-                }
         return normalized
+
+    def _extract_semantic_names(self, metadata: dict, field_name: str | None = None) -> list[str]:
+        values = metadata.get("semantic_names", metadata.get("aliases", []))
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            values = []
+        result: list[str] = []
+        for value in values:
+            normalized = str(value or "").strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+        if field_name and field_name not in result:
+            result.append(field_name)
+        return result
 
     def _relationship_edges(self, tables_metadata: dict) -> list[dict[str, str]]:
         edges: list[dict[str, str]] = []

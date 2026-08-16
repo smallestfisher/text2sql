@@ -11,7 +11,6 @@ from backend.app.models.api import ChatResponse, ChatRequest, ValidationResponse
 from backend.app.models.context_summary import ContextSummary
 from backend.app.models.progress import ProgressEvent
 from backend.app.models.session_state import PendingClarification, SessionState
-from backend.app.models.semantic_types import SUPPORTED_SUBJECT_DOMAINS
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
@@ -48,6 +47,7 @@ class ConversationOrchestrator:
         runtime_log_repository: DbRuntimeLogRepository,
         conversation_persistence_service: ConversationPersistenceService,
         domain_config: dict,
+        semantic_release_id: str | None = None,
     ) -> None:
         self.question_analysis_service = question_analysis_service
         self.session_state_service = session_state_service
@@ -63,6 +63,7 @@ class ConversationOrchestrator:
         self.runtime_log_repository = runtime_log_repository
         self.conversation_persistence_service = conversation_persistence_service
         self.domain_config = domain_config
+        self.semantic_release_id = semantic_release_id
 
     def chat(
         self,
@@ -268,6 +269,7 @@ class ConversationOrchestrator:
             )
             self._raise_if_cancelled(cancellation_token, stage="retrieval")
             retrieval_summary = self.retrieval_service.summarize_retrieval(retrieval)
+            warnings.extend(retrieval.warnings)
             self._log_stage_io(
                 "retrieval",
                 inputs={
@@ -783,6 +785,9 @@ class ConversationOrchestrator:
             self._log_timing(trace.trace_id, "next_session_state", stage_started_at)
             if request.session_id:
                 next_session_state.session_id = request.session_id
+            next_session_state.semantic_release_id = getattr(
+                self, "semantic_release_id", None
+            )
             self._log_stage_io(
                 "next_session_state",
                 inputs={"previous": self._session_state_summary(session_state)},
@@ -797,6 +802,7 @@ class ConversationOrchestrator:
             )
 
             response = ChatResponse(
+                semantic_release_id=getattr(self, "semantic_release_id", None),
                 question_context=question_context,
                 classification=classification,
                 context_summary=self._context_summary(
@@ -978,6 +984,7 @@ class ConversationOrchestrator:
             return None
         return {
             "session_id": session_state.session_id,
+            "semantic_release_id": session_state.semantic_release_id,
             "semantic_brief": session_state.last_semantic_brief,
             "subject_domain": session_state.subject_domain,
             "tables": session_state.tables,
@@ -1022,6 +1029,17 @@ class ConversationOrchestrator:
             "multiple sql statements are not allowed",
             "sql parse error",
             "sql references unknown sources",
+            "sql references sources outside sql context",
+            "sql does not reference any physical business source",
+            "sql does not cover all sql context filters",
+            "sql does not group by required dimensions",
+            "sql does not preserve sql context sort fields",
+            "sql is missing required version filter",
+            "sql does not project required dimensions",
+            "sql does not include fetch first",
+            "sql limit ",
+            "sql result limit ",
+            "sql collapses a month-grain time filter",
             "incompatible time literals",
             "uses to_char on formatted string time field",
         )
@@ -1173,6 +1191,14 @@ class ConversationOrchestrator:
             "effective_question": getattr(question_context, "effective_question", None),
             "subject_domain": getattr(question_context, "subject_domain", None),
             "semantic_brief": getattr(question_context, "semantic_brief", None),
+            "entities": list(getattr(question_context, "entities", []) or []),
+            "metrics": list(getattr(question_context, "metrics", []) or []),
+            "dimensions": list(getattr(question_context, "dimensions", []) or []),
+            "filter_fields": [item.field for item in list(getattr(question_context, "filters", []) or [])],
+            "sort_fields": [item.field for item in list(getattr(question_context, "sort", []) or [])],
+            "time_grain": getattr(getattr(question_context, "time_context", None), "grain", None),
+            "version_field": getattr(getattr(question_context, "version_context", None), "field", None),
+            "limit": getattr(question_context, "limit", None),
             "source": getattr(question_context, "source", None),
         }
 
@@ -1196,6 +1222,7 @@ class ConversationOrchestrator:
             "terms": retrieval.retrieval_terms,
             "channels": retrieval.retrieval_channels,
             "hit_count": len(retrieval.hits),
+            "warnings": retrieval.warnings,
             "hit_count_by_source": retrieval.hit_count_by_source,
             "top_hits": [
                 {
@@ -1294,19 +1321,27 @@ class ConversationOrchestrator:
     def _first_known_domain(self, *values: str | None) -> str | None:
         for value in values:
             normalized = (value or "").strip()
-            if normalized in SUPPORTED_SUBJECT_DOMAINS and normalized != "unknown":
+            if self.question_analysis_service.semantic_runtime.is_known_domain(normalized):
                 return normalized
         return None
 
     def _single_retrieval_domain(self, retrieval) -> str | None:
         candidate_domains: list[str] = []
+        semantic_runtime = getattr(
+            getattr(self, "question_analysis_service", None),
+            "semantic_runtime",
+            None,
+        )
         for hit in getattr(retrieval, "hits", []) or []:
             for domain in self._hit_domains(hit):
                 if domain not in candidate_domains:
                     candidate_domains.append(domain)
         for domain in getattr(retrieval, "domains", []) or []:
-            if domain in SUPPORTED_SUBJECT_DOMAINS and domain != "unknown" and domain not in candidate_domains:
-                candidate_domains.append(domain)
+            normalized = str(domain or "").strip()
+            if semantic_runtime is not None and not semantic_runtime.is_known_domain(normalized):
+                continue
+            if normalized and normalized not in candidate_domains:
+                candidate_domains.append(normalized)
         resolved_domain = self._single_primary_domain(candidate_domains)
         if resolved_domain is not None:
             return resolved_domain
@@ -1354,27 +1389,35 @@ class ConversationOrchestrator:
         domains = self._hit_domains(hit)
         if not domains:
             return True
-        return subject_domain in domains or (domains == ["dimension"])
+        return subject_domain in domains
 
     def _hit_domains(self, hit) -> list[str]:
         domains: list[str] = []
+        semantic_runtime = getattr(
+            getattr(self, "question_analysis_service", None),
+            "semantic_runtime",
+            None,
+        )
         metadata = getattr(hit, "metadata", {}) or {}
         metadata_domains = metadata.get("domains", [])
         if isinstance(metadata_domains, list):
             for domain_name in metadata_domains:
-                if domain_name in SUPPORTED_SUBJECT_DOMAINS and domain_name != "unknown" and domain_name not in domains:
-                    domains.append(domain_name)
+                normalized = str(domain_name or "").strip()
+                if semantic_runtime is not None and not semantic_runtime.is_known_domain(normalized):
+                    continue
+                if normalized and normalized not in domains:
+                    domains.append(normalized)
         subject_domain = metadata.get("subject_domain")
-        if subject_domain in SUPPORTED_SUBJECT_DOMAINS and subject_domain != "unknown" and subject_domain not in domains:
-            domains.append(subject_domain)
+        normalized_subject_domain = str(subject_domain or "").strip()
+        if semantic_runtime is not None and not semantic_runtime.is_known_domain(normalized_subject_domain):
+            normalized_subject_domain = ""
+        if normalized_subject_domain and normalized_subject_domain not in domains:
+            domains.append(normalized_subject_domain)
         return domains
 
     def _single_primary_domain(self, domains: list[str]) -> str | None:
         if len(domains) == 1:
             return domains[0]
-        primary_domains = [domain for domain in domains if domain != "dimension"]
-        if len(primary_domains) == 1:
-            return primary_domains[0]
         return None
 
     def _apply_retrieval_support_to_clarification(
@@ -1531,8 +1574,12 @@ class ConversationOrchestrator:
             question_context=question_context,
             classification=classification,
         )
+        next_session_state.semantic_release_id = getattr(
+            self, "semantic_release_id", None
+        )
 
         response = ChatResponse(
+            semantic_release_id=getattr(self, "semantic_release_id", None),
             question_context=question_context,
             classification=classification,
             context_summary=self._context_summary(

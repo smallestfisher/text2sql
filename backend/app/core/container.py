@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
-from backend.app.core.settings import Settings, settings
-from backend.app.repositories.db_app_config_repository import DbAppConfigRepository
-from backend.app.repositories.db_data_source_repository import DbDataSourceRepository
+from backend.app.core.settings import settings
 from backend.app.repositories.db_audit_repository import DbAuditRepository
+from backend.app.repositories.db_evaluation_case_repository import DbEvaluationCaseRepository
 from backend.app.repositories.db_evaluation_run_repository import DbEvaluationRunRepository
 from backend.app.repositories.db_auth_repository import DbAuthRepository
 from backend.app.repositories.db_feedback_repository import DbFeedbackRepository
 from backend.app.repositories.db_runtime_log_repository import DbRuntimeLogRepository
 from backend.app.repositories.db_session_repository import DbSessionRepository
-from backend.app.repositories.db_vector_document_repository import DbVectorDocumentRepository
-from backend.app.repositories.db_semantic_asset_repository import DbSemanticAssetRepository
-from backend.app.repositories.metadata_repository import MetadataDocumentRepository
+from backend.app.repositories.file_vector_document_repository import FileVectorDocumentRepository
+from backend.app.repositories.db_semantic_config_repository import DbSemanticConfigRepository
 from backend.app.services.answer_builder import AnswerBuilder
 from backend.app.services.audit_service import AuditService
 from backend.app.services.auth_service import AuthService
@@ -23,35 +22,28 @@ from backend.app.services.evaluation_service import EvaluationService
 from backend.app.services.execution_cache_service import ExecutionCacheService
 from backend.app.services.feedback_service import FeedbackService
 from backend.app.services.llm_client import LLMClient
-from backend.app.services.metadata_service import MetadataService
 from backend.app.services.oracle_schema_introspector import OracleSchemaIntrospector
 from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.progress_service import ProgressService
-from backend.app.services.prompt_builder import PromptBuilder
-from backend.app.services.question_context_service import QuestionContextService
-from backend.app.services.question_analysis_service import QuestionAnalysisService
-from backend.app.services.retrieval_service import RetrievalService
+from backend.app.services.release_aware_orchestrator import ReleaseAwareOrchestrator
+from backend.app.services.release_runtime_manager import ReleaseRuntime, ReleaseRuntimeManager
 from backend.app.services.runtime_admin_service import RuntimeAdminService
-from backend.app.services.domain_config_loader import DomainConfigLoader
-from backend.app.services.semantic_runtime import SemanticRuntime
+from backend.app.services.semantic_config_service import SEMANTIC_ASSET_DEFAULTS, SemanticConfigService
 from backend.app.services.session_service import SessionService
 from backend.app.services.session_state_service import SessionStateService
 from backend.app.services.session_workspace_service import SessionWorkspaceService
 from backend.app.services.sql_ast_validator import SqlAstValidator
 from backend.app.services.sql_executor import SqlExecutor
-from backend.app.services.sql_validator import SqlValidator
 from backend.app.services.conversation_persistence_service import ConversationPersistenceService
 from backend.app.services.vector_retriever import VectorRetriever
-from backend.app.services.vector_corpus_store_service import VectorCorpusStoreService
 from backend.app.services.runtime_store_initializer import RuntimeStoreInitializer
-from backend.app.services.semantic_asset_seeder import seed_semantic_assets_if_empty
 
 
 logger = logging.getLogger(__name__)
 
 BUSINESS_SQL_DIALECT = "oracle"
-RUNTIME_SQL_DIALECT = "mysql"
+RUNTIME_SQL_DIALECT = "sqlite"
 
 
 class AppContainer:
@@ -59,17 +51,14 @@ class AppContainer:
         # Track connectors so a rebuilt container can dispose stale pools.
         self._disposables: list[DatabaseConnector] = []
 
-        # Phase 1 — bootstrap. Use env-only settings just to reach the runtime
-        # DB, which is the sole hard startup dependency. Runtime connection
-        # params (timeouts/limits) are read from the env baseline here; they get
-        # re-read from effective settings once overrides are loaded (they only
-        # affect per-query behavior, not the pool itself).
-        bootstrap = settings
+        # Deployment configuration comes only from environment variables and
+        # secrets. The runtime store persists product state, never configuration.
+        self.settings = settings
         self.runtime_database_connector = DatabaseConnector(
-            database_url=bootstrap.runtime_database_url,
-            timeout_seconds=bootstrap.sql_timeout_seconds,
-            max_result_rows=bootstrap.execution_max_rows,
-            slow_query_threshold_ms=bootstrap.slow_query_threshold_ms,
+            database_url=self.settings.runtime_database_url,
+            timeout_seconds=self.settings.sql_timeout_seconds,
+            max_result_rows=self.settings.execution_max_rows,
+            slow_query_threshold_ms=self.settings.slow_query_threshold_ms,
             sql_dialect=RUNTIME_SQL_DIALECT,
         )
         self._disposables.append(self.runtime_database_connector)
@@ -82,30 +71,18 @@ class AppContainer:
         self.runtime_store_initializer.ensure_schema()
         logger.debug("runtime schema init done")
 
-        # Phase 2 — load editable overrides from app_config and build the
-        # effective settings that the rest of the container reads from.
-        self.app_config_repository = DbAppConfigRepository(self.runtime_database_connector)
-        self.data_source_repository = DbDataSourceRepository(self.runtime_database_connector)
         self.oracle_schema_introspector = OracleSchemaIntrospector()
-        try:
-            overrides = self.app_config_repository.read_all()
-        except Exception:
-            logger.warning("failed to read app_config overrides; using env baseline", exc_info=True)
-            overrides = {}
-        self.settings = Settings.build(overrides)
         logger.info(
-            "container init start app_env=%s business_dialect=%s runtime_dialect=%s vector_enabled=%s overrides=%s",
+            "container init start app_env=%s business_dialect=%s runtime_dialect=%s vector_enabled=%s",
             self.settings.app_env,
             BUSINESS_SQL_DIALECT,
             RUNTIME_SQL_DIALECT,
             self.settings.enable_vector_retrieval,
-            len(overrides),
         )
 
-        # Phase 3 — business DB connector. NOT validated at construction: a bad
-        # URL only surfaces when a query runs, so a wrong value never bricks the
-        # container (the config UI stays reachable to fix it). Save-time
-        # connectivity checks live in the config API instead.
+        # The deployment owns exactly one Oracle business connection.
+        # Connectivity remains observable from the admin database-status API so
+        # the runtime UI is still reachable when Oracle is temporarily down.
         self.business_database_connector = DatabaseConnector(
             database_url=self.settings.business_database_url,
             timeout_seconds=self.settings.sql_timeout_seconds,
@@ -115,46 +92,41 @@ class AppContainer:
         )
         self._disposables.append(self.business_database_connector)
 
-        # Semantic assets are stored in the runtime DB by default. The JSON files
-        # seed the store once when it is empty and then act only as a fallback.
-        # Set SEMANTIC_ASSET_STORE=file to keep reading/writing the JSON files.
-        semantic_asset_store = self.settings.semantic_asset_store
-        if semantic_asset_store == "db":
-            self.semantic_asset_repository = DbSemanticAssetRepository(self.runtime_database_connector)
-            seeded = seed_semantic_assets_if_empty(self.semantic_asset_repository)
-            logger.info("semantic asset store=db seeded_from_files=%s", seeded)
-            asset_source = self.semantic_asset_repository
-        else:
-            self.semantic_asset_repository = None
-            logger.info("semantic asset store=file")
-            asset_source = None
-
-        self.metadata_registry = MetadataRegistry(asset_source=asset_source)
-        tables_metadata_provider = (
-            (lambda: self.metadata_registry.tables_metadata) if asset_source is not None else None
+        self.semantic_config_repository = DbSemanticConfigRepository(
+            self.runtime_database_connector
         )
-        self.domain_config_loader = DomainConfigLoader(
-            tables_metadata_provider=tables_metadata_provider,
-        )
-        self.domain_config = self.domain_config_loader.load()
-        self.semantic_runtime = SemanticRuntime(
-            self.domain_config,
-            metadata_registry=self.metadata_registry,
-        )
+        # This registry is validation-only. Production query runtimes are built
+        # from immutable release snapshots; these empty values never seed a
+        # draft or participate in query execution.
+        self.metadata_registry = MetadataRegistry(documents=SEMANTIC_ASSET_DEFAULTS)
         self.auth_repository = DbAuthRepository(self.runtime_database_connector)
         self.session_repository = DbSessionRepository(self.runtime_database_connector)
         self.audit_repository = DbAuditRepository(self.runtime_database_connector)
         self.feedback_repository = DbFeedbackRepository(self.runtime_database_connector)
         self.runtime_log_repository = DbRuntimeLogRepository(self.runtime_database_connector)
+        self.evaluation_case_repository = DbEvaluationCaseRepository(
+            self.runtime_database_connector
+        )
         self.evaluation_run_repository = DbEvaluationRunRepository(self.runtime_database_connector)
-        self.vector_document_repository = DbVectorDocumentRepository(self.runtime_database_connector)
+        self.vector_document_repository = FileVectorDocumentRepository(
+            Path(self.settings.vector_cache_dir)
+        )
+        self.release_runtime_manager = ReleaseRuntimeManager(
+            repository=self.semantic_config_repository,
+            vector_document_repository=self.vector_document_repository,
+            settings=self.settings,
+        )
+        self.semantic_config_service = SemanticConfigService(
+            repository=self.semantic_config_repository,
+            business_connector=self.business_database_connector,
+            schema_scope=self.settings.business_schema_scope(),
+            metadata_registry=self.metadata_registry,
+            introspector=self.oracle_schema_introspector,
+            release_prepare=self.release_runtime_manager.prepare_release,
+        )
         self.progress_service = ProgressService()
         self.conversation_persistence_service = ConversationPersistenceService(self.runtime_database_connector)
 
-        self.prompt_builder = PromptBuilder(
-            semantic_runtime=self.semantic_runtime,
-            metadata_registry=self.metadata_registry,
-        )
         self.llm_client = LLMClient(
             model_name=self.settings.llm_model,
             api_key=self.settings.openai_api_key,
@@ -166,17 +138,6 @@ class AppContainer:
             cache_max_entries=self.settings.llm_cache_max_entries,
             cache_prompt=self.settings.llm_cache_prompt,
         )
-        self.question_context_service = QuestionContextService(
-            llm_client=self.llm_client,
-            prompt_builder=self.prompt_builder,
-        )
-        self.question_analysis_service = QuestionAnalysisService(
-            domain_config=self.domain_config,
-            semantic_runtime=self.semantic_runtime,
-            llm_client=self.llm_client,
-            prompt_builder=self.prompt_builder,
-            question_context_service=self.question_context_service,
-        )
         self.session_state_service = SessionStateService()
         self.execution_cache_service = ExecutionCacheService(
             ttl_seconds=self.settings.execution_cache_ttl_seconds,
@@ -187,12 +148,6 @@ class AppContainer:
             execution_cache=self.execution_cache_service,
         )
         self.sql_ast_validator = SqlAstValidator()
-        self.sql_validator = SqlValidator(
-            ast_validator=self.sql_ast_validator,
-            semantic_runtime=self.semantic_runtime,
-            max_limit=self.settings.default_sql_limit,
-            high_risk_limit=self.settings.high_risk_sql_limit,
-        )
         self.auth_service = AuthService(
             repository=self.auth_repository,
             token_secret=self.settings.auth_token_secret,
@@ -220,27 +175,16 @@ class AppContainer:
                 "vector retrieval enabled but embedding client not configured; running with vectors disabled"
             )
             self.vector_retriever = VectorRetriever(provider="disabled")
-        self.vector_corpus_store_service = VectorCorpusStoreService(
-            repository=self.vector_document_repository,
-            vector_retriever=self.vector_retriever,
-        )
-        self.retrieval_service = RetrievalService(
-            domain_config=self.domain_config,
-            semantic_runtime=self.semantic_runtime,
-            metadata_registry=self.metadata_registry,
-            vector_retriever=self.vector_retriever,
-            vector_corpus_store_service=self.vector_corpus_store_service,
-            vector_top_k=self.settings.vector_top_k,
-            prewarm_vector_index=self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
-        )
         logger.info(
-            "container init done vector_provider=%s prewarm_vector=%s",
+            "container init done vector_provider=%s",
             vector_provider,
-            self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval,
         )
         self.answer_builder = AnswerBuilder()
-        self.metadata_repository = MetadataDocumentRepository(self.metadata_registry)
-        self.session_service = SessionService(self.session_repository)
+        self.session_service = SessionService(
+            self.session_repository,
+            active_release_id_provider=self.release_runtime_manager.active_release_id,
+            require_active_release=True,
+        )
         self.audit_service = AuditService(self.audit_repository)
         self.chat_response_restore_service = ChatResponseRestoreService(
             audit_service=self.audit_service,
@@ -253,39 +197,47 @@ class AppContainer:
             response_restore_service=self.chat_response_restore_service,
         )
         self.feedback_service = FeedbackService(self.feedback_repository)
-        self.metadata_service = MetadataService(
-            metadata_repository=self.metadata_repository,
-            domain_config_loader=self.domain_config_loader,
-            audit_repository=self.audit_repository,
-        )
         self.runtime_admin_service = RuntimeAdminService(
             session_repository=self.session_repository,
             runtime_log_repository=self.runtime_log_repository,
         )
 
-        self.orchestrator = ConversationOrchestrator(
-            question_analysis_service=self.question_analysis_service,
-            session_state_service=self.session_state_service,
-            sql_validator=self.sql_validator,
-            sql_executor=self.sql_executor,
-            prompt_builder=self.prompt_builder,
-            llm_client=self.llm_client,
-            answer_builder=self.answer_builder,
-            retrieval_service=self.retrieval_service,
+        self.orchestrator = ReleaseAwareOrchestrator(
+            runtime_manager=self.release_runtime_manager,
             session_service=self.session_service,
+            orchestrator_factory=self._build_release_orchestrator,
             audit_service=self.audit_service,
-            progress_service=self.progress_service,
-            runtime_log_repository=self.runtime_log_repository,
-            conversation_persistence_service=self.conversation_persistence_service,
-            domain_config=self.domain_config,
         )
         self.evaluation_service = EvaluationService(
             orchestrator=self.orchestrator,
+            evaluation_case_repository=self.evaluation_case_repository,
             evaluation_run_repository=self.evaluation_run_repository,
             session_repository=self.session_repository,
             runtime_log_repository=self.runtime_log_repository,
             auth_service=self.auth_service,
             response_restore_service=self.chat_response_restore_service,
+        )
+
+    def _build_release_orchestrator(
+        self,
+        runtime: ReleaseRuntime,
+    ) -> ConversationOrchestrator:
+        return ConversationOrchestrator(
+            question_analysis_service=runtime.question_analysis_service,
+            session_state_service=self.session_state_service,
+            sql_validator=runtime.sql_validator,
+            sql_executor=self.sql_executor,
+            prompt_builder=runtime.prompt_builder,
+            llm_client=runtime.llm_client,
+            answer_builder=self.answer_builder,
+            retrieval_service=runtime.retrieval_service,
+            session_service=self.session_service,
+            audit_service=self.audit_service,
+            progress_service=self.progress_service,
+            runtime_log_repository=self.runtime_log_repository,
+            conversation_persistence_service=self.conversation_persistence_service,
+            domain_config=runtime.domain_config,
+            semantic_release_id=runtime.release.id,
         )
 
     def _require_database_connection(

@@ -8,10 +8,10 @@ import unittest
 
 from backend.app.models.retrieval import RetrievalHit
 from backend.app.models.sql_generation_context import SqlGenerationContext
-from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.semantic_runtime import SemanticRuntime
+from tests.fixture_metadata import fixture_semantic_runtime
 from tests.fake_vector_retriever import FIXTURE_PATH, FakeVectorRetriever
 
 
@@ -62,6 +62,50 @@ class FusionScoreTests(unittest.TestCase):
 
 
 class RetrievalQuotaTests(unittest.TestCase):
+    def test_keyword_results_survive_unavailable_vector_index(self) -> None:
+        service = RetrievalService.__new__(RetrievalService)
+        service.vector_retriever = type(
+            "PendingVectorRetriever",
+            (),
+            {"enabled": True, "ready": False},
+        )()
+        service.last_vector_sync_summary = {"pending_rebuild": True, "error": None}
+        service.vector_top_k = 8
+        service.corpus_documents = []
+        service._ensure_vector_ready = RetrievalService._ensure_vector_ready.__get__(service)
+        service._unique = lambda values: list(dict.fromkeys(values))
+        service._tokenize = lambda text: {"query"}
+        service._retrieve_text_vector_hits = lambda query_text: (_ for _ in ()).throw(
+            AssertionError("vector search should not run when readiness check fails")
+        )
+        service._retrieve_text_document_hits = lambda query_tokens: [
+            RetrievalHit(
+                source_type="knowledge",
+                source_id="knowledge_1",
+                score=2.0,
+                summary="keyword evidence",
+            )
+        ]
+        service._count_hits_by_source = RetrievalService._count_hits_by_source.__get__(service)
+        service._count_hits_by_channel = RetrievalService._count_hits_by_channel.__get__(service)
+        service._retrieval_channels = RetrievalService._retrieval_channels.__get__(service)
+        service._domains_from_hits = lambda hits: []
+        service._metrics_from_hits = lambda hits: []
+        service._apply_fusion_scores = lambda hits: [
+            setattr(hit, "fusion_score", hit.score) for hit in hits
+        ]
+        service._hit_dedup_key = RetrievalService._hit_dedup_key.__get__(service)
+        service._source_priority = RetrievalService._source_priority.__get__(service)
+        service._rerank_hits = RetrievalService._rerank_hits.__get__(service)
+        service._select_top_hits = RetrievalService._select_top_hits.__get__(service)
+
+        retrieval = service.retrieve_text(question="query")
+
+        self.assertEqual([hit.source_id for hit in retrieval.hits], ["knowledge_1"])
+        self.assertEqual(retrieval.retrieval_channels, ["keyword"])
+        self.assertTrue(retrieval.warnings)
+        self.assertIn("keyword fallback used", retrieval.warnings[0])
+
     def test_retrieve_text_preserves_hits_up_to_source_type_quota_total(self) -> None:
         service = RetrievalService.__new__(RetrievalService)
         service.vector_retriever = type(
@@ -134,14 +178,14 @@ class VectorFusionTests(unittest.TestCase):
         # Build per-test (not setUpClass): the loaded vector index is process
         # state that other test classes constructing a RetrievalService can
         # reset, so each test rebuilds and reloads its own fixture-backed index.
-        domain_config = DomainConfigLoader().load()
-        self.semantic_runtime = SemanticRuntime(domain_config)
+        domain_config, metadata_registry, self.semantic_runtime = fixture_semantic_runtime()
         self.prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
 
         vector_retriever = FakeVectorRetriever()
         service = RetrievalService(
             domain_config=domain_config,
             semantic_runtime=self.semantic_runtime,
+            metadata_registry=metadata_registry,
             vector_retriever=vector_retriever,
         )
 

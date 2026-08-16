@@ -36,7 +36,7 @@ class DbRuntimeLogRepository:
         params["offset"] = max(0, offset)
         rows = self.database_connector.fetch_all(
             f"""
-            SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+            SELECT trace_id, session_id, semantic_release_id, user_id, question, question_type, subject_domain,
                    effective_question, context_relation, question_decision,
                    conversation_summary, semantic_brief, question_context_json,
                    answer_status, context_valid, context_risk_level, context_risk_flags_json,
@@ -145,7 +145,7 @@ class DbRuntimeLogRepository:
     def get_query_log(self, trace_id: str) -> RuntimeQueryLogRecord | None:
         row = self.database_connector.fetch_one(
             """
-            SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+            SELECT trace_id, session_id, semantic_release_id, user_id, question, question_type, subject_domain,
                    effective_question, context_relation, question_decision,
                    conversation_summary, semantic_brief, question_context_json,
                    answer_status, context_valid, context_risk_level, context_risk_flags_json,
@@ -164,7 +164,7 @@ class DbRuntimeLogRepository:
         where_sql, params = self._trace_id_filter(trace_ids)
         rows = self.database_connector.fetch_all(
             f"""
-            SELECT trace_id, session_id, user_id, question, question_type, subject_domain,
+            SELECT trace_id, session_id, semantic_release_id, user_id, question, question_type, subject_domain,
                    effective_question, context_relation, question_decision,
                    conversation_summary, semantic_brief, question_context_json,
                    answer_status, context_valid, context_risk_level, context_risk_flags_json,
@@ -238,7 +238,7 @@ class DbRuntimeLogRepository:
     def list_retrieval_logs(self, trace_id: str) -> list[RuntimeRetrievalLogRecord]:
         rows = self.database_connector.fetch_all(
             """
-            SELECT retrieval_log_id, trace_id, rank_position, source_type, source_id,
+            SELECT retrieval_log_id, trace_id, semantic_release_id, rank_position, source_type, source_id,
                    summary, retrieval_channel, source_score,
                    score, matched_features_json, metadata_json, created_at
             FROM retrieval_logs
@@ -253,6 +253,7 @@ class DbRuntimeLogRepository:
                 RuntimeRetrievalLogRecord(
                     retrieval_log_id=row["retrieval_log_id"],
                     trace_id=row["trace_id"],
+                    semantic_release_id=row.get("semantic_release_id"),
                     rank_position=int(row["rank_position"]),
                     source_type=row["source_type"],
                     source_id=row["source_id"],
@@ -274,7 +275,8 @@ class DbRuntimeLogRepository:
     def get_sql_audit(self, trace_id: str) -> RuntimeSqlAuditRecord | None:
         row = self.database_connector.fetch_one(
             """
-            SELECT sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
+            SELECT sql_audit_id, trace_id, semantic_release_id, sql_text,
+                   context_valid, context_risk_level, context_risk_flags_json,
                    sql_valid,
                    sql_risk_level, sql_risk_flags_json, executed,
                    row_count, warnings_json, errors_json, created_at
@@ -295,7 +297,8 @@ class DbRuntimeLogRepository:
         where_sql, params = self._trace_id_filter(trace_ids)
         rows = self.database_connector.fetch_all(
             f"""
-            SELECT sql_audit_id, trace_id, sql_text, context_valid, context_risk_level, context_risk_flags_json,
+            SELECT sql_audit_id, trace_id, semantic_release_id, sql_text,
+                   context_valid, context_risk_level, context_risk_flags_json,
                    sql_valid,
                    sql_risk_level, sql_risk_flags_json, executed,
                    row_count, warnings_json, errors_json, created_at
@@ -316,6 +319,7 @@ class DbRuntimeLogRepository:
         return RuntimeSqlAuditRecord(
             sql_audit_id=row["sql_audit_id"],
             trace_id=row["trace_id"],
+            semantic_release_id=row.get("semantic_release_id"),
             sql_text=row["sql_text"],
             context_valid=bool(row["context_valid"]),
             context_risk_level=row.get("context_risk_level"),
@@ -397,7 +401,12 @@ class DbRuntimeLogRepository:
             created_at=datetime.utcnow(),
         )
 
-    def log_retrieval(self, trace_id: str, retrieval: RetrievalContext) -> None:
+    def log_retrieval(
+        self,
+        trace_id: str,
+        retrieval: RetrievalContext,
+        semantic_release_id: str | None = None,
+    ) -> None:
         self.database_connector.execute_write(
             "DELETE FROM retrieval_logs WHERE trace_id = :trace_id",
             {"trace_id": trace_id},
@@ -407,11 +416,13 @@ class DbRuntimeLogRepository:
             self.database_connector.execute_write(
                 """
                 INSERT INTO retrieval_logs (
-                    retrieval_log_id, trace_id, rank_position, source_type, source_id,
+                    retrieval_log_id, trace_id, semantic_release_id,
+                    rank_position, source_type, source_id,
                     summary, retrieval_channel, source_score,
                     score, matched_features_json, metadata_json, created_at
                 ) VALUES (
-                    :retrieval_log_id, :trace_id, :rank_position, :source_type, :source_id,
+                    :retrieval_log_id, :trace_id, :semantic_release_id,
+                    :rank_position, :source_type, :source_id,
                     :summary, :retrieval_channel, :source_score,
                     :score, :matched_features_json, :metadata_json, :created_at
                 )
@@ -419,6 +430,7 @@ class DbRuntimeLogRepository:
                 {
                     "retrieval_log_id": f"rl_{uuid.uuid4().hex[:16]}",
                     "trace_id": trace_id,
+                    "semantic_release_id": semantic_release_id,
                     "rank_position": index,
                     "source_type": hit.source_type,
                     "source_id": hit.source_id,
@@ -511,6 +523,7 @@ class DbRuntimeLogRepository:
         return RuntimeQueryLogRecord(
             trace_id=row["trace_id"],
             session_id=row.get("session_id"),
+            semantic_release_id=row.get("semantic_release_id"),
             user_id=row.get("user_id"),
             question=row.get("question"),
             effective_question=row.get("effective_question")

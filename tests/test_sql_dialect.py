@@ -12,6 +12,7 @@ class SqlDialectTests(unittest.TestCase):
     def test_dialect_accepts_only_explicit_role_names(self) -> None:
         self.assertEqual(SqlDialect.from_name("oracle").name, "oracle")
         self.assertEqual(SqlDialect.from_name("mysql").name, "mysql")
+        self.assertEqual(SqlDialect.from_name("sqlite").name, "sqlite")
 
         with self.assertRaisesRegex(ValueError, "unsupported sql dialect"):
             SqlDialect.from_name("oracle+oracledb://u:p@host:1521/?service_name=ORCL")
@@ -42,6 +43,15 @@ class SqlDialectTests(unittest.TestCase):
             connector._prepare_sql("SELECT * FROM query_logs ORDER BY created_at DESC LIMIT :limit;"),
             "SELECT * FROM query_logs ORDER BY created_at DESC LIMIT :limit",
         )
+
+    def test_sqlite_uses_limit_and_has_no_session_read_timeout(self) -> None:
+        dialect = SqlDialect.from_name("sqlite")
+
+        self.assertEqual(dialect.label, "SQLite")
+        self.assertEqual(dialect.sqlglot_dialect, "sqlite")
+        self.assertTrue(dialect.has_result_limit("SELECT * FROM query_logs LIMIT 20"))
+        self.assertEqual(dialect.extract_result_limit_value("SELECT * FROM query_logs LIMIT 20"), 20)
+        dialect.apply_read_timeout(object(), 30)
 
     def test_oracle_prompt_constraints_do_not_request_mysql_limit(self) -> None:
         builder = PromptBuilder(

@@ -1,16 +1,20 @@
 # 项目指南
 
-这份文档是 Text2SQL 的唯一主文档，合并架构、运行、API、调试和语义资产维护规则。根目录 [README.md](../README.md) 只保留快速启动和入口导航。
+这份文档描述 Text2SQL 当前实现的运行、API、调试和语义资产维护方式。架构边界见 [ARCHITECTURE.md](./ARCHITECTURE.md)，未完成增强项见 [TODO.md](./TODO.md)。根目录 [README.md](../README.md) 保留快速启动和入口导航。
 
-## 1. 架构边界
+## 1. 当前实现边界
+
+> 本节是当前代码事实：单实例、单业务数据库，不保留未上线旧设计的兼容层。
 
 - 业务库固定为 Oracle，由 `BUSINESS_DATABASE_URL` 配置，只执行只读业务 SQL。
-- runtime 库固定为 MySQL，由 `RUNTIME_DATABASE_URL` 配置，保存用户、会话、消息、状态、trace、query log、SQL audit、feedback、eval、向量语料和语义资产（`semantic_assets` 表）。
+- runtime store 固定为 SQLite，由 `RUNTIME_DATABASE_URL` 配置，保存用户、会话、消息、状态、trace、query log、SQL audit、feedback、eval、物理 catalog、语义草稿和发布历史。
 - 业务 SQL 生成、repair、AST 解析和 validator 都按 Oracle 规则运行。
-- 语义资产（表结构、业务知识、join pattern、示例）默认存 runtime MySQL 的 `semantic_assets` 表；`semantic/`、`examples/` 下的 JSON 文件是首次启动的 seed 和版本控制来源，运行时真相在 DB（见第 9 节）。`eval/` 仍是文件，是评测和检索回归样本的来源。
-- 启动时会检查业务库、runtime 库、runtime schema、metadata、`sqlglot` 和向量检索配置；关键依赖失败会阻断启动。
+- 语义资产通过管理中心写入 physical catalog、draft 和 release snapshot；查询运行时只读取当前会话绑定的 release snapshot。`tests/fixtures/` 和 `eval/` 下的 JSON 仅用于离线回归，不能成为生产运行时配置。
+- 部署配置只从环境变量或 Secret 读取，管理中心“系统设置”只读展示当前值。
+- embedding 向量写入 `VECTOR_CACHE_DIR` 下的可重建文件缓存，不占用 runtime 表。
+- 启动时初始化 runtime schema 并检查业务库、`sqlglot` 和检索配置。向量配置不可用时明确降级到 BM25；业务库或 SQL 安全依赖不可用时阻断对应查询能力。
 - 准确率修复优先沉淀到表结构说明、业务知识、样例、join pattern、retrieval、prompt 和 validator。
-- 字段事实只沉淀在语义资产和 `SemanticRuntime`。例如时间字段的物理存储格式由 `semantic/tables.json.time_fields` 声明，SQL prompt 和 validator 只消费这些语义事实，不在业务链路里按具体表名写场景 if/else。
+- 字段事实只沉淀在发布版本的 `tables_metadata` 和 `SemanticRuntime`。例如时间字段的物理存储格式由 release 的 `time_fields` 声明，SQL prompt 和 validator 只消费这些语义事实，不在业务链路里按具体表名写场景 if/else。
 
 ## 2. 主链路
 
@@ -31,7 +35,7 @@
   -> SQL Validator 校验、标记风险并按需 repair
   -> Oracle 执行
   -> AnswerBuilder 生成用户响应
-  -> MySQL 落库 response snapshot、trace、query log、SQL audit、消息和会话状态
+  -> SQLite 落库 response snapshot、trace、query log、SQL audit、消息和会话状态
   -> Workspace 聚合给前端恢复
 ```
 
@@ -59,17 +63,17 @@
 
 `RetrievalContext` 汇总进入 SQL prompt 的证据。检索来源包括：
 
-- `semantic/tables.json`：真实表、字段、关系、时间字段格式。
-- `semantic/business_knowledge.json`：业务规则、公式、默认口径和禁忌。
-- `examples/nl2sql_examples.template.json`：人工确认过的 NL2SQL few-shot。
-- `semantic/join_patterns.json`：稳定 join 方式。
-- 向量语料：启用后使用同一批资产生成并持久化到 runtime MySQL。
+- release `tables_metadata`：真实表、字段、关系、时间字段格式和语义名。
+- release `business_knowledge`：业务规则、公式、默认口径和禁忌。
+- release `examples_template`：人工确认过的 NL2SQL few-shot。
+- release `join_patterns`：稳定 join 方式。
+- 向量语料：启用后使用同一批资产生成，按 release 持久化到本地文件缓存。
 
 检索命中进入 SQL prompt 前会做证据闭合：已选中的 join pattern 会补齐 companion tables；已选中的 business knowledge 会补齐其声明的真实表 schema。这个步骤只根据已命中的结构化证据补 schema，不在 Python 中按业务关键词硬编码表选择。
 
 检索打分分两路融合：
 
-- 关键词通道用 BM25，对中文先用 jieba 分词（叠加字符 bigram 兜底），并用业务知识、join pattern 的关键词给分词器播种，避免“最新P版”“达成率”这类复合业务词被切碎。jieba 不可用时退化为纯 bigram，不阻断索引构建。
+- 关键词通道用 BM25，对中文先用 jieba 分词（叠加字符 bigram 兜底），并用当前 release 中业务知识和 join pattern 的关键词给分词器播种。jieba 不可用时退化为纯 bigram，不阻断索引构建。
 - 向量通道启用后用同一批语料的 embedding 算 cosine。
 
 两个通道的原始分量纲不同（BM25 约 0-50，cosine 约 0.3-0.9），直接相加会让向量被淹没。因此排序使用 `fusion_score`：按 `(retrieval_channel, source_type)` 分桶做 min-max 归一化到 `[0,1]` 再融合，同一文档跨通道命中时 `fusion_score` 相加。按 `source_type` 分桶是为了和检索证据配额一致，避免高分 example 或 knowledge 把同一通道里的 join pattern 压低。`hit.score` 保留 BM25 原量级，只供 trace、探针和调试观察原始命中强度，不再参与下游二次打分（见下文）。向量关闭时归一化是配额竞争桶内的保序变换，排序结果不变。
@@ -129,7 +133,7 @@ scripts/devctl.sh stop backend
 本地数据库由根目录 [../docker-compose.yml](../docker-compose.yml) 提供：
 
 ```bash
-docker compose up -d oracle mysql
+docker compose up -d oracle
 ```
 
 常用后端开关：
@@ -151,7 +155,7 @@ docker compose up -d oracle mysql
 - 左侧：会话列表、登录用户信息、管理员视图切换。
 - 中间：消息流、欢迎态快捷问题卡片、输入框。
 - 右侧：详情侧栏，包含 `结果 / SQL / Trace / 状态`。
-- 管理中心：runtime 状态、日志、用户、角色、反馈、metadata reload、向量索引刷新和 replay。
+- 管理中心：数据库结构与同步、语义草稿与发布历史、runtime 状态、日志、用户、角色、反馈、向量索引刷新和 replay。
 
 运行：
 
@@ -202,6 +206,8 @@ Chat / Workspace：
 - `GET /api/chat/traces/{trace_id}/sql-audit`
 - `GET /api/chat/traces/{trace_id}/export`
 - `POST /api/chat/feedback`
+- `GET /api/semantic/summary`
+- `POST /api/semantic/retrieve-preview`
 
 Admin：
 
@@ -216,8 +222,15 @@ Admin：
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-case`
 - `POST /api/admin/runtime/query-logs/{trace_id}/materialize-example`
 - `POST /api/admin/runtime/vector/prewarm`
-- `GET /api/admin/metadata/overview`
-- `POST /api/admin/metadata/reload`
+- `GET /api/admin/database/status`
+- `GET /api/admin/database/catalog`
+- `POST /api/admin/database/sync`
+- `GET /api/admin/semantic/drafts`
+- `GET /api/admin/semantic/drafts/{name}`
+- `PUT /api/admin/semantic/drafts/{name}`
+- `GET /api/admin/semantic/releases`
+- `POST /api/admin/semantic/releases`
+- `GET /api/admin/semantic/releases/{release_id}`
 - `GET /api/admin/eval/cases`
 - `POST /api/admin/eval/run`
 - `GET /api/admin/users`
@@ -299,48 +312,53 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 
 `selected_sources` 是最终 SQL prompt 可用表。如果这里缺关键表，先回到 Retrieval 检查对应证据是否命中、证据 metadata 是否声明了该表。
 
-`time_resolution_count` 大于 0 时，继续看 `evidence_context.time_resolution`。这里会给出逻辑时间字段到物理字段的映射、`format`、`projection_example` 和月份过滤示例。排查 Oracle 时间类错误时，先确认 SQL 是否按这些示例生成；例如 `production_actuals.work_date` 是 `YYYYMMDD` 字符串，月粒度表达应是 `SUBSTR(work_date, 1, 6)`，不是 `TO_CHAR(work_date, 'YYYYMM')`。
+`time_resolution_count` 大于 0 时，继续看 `evidence_context.time_resolution`。这里会给出 release 声明的逻辑时间名到物理字段映射、`grain`、`format` 和 `projection_example`。例如某字段声明为 `YYYYMMDD` 字符串时，月粒度表达应使用 `SUBSTR(field_name, 1, 6)`，而不是把它当日期字段套 `TO_CHAR`。
 
 ## 9. 语义资产维护
 
-会直接影响 SQL 生成的内容资产：
+发布后会直接影响 SQL 生成的运行时资产：
 
-- `semantic/tables.json`
-- `semantic/business_knowledge.json`
-- `semantic/join_patterns.json`
-- `examples/nl2sql_examples.template.json`
+- `tables_metadata` draft
+- `business_knowledge` draft
+- `join_patterns` draft
+- `examples_template` draft
+
+仓库不再保存生产语义 JSON。`tests/fixtures/` 中的模拟发布快照只供单元测试和 lint；检索算法的离线回归样本保存在：
+
 - `eval/retrieval_cases.json`
-- `eval/evaluation_cases.json`
 
 ### 存储位置
 
-`tables.json`、`business_knowledge.json`、`join_patterns.json` 和 `nl2sql_examples.template.json` 这四类语义资产的运行时真相在 runtime MySQL 的 `semantic_assets` 表（单表整文档 JSON，一行一类）。`SEMANTIC_ASSET_STORE=db`（默认）时链路只读写 DB；仓库里的 JSON 文件退化为版本控制的**种子**：`semantic_assets` 表为空时首次启动会从文件 seed 一次，之后不再被运行时读取（缺某一类时才回退到对应文件）。设 `SEMANTIC_ASSET_STORE=file` 可回到直接读写 JSON 文件的旧行为。
+物理 catalog 来自当前 Oracle 的 schema sync。四类语义资产在管理中心中以 draft 保存，发布后形成不可变 release snapshot；查询运行时只加载当前会话绑定的 release。`tests/fixtures/` 和 `eval/retrieval_cases.json` 仅供离线回归，不会进入生产镜像。管理员创建或从真实 trace 沉淀的 evaluation case 保存在 SQLite 运行库中。
 
-推荐用管理中心的「语义资产」页面做结构化编辑，保存后自动触发检索重载，无需重启。直接改文件只在种子阶段或 `SEMANTIC_ASSET_STORE=file` 下才影响运行时；DB 模式下改文件需要清空 `semantic_assets` 表重新 seed，或通过 UI / `PUT /api/admin/metadata/documents/{name}` 写入。`eval/` 下的两个 case 文件仍是纯文件，不进 DB。
+`subject_domain` 和 `domains` 是当前业务自行定义的字符串。前后端没有固定业务域列表，也不会从具体表名推断业务域。时间字段的业务别名通过 `time_fields.<field>.semantic_names` 在表结构编辑器中配置。
+
+推荐使用管理中心的「当前数据库 / Schema 同步 / 草稿版本 / 发布历史」完成配置、校验和发布。保存 draft 不会改变线上查询，只有发布成功并激活后，新会话才使用新版本。
 
 ### 应该改哪里
 
-- 表、字段、时间格式、枚举说明错误：改 `semantic/tables.json`。
-- 可复用业务规则、公式、默认口径、禁忌：改 `semantic/business_knowledge.json`。
-- 稳定 join 方式：改 `semantic/join_patterns.json`。
-- 已人工确认正确的完整问题和 Oracle SQL：改 `examples/nl2sql_examples.template.json`。
-- 防止真实问题回归：改 `eval/evaluation_cases.json`。
+- 表、字段、时间格式、枚举说明错误：在 `tables_metadata` 草稿中修改并发布。
+- 可复用业务规则、公式、默认口径、禁忌：在 `business_knowledge` 草稿中修改。
+- 稳定 join 方式：在 `join_patterns` 草稿中修改。
+- 已人工确认正确的完整问题和 Oracle SQL：在 `examples_template` 草稿中修改。
+- 防止真实问题回归：通过管理 API 创建 evaluation case，或从真实 trace 执行 `materialize-case`。
 - 防止关键检索证据或表 schema 丢失：改 `eval/retrieval_cases.json`。
 
 不要把业务事实写进 Python if/else；代码只负责加载、检索、排序、裁剪、渲染、组装、安全校验和审计。
 
 ### 时间字段格式
 
-`semantic/tables.json` 中的 `time_fields` 是时间表达式生成和执行前校验的共同事实来源。维护规则：
+发布版本 `tables_metadata` 中的 `time_fields` 是时间表达式生成和执行前校验的共同事实来源。维护规则：
 
 - `grain` 表示业务粒度，例如 `day` 或 `month`。
 - `format` 表示物理字段存储格式，不表示自然语言输入格式。常见值包括 `YYYYMM`、`YYYYMMDD`、`YYYY-MM`、`YYYY-MM-DD`。
+- `semantic_names` 声明该物理时间字段可承载的发布语义名；QuestionContext、SQL prompt 和 validator 通过它解析业务字段，不在代码中内置统一的月份或日期别名。
 - 如果物理字段是字符串编码的日期或月份，SQL 应使用字符串表达式或匹配格式的字面量范围；不要把它当 Oracle `DATE/TIMESTAMP` 字段套 `TO_CHAR`、`TRUNC` 等日期函数。
 - 如果真实数据库字段后来改成 `DATE/TIMESTAMP`，先更新 `time_fields` 的表达约定和对应测试，再调整 prompt/validator 行为；不要只在样例 SQL 中局部修正。
 
 ### 样例要求
 
-`nl2sql_examples.template.json` 必填字段只有 `question` 和 `sql`，推荐补充 `id`、`subject_domain`、`metrics`、`dimensions`、`tags`、`notes`、`result_shape`。
+`examples_template` draft 中的样例必填字段只有 `question` 和 `sql`，推荐补充 `id`、`subject_domain`、`metrics`、`dimensions`、`tags`、`notes`、`result_shape`。
 
 样例 SQL 必须满足：
 
@@ -354,9 +372,11 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 
 ### 业务知识要求
 
-`business_knowledge.json` 使用 entry + notes：
+`business_knowledge` draft 使用 entry + notes：
 
 - `id`：稳定、唯一、可读，使用小写蛇形命名。
+- `priority`：可选的显式排序权重，范围按 `-20..20` 截断；只用于同一问题下的证据优先级，不改变规则内容。
+- `always_include`：可选，仅在 entry 声明的业务域内始终进入候选；用于该域每次查询都必须携带的基础规则，避免滥用。
 - `domains`：只填实际适用业务域。
 - `tables`：只填规则直接涉及的事实表、维表或桥接表。
 - `keywords`：覆盖用户词、业务词和关键物理字段。
@@ -364,18 +384,20 @@ python3 -m unittest tests.test_retrieval_eval.RetrievalEvalTests
 
 note 子文档只影响检索粒度，不改变录入格式。命中 note 后仍会回填父 entry，并用父 entry 的 `tables` 做 schema closure。
 
+关键词匹配对 ASCII 字段名和标识符采用完整 token，对中文或中英混合短语采用子串匹配。schema closure 只负责补齐已命中证据引用的表结构，不能反过来成为业务知识的相关性信号。
+
 ### 维护流程
 
 1. 从真实失败问题开始，看 trace、retrieval、prompt 和 SQL audit，确认失败原因。
 2. 判断修改目标：表结构说明、业务知识、join pattern、样例、eval case 或 retrieval case。
-3. 编辑 JSON 时保持格式稳定，不做无关排序或大面积重排。
-4. 执行语义配置检查：
+3. 在 UI 保存对应 draft，处理 schema 引用和版本冲突提示。
+4. 执行离线 fixture 检查：
 
 ```bash
 python3 backend/domain_config_lint.py
 ```
 
-5. 如果改了样例或知识库，重启服务或调用 `POST /api/admin/metadata/reload`。
+5. 发布新版本并预热该版本索引。
 6. 用原始问题重新跑一次，确认 retrieval 命中、SQL prompt 使用了新内容，并且 SQL 通过 validator 和执行。
 7. 对真实高价值问题，补充 eval case 或 example。
 
@@ -384,8 +406,8 @@ python3 backend/domain_config_lint.py
 - `replay`：用当前链路重跑历史 trace。
 - `materialize-case`：把真实 trace 沉淀为 eval case。
 - `materialize-example`：把人工确认过的 trace 沉淀为 SQL few-shot 样例。
-- `eval/evaluation_cases.json`：保存回归样本。
-- `examples/nl2sql_examples.template.json`：保存可进入 prompt 的人工确认样例。
+- SQLite `evaluation_cases`：保存管理员创建或从真实 trace 沉淀的回归样本。
+- `examples_template` draft：保存可进入 prompt 的人工确认样例。
 
 ## 11. 验证命令
 
@@ -406,9 +428,8 @@ npm run build
 - `backend/app/api/routes`：HTTP 路由。
 - `backend/app/core`：应用装配、settings、异常和取消处理。
 - `backend/app/models`：请求、响应、会话、检索、trace、workspace、auth、eval 模型。
-- `backend/app/repositories`：runtime 数据库仓库和 metadata 仓库。
+- `backend/app/repositories`：SQLite runtime、语义版本和文件向量缓存的 repository 边界。
 - `backend/app/services`：QuestionContext、retrieval、prompt、LLM、SQL 校验、执行、answer、会话、审计、管理、eval 和 auth。
 - `frontend/src`：工作台、管理中心和 API client。
-- `semantic/`：表结构、业务知识和 join pattern。
-- `examples/`：NL2SQL few-shot 样例。
-- `eval/`：评测和检索回归样本。
+- `tests/fixtures/`：离线回归用的发布快照样例。
+- `eval/retrieval_cases.json`：检索算法的离线回归样本。

@@ -13,26 +13,7 @@ QuestionType = Literal[
     "invalid",
     "clarification_needed",
 ]
-SubjectDomain = Literal[
-    "inventory",
-    "demand",
-    "plan_actual",
-    "sales_financial",
-    "dimension",
-    "unknown",
-]
-# Engineering enum for LLM output space / validation — not business rules.
-# Keep in sync with SubjectDomain literals above.
-SUPPORTED_SUBJECT_DOMAINS: frozenset[str] = frozenset(
-    {
-        "inventory",
-        "demand",
-        "plan_actual",
-        "sales_financial",
-        "dimension",
-        "unknown",
-    }
-)
+SubjectDomain = str
 TimeGrain = Literal["day", "week", "month", "version", "unknown"]
 FilterOperator = Literal[
     "=",
@@ -89,4 +70,3 @@ class ContextDelta(BaseModel):
     replace_version_context: VersionContext | None = None
     replace_limit: int | None = None
     replace_analysis_mode: str | None = None
-

@@ -4,9 +4,9 @@ import unittest
 
 from backend.app.models.semantic_types import FilterItem
 from backend.app.models.sql_generation_context import SqlGenerationContext
-from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.semantic_runtime import SemanticRuntime
+from tests.fixture_metadata import fixture_semantic_runtime
 
 
 QUESTION = "最新OMS库存，TtL物量，对应库龄分布情况，库龄分为<3M、3-6M、6-12M、>12M"
@@ -19,8 +19,7 @@ def sql_context(sql_context_value: SqlGenerationContext) -> SqlGenerationContext
 class InventoryAgeDistributionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        domain_config = DomainConfigLoader().load()
-        cls.semantic_runtime = SemanticRuntime(domain_config)
+        _domain_config, cls.metadata_registry, cls.semantic_runtime = fixture_semantic_runtime()
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
 
     def test_question_context_prompt_contains_generic_dimension_and_latest_guidance(self) -> None:

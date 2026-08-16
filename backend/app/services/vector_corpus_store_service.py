@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 
-from backend.app.repositories.db_vector_document_repository import DbVectorDocumentRepository
+from backend.app.repositories.vector_document_repository import VectorDocumentRepository
 from backend.app.services.vector_retriever import VectorRetriever
 
 
@@ -39,11 +39,13 @@ class VectorCorpusSyncResult:
 class VectorCorpusStoreService:
     def __init__(
         self,
-        repository: DbVectorDocumentRepository,
+        repository: VectorDocumentRepository,
         vector_retriever: VectorRetriever,
+        scope_id: str,
     ) -> None:
         self.repository = repository
         self.vector_retriever = vector_retriever
+        self.scope_id = scope_id
 
     def sync(self, corpus_documents: list[dict]) -> VectorCorpusSyncResult:
         now = datetime.now(tz=timezone.utc)
@@ -62,7 +64,11 @@ class VectorCorpusStoreService:
         existing_rows = {
             item["document_id"]: item
             for item in self.repository.find_by_document_ids(
-                [self._document_id(document["source_type"], document["source_id"]) for document in corpus_documents]
+                self.scope_id,
+                [
+                    self._document_id(document["source_type"], document["source_id"])
+                    for document in corpus_documents
+                ],
             )
         }
 
@@ -143,7 +149,7 @@ class VectorCorpusStoreService:
             if row_changed:
                 rows_to_upsert.append(stored_row)
 
-        deleted_count = self.repository.delete_missing(document_ids)
+        deleted_count = self.repository.delete_missing(self.scope_id, document_ids)
         upserted_count = self.repository.upsert_documents(rows_to_upsert)
         return {
             "documents": prepared_documents,
@@ -161,6 +167,7 @@ class VectorCorpusStoreService:
         metadata = document.get("metadata", {})
         return {
             "document_id": document_id,
+            "scope_id": self.scope_id,
             "source_type": document["source_type"],
             "source_id": document["source_id"],
             "summary": document.get("summary"),
@@ -217,7 +224,9 @@ class VectorCorpusStoreService:
         return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
     def _document_id(self, source_type: str, source_id: str) -> str:
-        return hashlib.sha1(f"{source_type}:{source_id}".encode("utf-8")).hexdigest()
+        return hashlib.sha1(
+            f"{self.scope_id}:{source_type}:{source_id}".encode("utf-8")
+        ).hexdigest()
 
     def _same_signature(self, left: dict, right: dict | None) -> bool:
         if right is None:

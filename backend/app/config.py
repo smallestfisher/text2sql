@@ -2,10 +2,4 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SESSION_STATE_SCHEMA_PATH = REPO_ROOT / "schemas" / "session_state.schema.json"
-EXAMPLES_TEMPLATE_PATH = REPO_ROOT / "examples" / "nl2sql_examples.template.json"
-TABLES_METADATA_PATH = REPO_ROOT / "semantic" / "tables.json"
-BUSINESS_KNOWLEDGE_PATH = REPO_ROOT / "semantic" / "business_knowledge.json"
-JOIN_PATTERNS_PATH = REPO_ROOT / "semantic" / "join_patterns.json"
 RUNTIME_STORE_SCHEMA_PATH = REPO_ROOT / "sql" / "runtime_store.sql"
-EVAL_CASES_PATH = REPO_ROOT / "eval" / "evaluation_cases.json"

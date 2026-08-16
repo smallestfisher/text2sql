@@ -13,17 +13,21 @@ class SqlDialect:
         lowered = (value or "").strip().lower()
         if not lowered:
             lowered = default
-        if lowered not in {"oracle", "mysql"}:
+        if lowered not in {"oracle", "mysql", "sqlite"}:
             raise ValueError(f"unsupported sql dialect: {value}")
         return cls(lowered)
 
     @property
     def label(self) -> str:
-        return "Oracle SQL" if self.name == "oracle" else "MySQL"
+        if self.name == "oracle":
+            return "Oracle SQL"
+        if self.name == "sqlite":
+            return "SQLite"
+        return "MySQL"
 
     @property
     def sqlglot_dialect(self) -> str:
-        return "oracle" if self.name == "oracle" else "mysql"
+        return "oracle" if self.name == "oracle" else self.name
 
     @property
     def result_limit_clause_name(self) -> str:
@@ -35,7 +39,7 @@ class SqlDialect:
         return f"LIMIT {int(limit)}"
 
     def has_result_limit(self, sql: str) -> bool:
-        if self.name == "mysql":
+        if self.name in {"mysql", "sqlite"}:
             return re.search(r"\bLIMIT\s+\d+\b", sql, re.IGNORECASE) is not None
         return re.search(
             r"\bFETCH\s+(?:FIRST|NEXT)\s+\d+\s+ROWS?\s+ONLY\b",
@@ -44,7 +48,7 @@ class SqlDialect:
         ) is not None
 
     def extract_result_limit_value(self, sql: str) -> int | None:
-        if self.name == "mysql":
+        if self.name in {"mysql", "sqlite"}:
             limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE)
             if limit_match:
                 return int(limit_match.group(1))

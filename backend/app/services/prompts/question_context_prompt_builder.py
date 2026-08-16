@@ -24,6 +24,7 @@ class QuestionContextPromptBuilder:
         parser_signals = parser_signals or {}
         history_state = session_state if include_history else None
         subject_domain = str(parser_signals.get("subject_domain") or (history_state.subject_domain if history_state else "unknown"))
+        subject_domain_values = self._subject_domain_values()
         focus_tables = builder._question_context_focus_tables(subject_domain, parser_signals, history_state)
         conversation_summary = builder._conversation_summary(history_state) if history_state is not None else ""
         recent_turns = [
@@ -76,12 +77,32 @@ class QuestionContextPromptBuilder:
                     "subject_domain",
                     "effective_question",
                     "semantic_brief",
+                    "entities",
+                    "metrics",
+                    "dimensions",
+                    "filters",
+                    "sort",
+                    "time_context",
+                    "version_context",
+                    "limit",
+                    "analysis_mode",
                     "clarification_question",
                     "reason",
                 ],
                 "decision_values": ["answerable", "clarification_needed", "invalid"],
                 "context_relation_values": ["new", "follow_up", "ambiguous"],
-                "subject_domain_values": ["inventory", "demand", "plan_actual", "sales_financial", "dimension", "unknown"],
+                "subject_domain_values": subject_domain_values,
+                "structured_semantics_schema": {
+                    "entities": ["string"],
+                    "metrics": ["string"],
+                    "dimensions": ["string"],
+                    "filters": [{"field": "string", "op": "=|!=|>|>=|<|<=|between|in|like|latest_n|is_null|not_null", "value": "any"}],
+                    "sort": [{"field": "string", "order": "asc|desc"}],
+                    "time_context": {"grain": "day|week|month|version|unknown", "range": {"start": "string|null", "end": "string|null"}},
+                    "version_context": {"field": "string|null", "value": "string|null"},
+                    "limit": "positive integer|null",
+                    "analysis_mode": "string|null",
+                },
                 "constraints": [
                     "只做问题上下文整理，不生成 SQL。",
                     "除业务编码、字段名、表名、产品型号和专有缩写外，effective_question、semantic_brief、clarification_question、reason 等自然语言文本字段必须使用中文。",
@@ -105,11 +126,19 @@ class QuestionContextPromptBuilder:
                     "如果用户提到“最新”但没有给出具体时间，应在 semantic_brief 中保留最新口径，不要编造具体日期。",
                     "只判断用户这句话和可用会话上下文是否足以形成完整自然语言问题；不要判断业务知识、字段、表、计算方法或 SQL 是否足够。",
                     "semantic_brief 用自然语言说明用户真正要查什么，供后续检索和 SQL 生成使用。",
-                    "只输出指定 JSON 字段，不要输出结构化业务规划字段。",
+                    "entities、metrics、dimensions、filters、sort、time_context、version_context、limit 只记录用户在 effective_question 中明确表达的语义，不得补造可选条件。",
+                    "结构化语义字段优先使用 context_hints.table_fields 和语义资产中已有的逻辑字段名；无法稳定映射的字段留空，并在 semantic_brief 中保留原始业务表达。",
+                    "当用户明确要求 Top N、前 N、最多或最少时，必须填写对应的 sort 和 limit。",
+                    "只输出指定 JSON 字段。",
                     "不要输出 markdown。",
                 ],
             },
         }
+
+    def _subject_domain_values(self) -> list[str]:
+        runtime = self._prompt_builder.semantic_runtime
+        domains = runtime.subject_domains() if runtime is not None else []
+        return [*domains, "unknown"]
 
     def conversation_summary(self, session_state: SessionState | None) -> str:
         if session_state is None:

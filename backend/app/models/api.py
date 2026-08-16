@@ -16,6 +16,7 @@ from .trace import TraceRecord
 class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
+    semantic_release_id: str | None = None
     session_state: SessionState | None = None
     user_context: UserContext | None = None
 
@@ -69,6 +70,7 @@ class ExecutionResponse(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    semantic_release_id: str | None = None
     question_context: QuestionContext | None = None
     classification: QuestionClassification
     context_summary: ContextSummary

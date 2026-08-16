@@ -303,31 +303,9 @@ class PromptEvidenceToolkit:
         for index, note in enumerate(notes):
             lower_note = note.lower()
             score = sum(1 for term in terms if term and term in lower_note)
-            score += self._critical_business_knowledge_score(note)
             scored.append((score, -index, note))
         scored.sort(reverse=True)
         return [note for _score, _negative_index, note in scored[: self.BUSINESS_KNOWLEDGE_MAX_ITEMS_PER_ENTRY]]
-
-    def _critical_business_knowledge_score(self, note: str) -> int:
-        # Ranking heuristic for note ordering only; business facts belong in assets.
-        critical_terms = (
-            "latest_n",
-            "最新",
-            "横向",
-            "展开",
-            "y/n",
-            "is_",
-            "time_resolution",
-            "不要自行追加",
-            "库龄",
-            "ttl",
-            "pm_version",
-            "act_type",
-            "达成率",
-            "gap",
-        )
-        lower_note = note.lower()
-        return sum(2 for term in critical_terms if term in lower_note)
 
 
     def _business_knowledge_terms(self, context: SqlGenerationContext, selected_sources: list[str] | None) -> set[str]:
@@ -396,9 +374,14 @@ class PromptEvidenceToolkit:
         entry: dict,
         knowledge_hit_scores: dict[str, float] | None = None,
     ) -> float:
-        score = 0.0
         domains = {str(item).lower() for item in entry.get("domains", []) if item}
-        if context.subject_domain and context.subject_domain.lower() in domains:
+        domain_matches = bool(
+            context.subject_domain
+            and context.subject_domain.lower() in domains
+        )
+        priority = self._business_knowledge_priority(entry) if not domains or domain_matches else 0.0
+        score = priority
+        if domain_matches:
             score += 5
         entry_tables = {str(item).lower() for item in entry.get("tables", []) if item}
         for source in selected_sources or []:
@@ -420,7 +403,12 @@ class PromptEvidenceToolkit:
             ]
             if item
         ).lower()
-        score += 2 * sum(1 for keyword in entry_keywords if keyword and keyword in query_text)
+        query_keyword_matches = sum(
+            1
+            for keyword in entry_keywords
+            if self._business_keyword_matches_query(keyword, query_text)
+        )
+        score += 2 * query_keyword_matches
         entry_text = " ".join(
             str(item)
             for item in [
@@ -433,9 +421,42 @@ class PromptEvidenceToolkit:
         ).lower()
         score += 0.5 * sum(1 for term in terms if term and term in entry_text)
         entry_id = str(entry.get("id", ""))
-        if entry_id and knowledge_hit_scores and entry_id in knowledge_hit_scores:
+        has_retrieval_hit = bool(entry_id and knowledge_hit_scores and entry_id in knowledge_hit_scores)
+        if has_retrieval_hit:
             score += self.KNOWLEDGE_PRESENCE_BONUS + self._retrieval_boost_from_fusion(knowledge_hit_scores[entry_id])
+        always_include = bool(entry.get("always_include")) and (not domains or domain_matches)
+        if not (
+            query_keyword_matches
+            or has_retrieval_hit
+            or priority > 0
+            or always_include
+        ):
+            return 0.0
         return score
+
+    def _business_keyword_matches_query(
+        self,
+        keyword: str,
+        query_text: str,
+    ) -> bool:
+        normalized = keyword.strip().lower()
+        if not normalized:
+            return False
+        if re.search(r"[\u4e00-\u9fff]", normalized):
+            return normalized in query_text
+        if re.fullmatch(r"[a-z0-9_$#]+", normalized):
+            return re.search(
+                rf"(?<![a-z0-9_$#]){re.escape(normalized)}(?![a-z0-9_$#])",
+                query_text,
+            ) is not None
+        return normalized in query_text
+
+    def _business_knowledge_priority(self, entry: dict) -> float:
+        try:
+            priority = float(entry.get("priority", 0))
+        except (TypeError, ValueError):
+            return 0.0
+        return max(-20.0, min(priority, 20.0))
 
     def _retrieved_knowledge_hit_scores(
         self,
@@ -701,29 +722,30 @@ class PromptEvidenceToolkit:
         if self.semantic_runtime is None:
             return {}
         resolution: dict[str, dict] = {}
-        for logical_field in ["biz_date", "biz_month"]:
-            candidates = self._time_resolution_candidates(context, logical_field)
+        for grain in ("day", "month"):
+            candidates = self._time_resolution_candidates(context, grain)
             if candidates:
-                resolution[logical_field] = {
+                resolution[grain] = {
                     "candidates": candidates,
                 }
         return resolution
 
-    def _time_resolution_candidates(self, context: SqlGenerationContext, logical_field: str) -> list[dict]:
+    def _time_resolution_candidates(self, context: SqlGenerationContext, grain: str) -> list[dict]:
         if self.semantic_runtime is None:
             return []
-        if logical_field == "biz_date":
+        if grain == "day":
             candidates: list[dict] = []
             for candidate in self.semantic_runtime.resolve_time_field_candidates(
                 context.subject_domain,
                 context.tables,
-                logical_field,
+                grain="day",
             ):
                 field_expr = candidate["qualified_field"]
                 payload = {
                     "field": field_expr,
                     "grain": candidate.get("grain"),
                     "format": candidate.get("format"),
+                    "semantic_names": candidate.get("semantic_names", []),
                 }
                 day_filter_example = self._day_filter_example(context, field_expr, candidate.get("format"))
                 if day_filter_example:
@@ -738,62 +760,80 @@ class PromptEvidenceToolkit:
                 candidates.append(payload)
             return candidates
 
-        if logical_field != "biz_month":
+        if grain != "month":
             return []
 
-        candidates = []
+        candidates: list[dict] = []
         sample_month = self._example_compact_month(context)
-        for candidate in self.semantic_runtime.resolve_time_field_candidates(
-            context.subject_domain,
-            context.tables,
-            logical_field,
-        ):
-            # Day-grain fields also match biz_month (they can be projected to a
-            # month via SUBSTR), but they are handled correctly by the biz_date
-            # loop below. Emitting them here produces a duplicate and, worse, a
-            # wrong month_filter_example that compares a YYYYMMDD column to a
-            # YYYYMM literal. Skip them so only true month fields flow through.
-            if str(candidate.get("grain") or "").lower() == "day":
-                continue
+        source_candidates = [
+            *self.semantic_runtime.resolve_time_field_candidates(
+                context.subject_domain,
+                context.tables,
+                grain="month",
+            ),
+            *self.semantic_runtime.resolve_time_field_candidates(
+                context.subject_domain,
+                context.tables,
+                grain="day",
+            ),
+        ]
+        for candidate in source_candidates:
             field_expr = candidate["qualified_field"]
-            projection_expr = self._month_projection_expression(field_expr, candidate.get("format")) or field_expr
-            payload = {
-                "field": field_expr,
-                "grain": candidate.get("grain"),
-                "format": candidate.get("format"),
-                "projection_example": f"{projection_expr} AS biz_month",
-            }
-            if sample_month and not self._field_belongs_to_horizontal_source(field_expr):
-                month_literal = self.semantic_runtime.format_time_literal(sample_month, candidate.get("format")) or sample_month
-                payload["month_filter_example"] = f"{field_expr} = '{month_literal}'"
-            candidates.append(payload)
-
-        for candidate in self.semantic_runtime.resolve_time_field_candidates(
-            context.subject_domain,
-            context.tables,
-            "biz_date",
-        ):
-            field_expr = candidate["qualified_field"]
-            projection_expr = self._month_projection_expression(field_expr, candidate.get("format"))
-            if not projection_expr:
-                continue
-            payload = {
-                "field": field_expr,
-                "grain": candidate.get("grain"),
-                "format": candidate.get("format"),
-                "projection_example": f"{projection_expr} AS biz_month",
-            }
-            if sample_month:
-                payload["month_filter_example"] = f"{projection_expr} = '{sample_month}'"
-            month_range_example = self._month_range_filter_example(
-                context,
+            projection_expr = self._month_projection_expression(
                 field_expr,
                 candidate.get("format"),
             )
-            if month_range_example:
-                payload["month_range_filter_example"] = month_range_example
+            if not projection_expr:
+                continue
+            projection_alias = self._time_projection_alias(context, candidate, grain="month")
+            payload = {
+                "field": field_expr,
+                "grain": candidate.get("grain"),
+                "format": candidate.get("format"),
+                "semantic_names": candidate.get("semantic_names", []),
+                "projection_example": f"{projection_expr} AS {projection_alias}",
+            }
+            candidate_grain = str(candidate.get("grain") or "").lower()
+            if sample_month and candidate_grain == "month" and not self._field_uses_column_expansion(candidate):
+                month_literal = (
+                    self.semantic_runtime.format_time_literal(sample_month, candidate.get("format"))
+                    or sample_month
+                )
+                payload["month_filter_example"] = f"{field_expr} = '{month_literal}'"
+            elif sample_month and candidate_grain == "day":
+                payload["month_filter_example"] = f"{projection_expr} = '{sample_month}'"
+                month_range_example = self._month_range_filter_example(
+                    context,
+                    field_expr,
+                    candidate.get("format"),
+                )
+                if month_range_example:
+                    payload["month_range_filter_example"] = month_range_example
             candidates.append(payload)
         return candidates
+
+    def _time_projection_alias(
+        self,
+        context: SqlGenerationContext,
+        candidate: dict,
+        *,
+        grain: str,
+    ) -> str:
+        semantic_names = {
+            str(item).strip().lower(): str(item).strip()
+            for item in candidate.get("semantic_names", []) or []
+            if str(item).strip()
+        }
+        references = [
+            *context.dimensions,
+            *(item.field for item in context.filters),
+            *(item.field for item in context.sort),
+        ]
+        for reference in references:
+            configured_name = semantic_names.get(str(reference).strip().lower())
+            if configured_name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$#]*", configured_name):
+                return configured_name
+        return f"{grain}_value"
 
     def _month_projection_expression(self, field_expression: str, field_format: str | None) -> str | None:
         normalized_format = str(field_format or "").strip().upper()
@@ -807,21 +847,12 @@ class PromptEvidenceToolkit:
             return f"REPLACE({self._substring_function()}({field_expression}, 1, 7), '-', '')"
         return None
 
-    def _field_belongs_to_horizontal_source(self, field_expression: str) -> bool:
-        if "." not in field_expression:
-            return False
-        table_name = field_expression.split(".", 1)[0]
+    def _field_uses_column_expansion(self, candidate: dict) -> bool:
+        table_name = str(candidate.get("table") or "")
         table_metadata = self._tables_metadata.get(table_name, {})
         if not isinstance(table_metadata, dict):
             return False
-        description = str(table_metadata.get("description") or "").lower()
-        if "横向表" in description or "横表" in description or "horizontal" in description:
-            return True
-        columns = table_metadata.get("columns", [])
-        if not isinstance(columns, list):
-            return False
-        column_text = " ".join(str(item) for item in columns).lower()
-        return "横向" in column_text or "horizontal" in column_text
+        return str(table_metadata.get("time_storage") or "").strip().lower() == "column_expansion"
 
     def _substring_function(self) -> str:
         return "SUBSTR"
@@ -829,7 +860,11 @@ class PromptEvidenceToolkit:
     def _example_compact_month(self, context: SqlGenerationContext) -> str:
         if self.semantic_runtime is not None:
             for item in context.filters:
-                if item.field not in {"biz_month", "demand_month"}:
+                if not self.semantic_runtime.resolve_time_field_candidates(
+                    context.subject_domain,
+                    context.tables,
+                    item.field,
+                ):
                     continue
                 candidate_values = [item.value]
                 if item.op == "between" and isinstance(item.value, list):
@@ -849,7 +884,13 @@ class PromptEvidenceToolkit:
     def _example_iso_day(self, context: SqlGenerationContext) -> str:
         if self.semantic_runtime is not None:
             for item in context.filters:
-                if item.field != "biz_date":
+                candidates = self.semantic_runtime.resolve_time_field_candidates(
+                    context.subject_domain,
+                    context.tables,
+                    item.field,
+                    grain="day",
+                )
+                if not candidates:
                     continue
                 candidate_values = [item.value]
                 if item.op == "between" and isinstance(item.value, list):

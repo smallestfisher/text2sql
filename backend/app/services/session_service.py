@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import uuid
+from collections.abc import Callable
 
 from backend.app.core.exceptions import PermissionDeniedError
 from backend.app.models.auth import UserContext
@@ -10,14 +11,30 @@ from backend.app.models.session_state import SessionState
 
 
 class SessionService:
-    def __init__(self, repository) -> None:
+    def __init__(
+        self,
+        repository,
+        *,
+        active_release_id_provider: Callable[[], str | None] | None = None,
+        require_active_release: bool = False,
+    ) -> None:
         self.repository = repository
+        self.active_release_id_provider = active_release_id_provider
+        self.require_active_release = require_active_release
 
     def create_session(self, user_id: str | None = None, title: str | None = None) -> ChatSession:
+        release_id = (
+            self.active_release_id_provider()
+            if self.active_release_id_provider is not None
+            else None
+        )
+        if self.require_active_release and not release_id:
+            raise ValueError("no active semantic release; publish semantic configuration first")
         session = ChatSession(
             id=f"sess_{uuid.uuid4().hex[:12]}",
             user_id=user_id,
             title=title,
+            semantic_release_id=release_id,
         )
         return self.repository.create_session(session)
 

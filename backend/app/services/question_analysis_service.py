@@ -6,7 +6,7 @@ from typing import Any
 
 from backend.app.core.cancellation import CancellationToken
 from backend.app.models.classification import QuestionClassification
-from backend.app.models.semantic_types import SUPPORTED_SUBJECT_DOMAINS, TimeContext
+from backend.app.models.semantic_types import TimeContext
 from backend.app.models.session_state import SessionState
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.services.llm_client import LLMClient
@@ -134,7 +134,7 @@ class QuestionAnalysisService:
 
     def _context_domain(self, question_context) -> str:
         subject_domain = str(getattr(question_context, "subject_domain", "unknown") or "unknown")
-        if subject_domain in SUPPORTED_SUBJECT_DOMAINS:
+        if subject_domain == "unknown" or self.semantic_runtime.is_known_domain(subject_domain):
             return subject_domain
         return "unknown"
 
@@ -148,20 +148,24 @@ class QuestionAnalysisService:
         _ = session_state
         subject_domain = classification.subject_domain
         limit = self.semantic_runtime.default_limit(subject_domain)
+        structured_context = question_context
+        context_limit = getattr(structured_context, "limit", None) if structured_context is not None else None
+        if isinstance(context_limit, int) and context_limit > 0:
+            limit = self.semantic_runtime.clamp_limit(subject_domain, context_limit)
         sql_context = SqlGenerationContext(
             subject_domain=subject_domain,
             question_type=classification.question_type,
-            metrics=[],
-            dimensions=[],
-            filters=[],
+            metrics=list(getattr(structured_context, "metrics", []) or []),
+            dimensions=list(getattr(structured_context, "dimensions", []) or []),
+            filters=list(getattr(structured_context, "filters", []) or []),
             tables=[],
-            time_context=TimeContext(),
-            version_context=None,
+            time_context=getattr(structured_context, "time_context", None) or TimeContext(),
+            version_context=getattr(structured_context, "version_context", None),
             inherit_context=classification.inherit_context,
-            analysis_mode=None,
-            sort=[],
+            analysis_mode=getattr(structured_context, "analysis_mode", None),
+            sort=list(getattr(structured_context, "sort", []) or []),
             limit=limit,
-            entities=[],
+            entities=list(getattr(structured_context, "entities", []) or []),
             need_clarification=classification.need_clarification,
             clarification_question=classification.clarification_question,
             reason=classification.reason,

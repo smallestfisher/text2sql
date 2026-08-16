@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Text2SQL turns Chinese natural-language business questions into read-only Oracle SQL, validates and executes it, and persists run evidence to a MySQL runtime store. The authoritative design doc is [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md) — read it before non-trivial work; it covers the full pipeline, API surface, debugging playbook, and semantic-asset rules. [README.md](README.md) covers startup and config.
+Text2SQL turns Chinese natural-language business questions into read-only Oracle SQL, validates and executes it, and persists product state and run evidence to a local SQLite runtime store. The authoritative design doc is [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md) — read it before non-trivial work; it covers the full pipeline, API surface, debugging playbook, and semantic-asset rules. [README.md](README.md) covers startup and config.
 
 ## Commands
 
@@ -19,18 +19,18 @@ uvicorn backend.app.main:app --reload --app-dir .   # or: scripts/devctl.sh star
 Local databases:
 
 ```bash
-docker compose up -d oracle mysql        # just the DBs for local dev
-docker compose up -d --build             # full stack (frontend, backend, oracle, mysql)
+docker compose up -d oracle              # business DB for local dev
+docker compose up -d --build             # full stack (frontend, backend, oracle)
 ```
 
-Do NOT run `docker compose down -v` as a restart — it destroys the Oracle and MySQL data volumes.
+Do NOT run `docker compose down -v` as a restart — it destroys the Oracle and runtime data volumes.
 
 Tests and lint (use `.venv/bin/python` — deps like `pydantic` live in the project venv, not system `python3`):
 
 ```bash
 .venv/bin/python -m unittest discover -s tests             # all tests
 .venv/bin/python -m unittest tests.test_retrieval_eval.RetrievalEvalTests   # single test class
-python3 backend/domain_config_lint.py                      # validate semantic assets (stdlib only; run after editing semantic/, examples/, eval/)
+python3 backend/domain_config_lint.py                      # validate the offline schema-boundary fixture
 ```
 
 Retrieval scoring probe (read-only, hits the real embedding API, needs `VECTOR_API_KEY` in `.env`):
@@ -43,9 +43,9 @@ Frontend (`frontend/`): `npm install`, `npm run dev`, `npm run build` (build als
 
 ## Architecture
 
-Two databases with fixed roles: **Oracle** (`BUSINESS_DATABASE_URL`) is the business data source and only ever runs read-only business SQL; **MySQL** (`RUNTIME_DATABASE_URL`) is the runtime store for users, sessions, messages, state, traces, query logs, SQL audit, feedback, eval, and vector corpus. All SQL generation, repair, AST parsing, and validation follow Oracle rules.
+Two persistence roles are fixed: **Oracle** (`BUSINESS_DATABASE_URL`) is the business data source and only ever runs read-only business SQL; **SQLite** (`RUNTIME_DATABASE_URL`) stores users, sessions, messages, state, semantic releases, traces, query logs, SQL audit, feedback, and eval. Embedding vectors are rebuildable files under `VECTOR_CACHE_DIR`. All SQL generation, repair, AST parsing, and validation follow Oracle rules.
 
-The main query pipeline (front door: `POST /api/chat/query/stream`) is orchestrated in `backend/app/services/orchestrator.py`:
+The front door is `POST /api/chat/query/stream`. `release_aware_orchestrator.py` resolves the session-bound release and constructs its immutable runtime before delegating to `orchestrator.py`:
 
 ```
 session state → QuestionContext (admit/rewrite question) → terminal gate →
@@ -60,21 +60,22 @@ Layer map: `backend/app/api/routes` (HTTP), `backend/app/core` (container/settin
 
 ## Critical conventions
 
-**Business facts live in semantic assets, not in Python.** Code only loads, retrieves, ranks, trims, renders, assembles, validates, and audits. Never encode business rules or per-table scenarios as `if/else` on table names. To fix correctness, edit the assets, not the pipeline:
+**Business facts live in the published semantic release, not in Python.** Code only loads, retrieves, ranks, trims, renders, assembles, validates, and audits. Never encode business rules or per-table scenarios as `if/else` on table names. Edit the corresponding draft in the admin center, then publish a new release:
 
-- `semantic/tables.json` — real tables, fields, relations, and `time_fields` (physical time-field storage format).
-- `semantic/business_knowledge.json` — reusable rules, formulas, default definitions, taboos (entry + notes).
-- `semantic/join_patterns.json` — stable join paths.
-- `examples/nl2sql_examples.template.json` — human-confirmed NL2SQL few-shot.
-- `eval/retrieval_cases.json` / `eval/evaluation_cases.json` — regression samples.
+- `tables_metadata` — real tables, fields, relations, and `time_fields` (physical time-field storage format).
+- `business_knowledge` — reusable rules, formulas, default definitions, taboos (entry + notes).
+- `join_patterns` — stable join paths.
+- `examples_template` — human-confirmed NL2SQL few-shot.
 
-**Asset storage (`SEMANTIC_ASSET_STORE`, default `db`):** the first four assets are stored as whole-document rows in the runtime MySQL `semantic_assets` table (`name` PK, `content_json`). The JSON files under `semantic/`/`examples/` seed the table once when it is empty (`semantic_asset_seeder`), then act only as a fallback for a missing asset. At runtime the source of truth is the DB, edited through the admin center's Semantic Studio UI (backed by `GET/PUT /api/admin/metadata/documents/{name}` and `/api/admin/examples`); saves go to the DB and trigger a retrieval reload. Set `SEMANTIC_ASSET_STORE=file` to keep reading/writing the JSON files directly instead. `eval/*.json` always stay file-based. `MetadataRegistry` is the single read hub (all consumers read through it); `FileMetadataRepository` is the single write path. Tests and `domain_config_lint.py` run in file mode (no DB dependency).
+**Asset storage:** the four drafts and immutable release snapshots live in the runtime SQLite store and are edited through the admin center. `ReleaseRuntimeManager` builds every query runtime from the session-bound release snapshot. There is no production file fallback. Business-domain values are release-defined strings; do not add frontend enums, labels, or table-name inference. `tests/fixtures/` and `eval/retrieval_cases.json` are offline test inputs and are not copied into the production image. Admin evaluation cases live in runtime SQLite.
 
-After editing assets (file mode) or seed files, run `domain_config_lint.py`, then restart or `POST /api/admin/metadata/reload`. DB-mode edits via the UI reload automatically.
+After changing a draft, publish it through the admin center and verify the new release with a replay/eval run. `domain_config_lint.py` only checks the offline schema-boundary fixture.
 
-**Runtime config (`app_config` table):** most env settings (business DB URL, main LLM, vector, SQL/execution governance) are editable at runtime through the admin center's **System Settings** page (backed by `GET/PUT /api/admin/config`), stored as env-name→string rows in the runtime MySQL `app_config` table. `Settings.build(overrides)` layers these rows onto the env baseline (blank/absent → revert to env → default; type-coerced, bad values rejected). The container reads effective settings this way and rebuilds via a **guarded** `reset_container()` on save — a failed rebuild keeps the previous container installed (never bricks). The field registry is `FIELD_SPECS` in `core/settings.py`. **Bootstrap fields stay env-only** (read before the runtime DB exists / too dangerous to hot-edit): `RUNTIME_DATABASE_URL`, `AUTH_TOKEN_SECRET`/`AUTH_TOKEN_TTL_SECONDS`, `APP_*`, `LOG_LEVEL`, `ENABLE_DOCS`, `SEMANTIC_ASSET_STORE`. The business DB and vector clients are constructed lazily (not validated at container build) so a wrong value only fails at use time, not startup; the config API instead runs a live connectivity check before persisting a changed business DB URL.
+**Retrieval degradation:** keyword BM25 is always available. Vector failure or missing embedding credentials must degrade visibly to BM25 with a warning; it must not make the release load from another source.
 
-**Time fields:** `time_fields.format` is the physical storage encoding (`YYYYMM`, `YYYYMMDD`, `YYYY-MM`, `YYYY-MM-DD`), not an input format. String-encoded date/month fields must use string expressions or format-matched literal ranges (e.g. `SUBSTR(work_date, 1, 6)` for month grain) — never Oracle date functions like `TO_CHAR`/`TRUNC` on them. `SqlValidator` enforces this. If a physical column ever changes to real `DATE/TIMESTAMP`, update `time_fields` and its tests first, then prompt/validator behavior.
+**Deployment config:** all settings come from environment variables or deployment secrets and are read by `Settings.build()`. The admin center's **System Settings** page and `GET /api/admin/config` are read-only; changing configuration requires updating the deployment and restarting the backend. The field registry is `FIELD_SPECS` in `core/settings.py`. Runtime product state must not become a configuration override layer.
+
+**Time fields:** release `tables_metadata.time_fields.format` is the physical storage encoding (`YYYYMM`, `YYYYMMDD`, `YYYY-MM`, `YYYY-MM-DD`), not an input format. String-encoded date/month fields must use string expressions or format-matched literal ranges — never Oracle date functions like `TO_CHAR`/`TRUNC` on them. `SqlValidator` enforces this. If a physical column ever changes to real `DATE/TIMESTAMP`, update the draft and its tests first, then prompt/validator behavior.
 
 **SqlValidator is the hard pre-execution boundary** (single read-only statement, tables/fields must exist in semantic assets, source table must be in the prompt's allowed set, Oracle syntax + time-format checks). Errors block execution; warnings don't but flow into trace/query-log/audit and roll up to `risk_level`/`risk_flags`. SQL repair only fixes validator/execution errors — business correctness comes from assets, retrieval, and prompt quality.
 

@@ -5,20 +5,27 @@ import unittest
 
 from backend.app.models.api import ChatRequest, ChatResponse, ExecutionResponse, ValidationResponse
 from backend.app.models.context_summary import ContextSummary
-from backend.app.models.semantic_types import FilterItem
+from backend.app.models.semantic_types import (
+    FilterItem,
+    SortItem,
+    TimeContext,
+    TimeRange,
+    VersionContext,
+)
 from backend.app.models.sql_generation_context import SqlGenerationContext
 from backend.app.models.classification import QuestionClassification
 from backend.app.models.retrieval import RetrievalContext, RetrievalHit
 from backend.app.models.session_state import PendingClarification, QueryTurnRecord, SessionState
 from backend.app.models.trace import TraceRecord
 from backend.app.services.answer_builder import AnswerBuilder
-from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.llm_client import LLMClient
+from backend.app.services.metadata_registry import MetadataRegistry
 from backend.app.services.orchestrator import ConversationOrchestrator
 from backend.app.services.sql_dialect import SqlDialect
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.question_analysis_service import QuestionAnalysisService
 from backend.app.services.semantic_runtime import SemanticRuntime
+from tests.fixture_metadata import fixture_semantic_runtime
 from backend.app.services.session_state_service import SessionStateService
 
 
@@ -211,9 +218,110 @@ class FakeOpenAIClient:
 class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        domain_config = DomainConfigLoader().load()
-        cls.domain_config = domain_config
-        cls.semantic_runtime = SemanticRuntime(domain_config)
+        cls.domain_config, cls.metadata_registry, cls.semantic_runtime = fixture_semantic_runtime()
+
+    def test_question_context_domains_come_from_release_assets(self) -> None:
+        metadata_registry = MetadataRegistry(
+            documents={
+                "examples_template": [],
+                "tables_metadata": {"work_orders": {"columns": ["status"]}},
+                "business_knowledge": {
+                    "entries": [
+                        {
+                            "id": "work_order_status",
+                            "domains": ["operations_custom"],
+                            "tables": ["work_orders"],
+                            "content": "工单状态统计口径。",
+                        }
+                    ]
+                },
+                "join_patterns": {"patterns": []},
+            }
+        )
+        semantic_runtime = SemanticRuntime(
+            {
+                "semantic_graph": {"nodes": ["work_orders"], "edges": []},
+            },
+            metadata_registry=metadata_registry,
+        )
+        prompt = PromptBuilder(
+            semantic_runtime=semantic_runtime,
+            metadata_registry=metadata_registry,
+        ).build_question_context_prompt(
+            question="按状态统计工单数",
+            session_state=None,
+            parser_signals={},
+        )
+
+        self.assertEqual(
+            prompt["instructions"]["subject_domain_values"],
+            ["operations_custom", "unknown"],
+        )
+        self.assertTrue(semantic_runtime.is_known_domain("operations_custom"))
+        self.assertFalse(semantic_runtime.is_known_domain("inventory"))
+
+    def test_structured_question_context_populates_sql_context(self) -> None:
+        llm_client = RecordingQuestionContextLLMClient(
+            responses=[
+                {
+                    "decision": "answerable",
+                    "context_relation": "new",
+                    "subject_domain": "demand",
+                    "effective_question": "查询2026年4月最新P版需求量前10个型号",
+                    "semantic_brief": "查询2026年4月最新P版需求量前10个型号。",
+                    "entities": ["FGCODE"],
+                    "metrics": ["demand_qty"],
+                    "dimensions": ["FGCODE"],
+                    "filters": [
+                        {"field": "demand_month", "op": "=", "value": "202604"},
+                    ],
+                    "sort": [{"field": "demand_qty", "order": "desc"}],
+                    "time_context": {
+                        "grain": "month",
+                        "range": {"start": "2026-04", "end": "2026-04"},
+                    },
+                    "version_context": {"field": "PM_VERSION", "value": "latest"},
+                    "limit": 10,
+                    "analysis_mode": "ranking",
+                }
+            ]
+        )
+        prompt_builder = PromptBuilder(semantic_runtime=self.semantic_runtime)
+        analysis_service = QuestionAnalysisService(
+            domain_config=self.domain_config,
+            llm_client=llm_client,
+            prompt_builder=prompt_builder,
+            semantic_runtime=self.semantic_runtime,
+        )
+
+        trace = analysis_service.analyze_question("查询2026年4月最新P版需求量前10个型号")
+        sql_context_value = analysis_service.build_sql_context(
+            classification=trace["classification"],
+            question_context=trace["question_context"],
+        )
+
+        self.assertEqual(sql_context_value.subject_domain, "demand")
+        self.assertEqual(sql_context_value.entities, ["FGCODE"])
+        self.assertEqual(sql_context_value.metrics, ["demand_qty"])
+        self.assertEqual(sql_context_value.dimensions, ["FGCODE"])
+        self.assertEqual(
+            sql_context_value.filters,
+            [FilterItem(field="demand_month", op="=", value="202604")],
+        )
+        self.assertEqual(sql_context_value.sort, [SortItem(field="demand_qty", order="desc")])
+        self.assertEqual(
+            sql_context_value.time_context,
+            TimeContext(
+                grain="month",
+                range=TimeRange(start="2026-04", end="2026-04"),
+            ),
+        )
+        self.assertEqual(
+            sql_context_value.version_context,
+            VersionContext(field="PM_VERSION", value="latest"),
+        )
+        self.assertEqual(sql_context_value.limit, 10)
+        self.assertEqual(sql_context_value.analysis_mode, "ranking")
 
 
     def test_llm_question_context_generation_uses_prompt_cache(self) -> None:

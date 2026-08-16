@@ -8,15 +8,8 @@ from pydantic import Field
 from .auth import RoleRecord, UserCollectionResponse
 from .conversation import ChatSession
 from .evaluation import EvaluationSummary
-from .example_library import ExampleRecord, ExampleTemplateRecord
 from .feedback import FeedbackSummary
 from .session_state import SessionState
-
-
-class MetadataDocument(BaseModel):
-    name: str
-    path: str
-    content: dict | list | str
 
 
 class ConfigFieldRecord(BaseModel):
@@ -26,22 +19,10 @@ class ConfigFieldRecord(BaseModel):
     editable: bool
     secret: bool
     value: str | None  # current effective value rendered as a string
-    source: str        # env | override | default
+    source: str        # env | default
 
 
 class ConfigCollectionResponse(BaseModel):
-    fields: list[ConfigFieldRecord]
-
-
-class ConfigUpdateRequest(BaseModel):
-    # env-name -> new value. A null value reverts that field to its baseline
-    # (env / default) by deleting its override row.
-    values: dict[str, str | None]
-
-
-class ConfigUpdateResponse(BaseModel):
-    updated: bool
-    reloaded: bool
     fields: list[ConfigFieldRecord]
 
 
@@ -68,19 +49,6 @@ class AdminMetricsSummary(BaseModel):
     generated_at: datetime
 
 
-class ExampleCollectionResponse(BaseModel):
-    examples: list[ExampleRecord]
-    count: int
-
-
-class ExampleMutationResponse(BaseModel):
-    created: bool | None = None
-    updated: bool | None = None
-    example: ExampleRecord
-    template: ExampleTemplateRecord
-    count: int | None = None
-
-
 class RuntimeSessionCollectionResponse(BaseModel):
     sessions: list[ChatSession]
     count: int
@@ -97,6 +65,7 @@ class SessionSnapshotRecord(BaseModel):
 class RuntimeQueryLogRecord(BaseModel):
     trace_id: str
     session_id: str | None = None
+    semantic_release_id: str | None = None
     user_id: str | None = None
     question: str | None = None
     effective_question: str | None = None
@@ -155,6 +124,7 @@ class RuntimeRetentionResponse(BaseModel):
 class RuntimeRetrievalLogRecord(BaseModel):
     retrieval_log_id: str
     trace_id: str
+    semantic_release_id: str | None = None
     rank_position: int
     source_type: str
     source_id: str
@@ -170,6 +140,7 @@ class RuntimeRetrievalLogRecord(BaseModel):
 class RuntimeSqlAuditRecord(BaseModel):
     sql_audit_id: str
     trace_id: str
+    semantic_release_id: str | None = None
     sql_text: str | None = None
     context_valid: bool
     context_risk_level: str | None = None

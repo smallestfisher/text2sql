@@ -71,7 +71,9 @@ class RetrievalService:
         prewarm_vector_index: bool = False,
     ) -> None:
         self.domain_config = domain_config
-        self.metadata_registry = metadata_registry or MetadataRegistry()
+        self.metadata_registry = metadata_registry or (
+            semantic_runtime.metadata_registry if semantic_runtime is not None else MetadataRegistry()
+        )
         self.semantic_runtime = semantic_runtime or SemanticRuntime(
             domain_config,
             metadata_registry=self.metadata_registry,
@@ -124,7 +126,6 @@ class RetrievalService:
         semantic_brief: str | None = None,
         conversation_summary: str | None = None,
     ) -> RetrievalContext:
-        self._ensure_vector_ready()
         retrieval_terms = self._unique(
             [
                 question,
@@ -135,7 +136,17 @@ class RetrievalService:
         query_tokens = sorted(self._tokenize(" ".join(retrieval_terms)))
         hits: list[RetrievalHit] = []
         hits.extend(self._retrieve_text_document_hits(query_tokens))
-        hits.extend(self._retrieve_text_vector_hits(" ".join(retrieval_terms)))
+        retrieval_warnings: list[str] = []
+        vector_used = False
+        if self.vector_retriever.enabled:
+            try:
+                self._ensure_vector_ready()
+                hits.extend(self._retrieve_text_vector_hits(" ".join(retrieval_terms)))
+                vector_used = True
+            except Exception as exc:
+                warning = f"vector retrieval unavailable; keyword fallback used: {exc}"
+                retrieval_warnings.append(warning)
+                logger.warning(warning)
         self._apply_fusion_scores(hits)
         hits = self._rerank_hits(hits)
         top_hits = self._select_top_hits(hits, limit=self._top_hit_limit())
@@ -143,10 +154,11 @@ class RetrievalService:
             domains=self._domains_from_hits(top_hits),
             metrics=self._metrics_from_hits(top_hits),
             retrieval_terms=retrieval_terms,
-            retrieval_channels=self._retrieval_channels(),
+            retrieval_channels=self._retrieval_channels(vector_used=vector_used),
             hits=top_hits,
             hit_count_by_source=self._count_hits_by_source(top_hits),
             hit_count_by_channel=self._count_hits_by_channel(top_hits),
+            warnings=retrieval_warnings,
         )
 
     def reload(self, *, prewarm_vectors: bool | None = None) -> None:
@@ -174,6 +186,7 @@ class RetrievalService:
     def summarize_retrieval(self, retrieval: RetrievalContext) -> dict:
         return {
             "channels": retrieval.retrieval_channels,
+            "warnings": retrieval.warnings,
             "hit_count_by_source": retrieval.hit_count_by_source,
             "hit_count_by_channel": retrieval.hit_count_by_channel,
             "top_hits": [
@@ -549,9 +562,6 @@ class RetrievalService:
                         "domains": self._domains_for_tables([table_name]),
                         "main_key": payload.get("MAIN_KEY"),
                         "time_fields": time_fields,
-                        "date_col": payload.get("date_col"),
-                        "month_col": payload.get("month_col"),
-                        "version_col": payload.get("version_col"),
                     },
                     text_parts=[
                         table_name,
@@ -805,7 +815,7 @@ class RetrievalService:
     def _seed_chinese_tokenizer(self) -> None:
         """Feed domain keywords into jieba so compound business terms survive.
 
-        Without seeding, jieba splits terms like "最新P版" or "达成率" into
+        Without seeding, jieba can split multi-character business terms into
         smaller generic words, weakening lexical matching against the corpus.
         Seeding is best-effort: when jieba is unavailable the bigram fallback
         still applies, so failures here must never break index construction.
@@ -925,9 +935,9 @@ class RetrievalService:
         }
         return priorities.get(source_type, 0)
 
-    def _retrieval_channels(self) -> list[str]:
+    def _retrieval_channels(self, *, vector_used: bool | None = None) -> list[str]:
         channels = ["keyword"]
-        if self.vector_retriever.enabled:
+        if vector_used is True or (vector_used is None and self.vector_retriever.enabled):
             channels.append("vector")
         return channels
 

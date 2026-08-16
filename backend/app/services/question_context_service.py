@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from backend.app.core.cancellation import CancellationToken
 from backend.app.core.exceptions import LLMServiceError
 from backend.app.models.question_context import QuestionContext
 from backend.app.models.session_state import SessionState
+from backend.app.models.semantic_types import FilterItem, SortItem, TimeContext, VersionContext
 from backend.app.services.llm_client import LLMClient
 from backend.app.services.prompt_builder import PromptBuilder
 
@@ -160,6 +163,15 @@ class QuestionContextService:
             source="llm",
             raw_payload=payload,
             subject_domain=str(payload.get("subject_domain") or parser_signals.get("subject_domain") or "unknown"),
+            entities=self._string_list(payload.get("entities")),
+            metrics=self._string_list(payload.get("metrics")),
+            dimensions=self._string_list(payload.get("dimensions")),
+            filters=self._filter_list(payload.get("filters")),
+            sort=self._sort_list(payload.get("sort")),
+            time_context=self._time_context(payload.get("time_context")),
+            version_context=self._version_context(payload.get("version_context")),
+            limit=self._positive_int(payload.get("limit")),
+            analysis_mode=self._optional_string(payload.get("analysis_mode")),
         )
 
     def _optional_string(self, value: Any) -> str | None:
@@ -167,3 +179,67 @@ class QuestionContextService:
             return None
         stripped = value.strip()
         return stripped or None
+
+    def _string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            normalized = item.strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+        return result[:32]
+
+    def _filter_list(self, value: Any) -> list[FilterItem]:
+        if not isinstance(value, list):
+            return []
+        result: list[FilterItem] = []
+        for item in value[:32]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                result.append(FilterItem.model_validate(item))
+            except ValidationError:
+                continue
+        return result
+
+    def _sort_list(self, value: Any) -> list[SortItem]:
+        if not isinstance(value, list):
+            return []
+        result: list[SortItem] = []
+        for item in value[:16]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                result.append(SortItem.model_validate(item))
+            except ValidationError:
+                continue
+        return result
+
+    def _time_context(self, value: Any) -> TimeContext:
+        if not isinstance(value, dict):
+            return TimeContext()
+        try:
+            return TimeContext.model_validate(value)
+        except ValidationError:
+            return TimeContext()
+
+    def _version_context(self, value: Any) -> VersionContext | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            parsed = VersionContext.model_validate(value)
+        except ValidationError:
+            return None
+        if not parsed.field and not parsed.value:
+            return None
+        return parsed
+
+    def _positive_int(self, value: Any) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None

@@ -29,6 +29,7 @@ class ChatSession(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_state: SessionState | None = None
+    semantic_release_id: str | None = None
 
 
 class SessionCreateRequest(BaseModel):

@@ -23,3 +23,4 @@ class RetrievalContext(BaseModel):
     hits: list[RetrievalHit] = Field(default_factory=list)
     hit_count_by_source: dict[str, int] = Field(default_factory=dict)
     hit_count_by_channel: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)

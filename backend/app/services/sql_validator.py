@@ -131,7 +131,7 @@ class SqlValidator:
                 filter_item.field
                 for filter_item in sql_context.filters
                 if filter_item.field
-                and self._is_sql_enforceable_filter_field(filter_item.field)
+                and self._is_sql_enforceable_filter_field(sql_context, filter_item.field)
                 and not self._filter_is_covered(
                     sql_context,
                     filter_item.field,
@@ -139,7 +139,7 @@ class SqlValidator:
                 )
             ]
             if missing_context_filters:
-                warnings.append(
+                errors.append(
                     "sql does not cover all sql context filters: " + ", ".join(sorted(set(missing_context_filters)))
                 )
 
@@ -155,7 +155,7 @@ class SqlValidator:
                     function in self.ast_validator.AGGREGATE_FUNCTIONS
                     for function in inspection.outer_functions
                 ):
-                    warnings.append(
+                    errors.append(
                         "sql does not group by required dimensions from sql context: "
                         + ", ".join(sorted(set(missing_group_by_fields)))
                     )
@@ -169,27 +169,22 @@ class SqlValidator:
                     if not self._sort_field_candidates(sql_context, field).intersection(actual_order_by_fields)
                 ]
                 if missing_sort_fields:
-                    warnings.append(
+                    errors.append(
                         "sql does not preserve sql context sort fields: " + ", ".join(sorted(set(missing_sort_fields)))
                     )
 
-            month_filter_semantic_warnings = self._validate_month_filter_semantics(sql_context, filter_scope)
-            warnings.extend(month_filter_semantic_warnings)
-            time_literal_format_warnings = self._validate_time_literal_formats(sql_context, filter_scope)
-            warnings.extend(time_literal_format_warnings)
+            errors.extend(self._validate_month_filter_semantics(sql_context, filter_scope))
+            errors.extend(self._validate_time_literal_formats(sql_context, filter_scope))
             errors.extend(self._validate_time_function_usage(sql_context, sql))
 
-            version_warnings = self._validate_version_context(sql_context, filter_scope)
-            warnings.extend(version_warnings)
+            errors.extend(self._validate_version_context(sql_context, filter_scope))
 
-            limit_warnings = self._validate_limit_consistency(sql_context, inspection.limit_value, inspection.has_limit)
-            warnings.extend(limit_warnings)
+            errors.extend(self._validate_limit_consistency(sql_context, inspection.limit_value, inspection.has_limit))
 
             if sql_context.metrics and not sql_context.dimensions and inspection.functions and inspection.group_by_fields:
                 warnings.append("sql groups aggregated metrics by extra fields not present in sql context")
 
-            select_dimension_warnings = self._validate_selected_dimensions(sql_context, inspection)
-            warnings.extend(select_dimension_warnings)
+            errors.extend(self._validate_selected_dimensions(sql_context, inspection))
 
             unexpected_group_by_warnings = self._validate_unexpected_group_by_fields(sql_context, inspection)
             warnings.extend(unexpected_group_by_warnings)
@@ -207,9 +202,9 @@ class SqlValidator:
         warnings.extend(self.quality_validator.validate(sql, inspection, used_sources))
 
         if not inspection.has_limit:
-            warnings.append(f"sql does not include {self.sql_dialect.result_limit_clause_name}")
+            errors.append(f"sql does not include {self.sql_dialect.result_limit_clause_name}")
         elif inspection.limit_value is not None and inspection.limit_value > self.max_limit:
-            warnings.append(
+            errors.append(
                 f"sql result limit {inspection.limit_value} exceeds configured maximum {self.max_limit}"
             )
 
@@ -245,8 +240,21 @@ class SqlValidator:
             return False
         return re.search(rf"\b{re.escape(field)}\b", sql_fragment, re.IGNORECASE) is not None
 
-    def _is_sql_enforceable_filter_field(self, logical_field: str) -> bool:
-        return logical_field not in {"source_table", "demand_source"}
+    def _is_sql_enforceable_filter_field(
+        self,
+        sql_context: SqlGenerationContext,
+        logical_field: str,
+    ) -> bool:
+        if self.semantic_runtime is None:
+            return True
+        resolved = self.semantic_runtime.resolve_field_candidates(
+            sql_context.subject_domain,
+            sql_context.tables,
+            logical_field,
+        )
+        if self._physical_field_candidates(sql_context, resolved):
+            return True
+        return bool(self._time_field_candidates(sql_context, logical_field=logical_field))
 
     def _contains_any_field_reference(self, sql_fragment: str, fields: set[str]) -> bool:
         return any(self._contains_field_reference(sql_fragment, field) for field in fields)
@@ -274,12 +282,12 @@ class SqlValidator:
     ) -> bool:
         if self._contains_any_field_reference(sql_fragment, self._field_candidates(sql_context, logical_field)):
             return True
-        if logical_field == "biz_month":
-            return self._contains_any_field_reference(
-                sql_fragment,
-                self._field_candidates(sql_context, "biz_date"),
-            )
-        return False
+        time_fields = {
+            field_name
+            for candidate in self._time_field_candidates(sql_context, logical_field=logical_field)
+            for field_name in self._time_candidate_field_names(candidate)
+        }
+        return self._contains_any_field_reference(sql_fragment, time_fields)
 
     def _sort_field_candidates(self, sql_context: SqlGenerationContext, logical_field: str) -> set[str]:
         return self._field_candidates(sql_context, logical_field)
@@ -318,14 +326,11 @@ class SqlValidator:
         if self.semantic_runtime is None:
             return []
 
-        if any(item.field == "biz_date" for item in sql_context.filters):
-            return []
-
         month_values = self._sql_context_month_values(sql_context)
         if not month_values:
             return []
 
-        day_field_candidates = self._time_field_candidates(sql_context, "biz_date")
+        day_field_candidates = self._time_field_candidates(sql_context, grain="day")
         if not day_field_candidates:
             return []
 
@@ -339,7 +344,7 @@ class SqlValidator:
                 for field_name in self._time_candidate_field_names(candidate):
                     if self._matches_single_literal_comparison(where_clause, field_name, day_one_literal):
                         return [
-                            "sql collapses biz_month filter to a single day; expand it to a full-month range or month expression"
+                            "sql collapses a month-grain time filter to a single day; expand it to a full-month range or month expression"
                         ]
         return []
 
@@ -359,22 +364,21 @@ class SqlValidator:
         }
         errors: list[str] = []
         inspected_fields: set[tuple[str, str]] = set()
-        for logical_field in ["biz_date", "biz_month"]:
-            for candidate in self._time_field_candidates(sql_context, logical_field):
-                field_format = str(candidate.get("format") or "").strip().upper()
-                if not field_format:
+        for candidate in self._time_field_candidates(sql_context):
+            field_format = str(candidate.get("format") or "").strip().upper()
+            if not field_format:
+                continue
+            for field_name in self._time_candidate_field_names(candidate):
+                key = (field_name, field_format)
+                if key in inspected_fields:
                     continue
-                for field_name in self._time_candidate_field_names(candidate):
-                    key = (field_name, field_format)
-                    if key in inspected_fields:
-                        continue
-                    inspected_fields.add(key)
-                    for literal_pattern in invalid_literal_patterns.get(field_format, []):
-                        if self._matches_direct_literal_pattern(where_clause, field_name, literal_pattern):
-                            errors.append(
-                                f"sql compares {field_name} as {field_format} but uses incompatible time literals; rewrite literals to match the physical field format or use an equivalent time expression"
-                            )
-                            break
+                inspected_fields.add(key)
+                for literal_pattern in invalid_literal_patterns.get(field_format, []):
+                    if self._matches_direct_literal_pattern(where_clause, field_name, literal_pattern):
+                        errors.append(
+                            f"sql compares {field_name} as {field_format} but uses incompatible time literals; rewrite literals to match the physical field format or use an equivalent time expression"
+                        )
+                        break
         return errors
 
     def _validate_time_function_usage(
@@ -388,27 +392,26 @@ class SqlValidator:
         errors: list[str] = []
         inspected_fields: set[tuple[str, str]] = set()
         matched_fields: set[tuple[str, str]] = set()
-        for logical_field in ["biz_date", "biz_month"]:
-            for candidate in self._time_field_candidates(sql_context, logical_field):
-                field_format = str(candidate.get("format") or "").strip().upper()
-                if not self.semantic_runtime.is_formatted_string_time_field(candidate):
+        for candidate in self._time_field_candidates(sql_context):
+            field_format = str(candidate.get("format") or "").strip().upper()
+            if not self.semantic_runtime.is_formatted_string_time_field(candidate):
+                continue
+            for field_name in self._time_candidate_field_names(candidate):
+                unqualified_field_name = field_name.rsplit(".", 1)[-1]
+                key = (field_name, field_format)
+                match_key = (unqualified_field_name, field_format)
+                if key in inspected_fields:
                     continue
-                for field_name in self._time_candidate_field_names(candidate):
-                    unqualified_field_name = field_name.rsplit(".", 1)[-1]
-                    key = (field_name, field_format)
-                    match_key = (unqualified_field_name, field_format)
-                    if key in inspected_fields:
-                        continue
-                    inspected_fields.add(key)
-                    if match_key in matched_fields:
-                        continue
-                    if not self._matches_to_char_format_model(sql, field_name):
-                        continue
-                    matched_fields.add(match_key)
-                    errors.append(
-                        f"sql uses TO_CHAR on formatted string time field {unqualified_field_name} ({field_format}); "
-                        "use the field's configured string expression such as SUBSTR(field, 1, 6) or matching range literals"
-                    )
+                inspected_fields.add(key)
+                if match_key in matched_fields:
+                    continue
+                if not self._matches_to_char_format_model(sql, field_name):
+                    continue
+                matched_fields.add(match_key)
+                errors.append(
+                    f"sql uses TO_CHAR on formatted string time field {unqualified_field_name} ({field_format}); "
+                    "use the field's configured string expression such as SUBSTR(field, 1, 6) or matching range literals"
+                )
         return errors
 
     def _validate_limit_consistency(
@@ -445,13 +448,20 @@ class SqlValidator:
             ]
         return []
 
-    def _time_field_candidates(self, sql_context: SqlGenerationContext, logical_field: str) -> list[dict]:
+    def _time_field_candidates(
+        self,
+        sql_context: SqlGenerationContext,
+        logical_field: str | None = None,
+        *,
+        grain: str | None = None,
+    ) -> list[dict]:
         if self.semantic_runtime is None:
             return []
         return self.semantic_runtime.resolve_time_field_candidates(
             sql_context.subject_domain,
             sql_context.tables,
             logical_field,
+            grain=grain,
         )
 
     def _time_candidate_field_names(self, candidate: dict) -> set[str]:
@@ -469,13 +479,16 @@ class SqlValidator:
             return []
         values: list[str] = []
         for item in sql_context.filters:
-            if item.field != "biz_month":
+            if not self._time_field_candidates(sql_context, logical_field=item.field):
                 continue
             candidate_values = [item.value]
             if item.op == "between" and isinstance(item.value, list):
                 candidate_values = list(item.value)
             for candidate_value in candidate_values:
-                compact_month = self.semantic_runtime.compact_month_value(str(candidate_value))
+                raw_value = str(candidate_value)
+                if not self._has_month_precision(raw_value):
+                    continue
+                compact_month = self.semantic_runtime.compact_month_value(raw_value)
                 if compact_month and compact_month not in values:
                     values.append(compact_month)
         if values:
@@ -487,6 +500,12 @@ class SqlValidator:
                 if compact_month and compact_month not in values:
                     values.append(compact_month)
         return values
+
+    def _has_month_precision(self, value: str) -> bool:
+        return re.fullmatch(r"20\d{2}(?:0[1-9]|1[0-2])", value) is not None or re.fullmatch(
+            r"20\d{2}-(?:0[1-9]|1[0-2])",
+            value,
+        ) is not None
 
     def _matches_single_literal_comparison(self, sql_fragment: str, field_name: str, literal: str) -> bool:
         single_day_pattern = rf"\b{re.escape(field_name)}\b\s*=\s*'{re.escape(literal)}'"

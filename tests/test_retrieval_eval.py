@@ -5,10 +5,10 @@ from pathlib import Path
 import unittest
 
 from backend.app.models.sql_generation_context import SqlGenerationContext
-from backend.app.services.domain_config_loader import DomainConfigLoader
 from backend.app.services.prompt_builder import PromptBuilder
 from backend.app.services.retrieval_service import RetrievalService
 from backend.app.services.semantic_runtime import SemanticRuntime
+from tests.fixture_metadata import fixture_semantic_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,11 +18,11 @@ RETRIEVAL_CASES_PATH = REPO_ROOT / "eval" / "retrieval_cases.json"
 class RetrievalEvalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        domain_config = DomainConfigLoader().load()
-        cls.semantic_runtime = SemanticRuntime(domain_config)
+        domain_config, metadata_registry, cls.semantic_runtime = fixture_semantic_runtime()
         cls.retrieval_service = RetrievalService(
             domain_config=domain_config,
             semantic_runtime=cls.semantic_runtime,
+            metadata_registry=metadata_registry,
         )
         cls.prompt_builder = PromptBuilder(semantic_runtime=cls.semantic_runtime)
         cls.vector_enabled = cls.retrieval_service.vector_retriever.enabled

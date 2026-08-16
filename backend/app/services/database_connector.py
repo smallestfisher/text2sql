@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
+from pathlib import Path
 import re
 import time
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError, TimeoutError
 
@@ -30,11 +31,7 @@ class DatabaseConnector:
         self.max_result_rows = max_result_rows
         self.slow_query_threshold_ms = slow_query_threshold_ms
         self.sql_dialect = SqlDialect.from_name(sql_dialect)
-        self.engine = (
-            create_engine(database_url, pool_pre_ping=True, future=True)
-            if database_url
-            else None
-        )
+        self.engine = self._create_engine(database_url) if database_url else None
         logger.debug(
             "database connector configured dialect=%s configured=%s timeout_seconds=%s max_rows=%s",
             self.sql_dialect.name,
@@ -283,6 +280,15 @@ class DatabaseConnector:
         if not target_database:
             return {"executed": False, "error": "target database name is missing"}
 
+        if self.sql_dialect.name == "sqlite":
+            self._ensure_sqlite_parent(target_database)
+            try:
+                with self.engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+                return {"executed": True, "database": target_database}
+            except SQLAlchemyError as exc:
+                return {"executed": False, "error": str(exc), "database": target_database}
+
         admin_engine = create_engine(
             target_url.set(database=None),
             pool_pre_ping=True,
@@ -307,8 +313,50 @@ class DatabaseConnector:
     def begin(self):
         if not self.connected:
             raise RuntimeError("database connector is not configured")
+        if self.sql_dialect.name == "sqlite":
+            with self.engine.connect() as connection:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    yield connection
+                except Exception:
+                    connection.rollback()
+                    raise
+                else:
+                    connection.commit()
+            return
         with self.engine.begin() as connection:
             yield connection
+
+    def _create_engine(self, database_url: str):
+        options: dict = {"pool_pre_ping": True, "future": True}
+        if self.sql_dialect.name == "sqlite":
+            target_database = make_url(database_url).database
+            if target_database:
+                self._ensure_sqlite_parent(target_database)
+            options["connect_args"] = {
+                "check_same_thread": False,
+                "timeout": max(self.timeout_seconds, 5),
+            }
+        engine = create_engine(database_url, **options)
+        if self.sql_dialect.name == "sqlite":
+            busy_timeout_ms = max(self.timeout_seconds, 5) * 1000
+
+            @event.listens_for(engine, "connect")
+            def configure_sqlite(dbapi_connection, _connection_record) -> None:
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                    cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+                finally:
+                    cursor.close()
+        return engine
+
+    @staticmethod
+    def _ensure_sqlite_parent(database: str) -> None:
+        if database == ":memory:":
+            return
+        Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
     def _apply_session_max_execution_time(self, connection) -> None:
         self.sql_dialect.apply_read_timeout(connection, self.timeout_seconds)

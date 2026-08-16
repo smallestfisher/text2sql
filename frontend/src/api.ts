@@ -8,8 +8,6 @@ import type {
   EvaluationReplayResult,
   EvaluationSummary,
   LoginResponse,
-  MetadataOverview,
-  AdminMetadataReloadResponse,
   AdminVectorPrewarmResponse,
   RoleRecord,
   RuntimeQueryLogCollectionResponse,
@@ -27,17 +25,16 @@ import type {
   UserCollectionResponse,
   UserUpsertPayload,
   FeedbackSummary,
-  MetadataDocumentRecord,
-  MetadataDocumentListResponse,
   ConfigCollectionResponse,
-  ConfigUpdateResponse,
-  DataSourceCollectionResponse,
-  DataSourceCreateRequest,
-  DataSourceRecord,
+  DatabaseStatusRecord,
+  PhysicalCatalogRecord,
   SchemaSyncResponse,
-  ExampleCollectionResponse,
-  ExampleMutationResponse,
-  ExampleTemplateRecord,
+  SemanticAssetDraftRecord,
+  SemanticDraftCollectionResponse,
+  SemanticDraftUpdateResponse,
+  SemanticPublishResponse,
+  SemanticReleaseCollectionResponse,
+  SemanticReleaseDetailResponse,
 } from "./types";
 
 type RequestOptions = {
@@ -328,15 +325,6 @@ export const api = {
   adminRuntimeSessions(token: string, options: PageOptions = { limit: 20 }): Promise<RuntimeSessionCollectionResponse> {
     return request(`/api/admin/runtime/sessions${pageQuery(options)}`, { token });
   },
-  adminMetadataOverview(token: string): Promise<MetadataOverview> {
-    return request("/api/admin/metadata/overview", { token });
-  },
-  adminReloadMetadata(token: string): Promise<AdminMetadataReloadResponse> {
-    return request("/api/admin/metadata/reload", {
-      method: "POST",
-      token,
-    });
-  },
   adminPrewarmVectorIndex(token: string): Promise<AdminVectorPrewarmResponse> {
     return request("/api/admin/runtime/vector/prewarm", {
       method: "POST",
@@ -394,87 +382,47 @@ export const api = {
       body: payload,
     });
   },
-  adminListMetadataDocuments(token: string): Promise<MetadataDocumentListResponse> {
-    return request("/api/admin/metadata/documents", { token });
+  adminDatabaseStatus(token: string): Promise<DatabaseStatusRecord> {
+    return request("/api/admin/database/status", { token });
   },
-  adminGetMetadataDocument(token: string, name: string): Promise<MetadataDocumentRecord> {
-    return request(`/api/admin/metadata/documents/${encodeURIComponent(name)}`, { token });
+  adminDatabaseCatalog(token: string): Promise<PhysicalCatalogRecord> {
+    return request("/api/admin/database/catalog", { token });
   },
-  adminUpdateMetadataDocument(
+  adminSyncDatabase(token: string, includeViews = true): Promise<SchemaSyncResponse> {
+    return request("/api/admin/database/sync", {
+      method: "POST",
+      token,
+      body: { include_views: includeViews, sample_values_per_column: 0 },
+    });
+  },
+  adminListSemanticDrafts(token: string): Promise<SemanticDraftCollectionResponse> {
+    return request("/api/admin/semantic/drafts", { token });
+  },
+  adminGetSemanticDraft(token: string, name: string): Promise<SemanticAssetDraftRecord> {
+    return request(`/api/admin/semantic/drafts/${encodeURIComponent(name)}`, { token });
+  },
+  adminUpdateSemanticDraft(
     token: string,
     name: string,
     content: unknown,
-  ): Promise<MetadataDocumentRecord> {
-    return request(`/api/admin/metadata/documents/${encodeURIComponent(name)}`, {
+    expectedVersion: number,
+  ): Promise<SemanticDraftUpdateResponse> {
+    return request(`/api/admin/semantic/drafts/${encodeURIComponent(name)}`, {
       method: "PUT",
       token,
-      body: { content },
+      body: { content, expected_version: expectedVersion },
     });
   },
-  adminListDataSources(
-    token: string,
-    workspaceId?: string,
-    domainId?: string,
-  ): Promise<DataSourceCollectionResponse> {
-    const params = new URLSearchParams();
-    if (workspaceId) params.set("workspace_id", workspaceId);
-    if (domainId) params.set("domain_id", domainId);
-    const query = params.toString();
-    return request(`/api/admin/data-sources${query ? `?${query}` : ""}`, { token });
+  adminListSemanticReleases(token: string): Promise<SemanticReleaseCollectionResponse> {
+    return request("/api/admin/semantic/releases", { token });
   },
-  adminCreateDataSource(
-    token: string,
-    payload: DataSourceCreateRequest,
-  ): Promise<DataSourceRecord> {
-    return request("/api/admin/data-sources", {
-      method: "POST",
-      token,
-      body: payload,
-    });
+  adminPublishSemanticRelease(token: string): Promise<SemanticPublishResponse> {
+    return request("/api/admin/semantic/releases", { method: "POST", token });
   },
-  adminSyncDataSource(
-    token: string,
-    dataSourceId: string,
-    schemas: string[],
-  ): Promise<SchemaSyncResponse> {
-    return request(`/api/admin/data-sources/${encodeURIComponent(dataSourceId)}/sync`, {
-      method: "POST",
-      token,
-      body: { schemas, include_views: true, sample_values_per_column: 0 },
-    });
+  adminGetSemanticRelease(token: string, releaseId: string): Promise<SemanticReleaseDetailResponse> {
+    return request(`/api/admin/semantic/releases/${encodeURIComponent(releaseId)}`, { token });
   },
   adminGetConfig(token: string): Promise<ConfigCollectionResponse> {
     return request("/api/admin/config", { token });
-  },
-  adminUpdateConfig(
-    token: string,
-    values: Record<string, string | null>,
-  ): Promise<ConfigUpdateResponse> {
-    return request("/api/admin/config", {
-      method: "PUT",
-      token,
-      body: { values },
-    });
-  },
-  adminListExamples(token: string): Promise<ExampleCollectionResponse> {
-    return request("/api/admin/examples", { token });
-  },
-  adminCreateExample(token: string, example: ExampleTemplateRecord): Promise<ExampleMutationResponse> {
-    return request("/api/admin/examples", {
-      method: "POST",
-      token,
-      body: { example },
-    });
-  },
-  adminUpdateExample(
-    token: string,
-    exampleId: string,
-    example: ExampleTemplateRecord,
-  ): Promise<ExampleMutationResponse> {
-    return request(`/api/admin/examples/${encodeURIComponent(exampleId)}`, {
-      method: "PUT",
-      token,
-      body: { example },
-    });
   },
 };

@@ -174,6 +174,7 @@ class ChatResponseRestoreService:
         )
 
         return ChatResponse(
+            semantic_release_id=query_log.semantic_release_id,
             question_context=self._restore_question_context(query_log),
             classification=classification,
             context_summary=self._restore_context_summary(

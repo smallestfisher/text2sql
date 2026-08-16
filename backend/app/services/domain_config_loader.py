@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
-
-from backend.app.config import TABLES_METADATA_PATH
-
 
 class DomainConfigLoader:
     """Builds the minimal runtime schema boundary from table metadata.
@@ -17,14 +15,10 @@ class DomainConfigLoader:
 
     def __init__(
         self,
-        tables_metadata_path=TABLES_METADATA_PATH,
+        tables_metadata_path: Path | None = None,
         tables_metadata_provider=None,
     ) -> None:
         self.tables_metadata_path = tables_metadata_path
-        # When ``tables_metadata_provider`` is supplied (a zero-arg callable
-        # returning the tables_metadata dict), the schema boundary is built from
-        # it instead of the JSON file. This keeps the boundary aligned with the
-        # DB-backed semantic asset store; otherwise the file is read as before.
         self.tables_metadata_provider = tables_metadata_provider
 
     @lru_cache(maxsize=1)
@@ -63,6 +57,8 @@ class DomainConfigLoader:
             if not isinstance(payload, dict):
                 raise ValueError("tables metadata provider must return a JSON object")
             return payload
+        if self.tables_metadata_path is None:
+            raise ValueError("domain config loader requires release metadata or an explicit fixture path")
         with self.tables_metadata_path.open("r", encoding="utf-8") as file:
             payload = json.load(file)
         if not isinstance(payload, dict):

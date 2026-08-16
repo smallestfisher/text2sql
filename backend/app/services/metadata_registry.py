@@ -4,15 +4,6 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-from backend.app.config import (
-    BUSINESS_KNOWLEDGE_PATH,
-    EXAMPLES_TEMPLATE_PATH,
-    JOIN_PATTERNS_PATH,
-    SESSION_STATE_SCHEMA_PATH,
-    TABLES_METADATA_PATH,
-)
-
-
 ASSET_NAMES: tuple[str, ...] = (
     "examples_template",
     "tables_metadata",
@@ -21,36 +12,46 @@ ASSET_NAMES: tuple[str, ...] = (
 )
 
 
+def _empty_asset(name: str) -> object:
+    return {
+        "tables_metadata": {},
+        "business_knowledge": {"entries": []},
+        "join_patterns": {"patterns": []},
+        "examples_template": [],
+    }[name]
+
+
 class MetadataRegistry:
     def __init__(
         self,
         paths: dict[str, Path] | None = None,
         asset_source=None,
+        documents: dict[str, object] | None = None,
     ) -> None:
-        self.paths = paths or {
-            "business_knowledge": BUSINESS_KNOWLEDGE_PATH,
-            "examples_template": EXAMPLES_TEMPLATE_PATH,
-            "tables_metadata": TABLES_METADATA_PATH,
-            "join_patterns": JOIN_PATTERNS_PATH,
-            "session_state_schema": SESSION_STATE_SCHEMA_PATH,
-        }
-        # When ``asset_source`` is provided (a DbSemanticAssetRepository-like
-        # object exposing ``read_all()``), the four semantic assets are read
-        # from it instead of the JSON files. Files then act only as the seed
-        # source loaded into the store before the registry is constructed.
-        # An asset missing from the source falls back to its JSON file so a
-        # partially seeded store never breaks startup.
+        self.paths = dict(paths or {})
         self.asset_source = asset_source
+        self.documents = documents
+        if self.documents is None and self.asset_source is None and not self.paths:
+            raise ValueError("metadata registry requires release assets, explicit documents, or explicit fixture paths")
         self._cache: dict[str, object] = {}
         self.reload()
 
     def reload(self) -> None:
-        if self.asset_source is not None:
+        if self.documents is not None:
+            self._cache = {
+                name: self.validate(name, self.documents.get(name, _empty_asset(name)))
+                for name in ASSET_NAMES
+            }
+        elif self.asset_source is not None:
             self._cache = self._reload_from_source()
             return
-        self._cache = self._reload_from_files()
+        else:
+            self._cache = self._reload_from_files()
 
     def _reload_from_files(self) -> dict[str, object]:
+        missing = [name for name in ASSET_NAMES if name not in self.paths]
+        if missing:
+            raise ValueError("fixture metadata paths are missing: " + ", ".join(missing))
         return {
             "examples_template": self._read_examples_template(self.paths["examples_template"]),
             "tables_metadata": self._read_tables_metadata(self.paths["tables_metadata"]),
@@ -64,9 +65,8 @@ class MetadataRegistry:
         for name in ASSET_NAMES:
             payload = stored.get(name)
             if payload is None:
-                new_cache[name] = self._read_asset_file(name)
-            else:
-                new_cache[name] = self.validate(name, payload)
+                raise RuntimeError(f"semantic release is missing required asset: {name}")
+            new_cache[name] = self.validate(name, payload)
         return new_cache
 
     def _read_asset_file(self, name: str):
@@ -121,6 +121,38 @@ class MetadataRegistry:
         payload = self._cache.get("join_patterns", {})
         patterns = payload.get("patterns", []) if isinstance(payload, dict) else []
         return deepcopy(patterns if isinstance(patterns, list) else [])
+
+    @property
+    def subject_domains(self) -> list[str]:
+        domains: list[str] = []
+
+        def add(value: object) -> None:
+            if not isinstance(value, str):
+                return
+            normalized = value.strip()
+            if normalized and normalized != "unknown" and normalized not in domains:
+                domains.append(normalized)
+
+        for example in self.examples_template:
+            if isinstance(example, dict):
+                add(example.get("subject_domain"))
+        for entry in self.business_knowledge_entries:
+            if not isinstance(entry, dict):
+                continue
+            for domain in entry.get("domains", []) or []:
+                add(domain)
+        for pattern in self.join_patterns:
+            if not isinstance(pattern, dict):
+                continue
+            for domain in pattern.get("domains", []) or []:
+                add(domain)
+        for table in self.tables_metadata.values():
+            if not isinstance(table, dict):
+                continue
+            add(table.get("subject_domain"))
+            for domain in table.get("domains", []) or []:
+                add(domain)
+        return domains
 
     def _resolve(self, name: str) -> Path:
         if name not in self.paths:
