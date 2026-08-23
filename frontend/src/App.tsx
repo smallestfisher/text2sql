@@ -59,8 +59,8 @@ const ADMIN_SIDEBAR_LINKS = [
   { href: "#admin-overview", icon: "pie", label: "数据总览" },
   { href: "#admin-runtime", icon: "server", label: "运行状态" },
   { href: "#admin-index", icon: "search", label: "检索索引" },
-  { href: "#admin-semantic", icon: "database", label: "语义资产" },
-  { href: "#admin-settings", icon: "server", label: "系统设置" },
+  { href: "#admin-semantic", icon: "database", label: "业务语义配置" },
+  { href: "#admin-settings", icon: "server", label: "部署配置" },
   { href: "#admin-users", icon: "users", label: "用户管理" },
   { href: "#admin-logs", icon: "document", label: "日志审计" },
 ] as const;
@@ -1529,6 +1529,7 @@ function AdminView(props: {
     return normalized.includes("已") || normalized.includes("就绪") || normalized.includes("连接") || normalized.includes("ok");
   }).length;
   const healthPercent = runtimeEntries.length ? Math.round((healthyRuntimeCount / runtimeEntries.length) * 100) : 0;
+  const allRuntimeHealthy = runtimeEntries.length > 0 && healthyRuntimeCount === runtimeEntries.length;
   const userDelta = formatMetricDelta(props.adminMetrics?.users.delta);
   const sessionDelta = formatMetricDelta(props.adminMetrics?.sessions.delta);
   const queryLogDelta = formatMetricDelta(props.adminMetrics?.query_logs.delta);
@@ -1573,11 +1574,11 @@ function AdminView(props: {
     {
       icon: "heart",
       title: "系统健康",
-      value: `${healthPercent || 100}%`,
-      note: "状态良好",
+      value: `${healthPercent}%`,
+      note: runtimeEntries.length ? (allRuntimeHealthy ? "全部就绪" : "存在异常") : "读取中",
       delta: `${healthyRuntimeCount}/${runtimeEntries.length || 6}`,
-      deltaTone: "status",
-      tone: "green",
+      deltaTone: allRuntimeHealthy ? "status" : "negative",
+      tone: allRuntimeHealthy ? "green" : "orange",
     },
   ];
   const visibleUsers = props.adminUsers;
@@ -1588,8 +1589,8 @@ function AdminView(props: {
       <section className="admin-page-head">
         <div>
           <div className="admin-page-badge">管理中心</div>
-          <h1>系统监控与用户管理</h1>
-          <p>统一管理业务数据库状态、模型能力、用户权限、查询日志与系统运行状态，保障企业数据分析安全、稳定、可审计。</p>
+          <h1>运行、用户与业务配置</h1>
+          <p>查看数据库和模型运行状态，管理用户及审计日志，并维护 Text2SQL 查询所需的业务语义。</p>
         </div>
 
         <div className="admin-head-actions">
@@ -1768,7 +1769,7 @@ function AdminView(props: {
                         <td>{formatDate(user.updated_at || user.created_at)}</td>
                         <td>
                           <div className="admin-row-actions">
-                            <button type="button" onClick={() => props.onResetPassword(user)} aria-label="重置密码">•••</button>
+                            <button type="button" onClick={() => props.onResetPassword(user)}>重置密码</button>
                             <button
                               type="button"
                               disabled={isCurrentUser}

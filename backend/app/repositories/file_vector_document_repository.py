@@ -25,6 +25,35 @@ class FileVectorDocumentRepository:
             documents = self._read_scope(scope_id)
         return [documents[document_id] for document_id in document_ids if document_id in documents]
 
+    def find_by_content_hashes(
+        self,
+        content_hashes: list[str],
+        embedding_signature: dict,
+    ) -> list[dict]:
+        """Find reusable vectors across release scopes by content and model signature."""
+        wanted_hashes = set(content_hashes)
+        if not wanted_hashes:
+            return []
+        matches: dict[str, dict] = {}
+        with self._lock:
+            for path in self.root_path.glob("*.json"):
+                payload = self._read_payload(path)
+                for document in payload["documents"].values():
+                    if not isinstance(document, dict):
+                        continue
+                    if document.get("content_hash") not in wanted_hashes:
+                        continue
+                    if not self._same_embedding_signature(document, embedding_signature):
+                        continue
+                    document = self._deserialize_document(document)
+                    vector = document.get("vector")
+                    if not isinstance(vector, list):
+                        continue
+                    if len(vector) != int(embedding_signature["embedding_dimensions"]):
+                        continue
+                    matches.setdefault(str(document["content_hash"]), document)
+        return list(matches.values())
+
     def upsert_documents(self, documents: list[dict]) -> int:
         if not documents:
             return 0
@@ -57,17 +86,36 @@ class FileVectorDocumentRepository:
         path = self._scope_path(scope_id)
         if not path.exists():
             return {}
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"failed to read vector cache {path}: {exc}") from exc
-        if payload.get("scope_id") != scope_id or not isinstance(payload.get("documents"), dict):
-            raise RuntimeError(f"invalid vector cache payload: {path}")
+        payload = self._read_payload(path, expected_scope_id=scope_id)
         return {
             str(document_id): self._deserialize_document(document)
             for document_id, document in payload["documents"].items()
             if isinstance(document, dict)
         }
+
+    @staticmethod
+    def _read_payload(path: Path, expected_scope_id: str | None = None) -> dict:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"failed to read vector cache {path}: {exc}") from exc
+        if (
+            not isinstance(payload, dict)
+            or (expected_scope_id is not None and payload.get("scope_id") != expected_scope_id)
+            or not isinstance(payload.get("documents"), dict)
+        ):
+            raise RuntimeError(f"invalid vector cache payload: {path}")
+        return payload
+
+    @staticmethod
+    def _same_embedding_signature(document: dict, signature: dict) -> bool:
+        return (
+            document.get("embedding_provider") == signature.get("embedding_provider")
+            and document.get("embedding_backend") == signature.get("embedding_backend")
+            and document.get("embedding_model") == signature.get("embedding_model")
+            and int(document.get("embedding_dimensions", 0))
+            == int(signature.get("embedding_dimensions", 0))
+        )
 
     def _write_scope(self, scope_id: str, documents: dict[str, dict]) -> None:
         path = self._scope_path(scope_id)

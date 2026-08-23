@@ -27,6 +27,7 @@ class LLMClient:
     def __init__(
         self,
         model_name: str = "Qwen/Qwen3-14B",
+        enable_thinking: bool | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout_seconds: int = 20,
@@ -39,6 +40,7 @@ class LLMClient:
         if sqlglot is None:
             raise RuntimeError("sqlglot is required for LLM SQL validation helpers")
         self.model_name = model_name
+        self.enable_thinking = enable_thinking
         self.api_key = api_key
         self.api_base = api_base
         self.timeout_seconds = timeout_seconds
@@ -279,6 +281,7 @@ class LLMClient:
         return {
             "enabled": self.enabled,
             "model": self.model_name,
+            "enable_thinking": getattr(self, "enable_thinking", None),
             "api_base": self.api_base,
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
@@ -319,6 +322,7 @@ class LLMClient:
         payload = {
             "task": task_name,
             "model": self.model_name,
+            "enable_thinking": getattr(self, "enable_thinking", None),
             "sql_dialect": self.sql_dialect.name,
             "messages": messages,
         }
@@ -409,9 +413,15 @@ class LLMClient:
             "timeout": self.timeout_seconds,
             "stream": stream,
         }
+        extra_body: dict[str, object] = {}
+        enable_thinking = getattr(self, "enable_thinking", None)
+        if enable_thinking is not None:
+            extra_body["enable_thinking"] = enable_thinking
         cache_prompt = getattr(self, "cache_prompt", None)
         if cache_prompt is not None:
-            kwargs["extra_body"] = {"cache_prompt": cache_prompt}
+            extra_body["cache_prompt"] = cache_prompt
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         return kwargs
 
     def _response_content(self, response, *, task_name: str = "unknown") -> str:

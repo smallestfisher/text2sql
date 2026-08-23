@@ -279,12 +279,15 @@
 }
 
 .input-shell {
+  --login-input-surface: #ffffff;
+  --login-input-text: #18213a;
   height: 62px;
   display: flex;
   align-items: center;
+  overflow: hidden;
   border: 1px solid #d5dce8;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--login-input-surface);
   color: #a6afbf;
   transition:
     border-color 140ms ease,
@@ -297,8 +300,9 @@
 }
 
 .input-shell.has-error {
+  --login-input-surface: #fff8f9;
   border-color: #ff4d6d;
-  background: #fff8f9;
+  background: var(--login-input-surface);
 }
 
 .input-shell.has-error:focus-within {
@@ -319,12 +323,41 @@
   height: 100%;
   padding: 0 19px;
   border: 0;
+  border-radius: 0;
   outline: 0;
   background: transparent;
-  color: #18213a;
+  color: var(--login-input-text);
   font-size: 18px;
   font-weight: 500;
   box-shadow: none;
+}
+
+/* Chrome and Edge paint remembered credentials with their own blue fill.
+ * Repaint the input content area so it remains continuous with the icon and
+ * password-action areas inside the shared input shell. */
+.input-shell input:-webkit-autofill,
+.input-shell input:-webkit-autofill:hover,
+.input-shell input:-webkit-autofill:focus,
+.input-shell input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--login-input-text) !important;
+  caret-color: var(--login-input-text);
+  -webkit-box-shadow: 0 0 0 1000px var(--login-input-surface) inset !important;
+  box-shadow: 0 0 0 1000px var(--login-input-surface) inset !important;
+  transition: background-color 9999s ease-out 0s;
+}
+
+.input-shell input:autofill {
+  color: var(--login-input-text);
+  box-shadow: 0 0 0 1000px var(--login-input-surface) inset !important;
+}
+
+:root[data-theme="dark"] .input-shell {
+  --login-input-surface: var(--panel-strong, #1c2432);
+  --login-input-text: var(--text, #edf2f7);
+}
+
+:root[data-theme="dark"] .input-shell.has-error {
+  --login-input-surface: #2a2028;
 }
 
 /* 隐藏浏览器默认的密码显示按钮 */

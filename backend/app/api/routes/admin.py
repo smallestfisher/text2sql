@@ -395,7 +395,7 @@ def _build_runtime_status(container: AppContainer) -> dict:
         ),
         "llm": (container.llm_client.health, None),
         "vector_retrieval": (
-            container.vector_retriever.health,
+            lambda: _active_vector_health(container),
             _empty_vector_retrieval_status(),
         ),
         "retrieval_corpus": (
@@ -418,6 +418,20 @@ def _active_retrieval_health(container: AppContainer) -> dict:
         return status
     runtime = container.release_runtime_manager.get(release_id)
     return runtime.retrieval_service.health()
+
+
+def _active_vector_health(container: AppContainer) -> dict:
+    """Report the vector index belonging to the active semantic release.
+
+    ``container.vector_retriever`` is only a construction-time helper. Query
+    traffic uses the release-scoped retriever owned by ``RetrievalService``;
+    reporting the helper made a healthy persisted index appear as 0 documents.
+    """
+    release_id = container.release_runtime_manager.active_release_id()
+    if not release_id:
+        return container.vector_retriever.health()
+    runtime = container.release_runtime_manager.get(release_id)
+    return runtime.retrieval_service.vector_retriever.health()
 
 
 def _build_semantic_overview(container: AppContainer) -> MetadataOverview:

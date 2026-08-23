@@ -1657,8 +1657,8 @@ export function SemanticStudio(props: { token: string; onAuthFailure?: () => voi
     <div className="studio-root">
       <div className="studio-head">
         <div>
-          <h2>语义工作台</h2>
-          <p>同步当前数据库结构，维护语义草稿，并将完整快照发布给新的查询会话。</p>
+          <h2>业务语义配置</h2>
+          <p>同步 Oracle 表结构，补充字段含义、业务规则、表关联和 SQL 样例，然后发布给新的查询会话。</p>
         </div>
       </div>
       <div className="studio-tabs">

@@ -39,7 +39,7 @@ def domain_summary(container: AppContainer = Depends(get_container)) -> dict:
                 metrics.append(value)
     return {
         "version": f"v{runtime.release.version}",
-        "domains": runtime.subject_domains(),
+        "domains": runtime.semantic_runtime.subject_domains(),
         "entities": [],
         "metrics": metrics,
         "tables": list(runtime.metadata_registry.tables_metadata.keys()),

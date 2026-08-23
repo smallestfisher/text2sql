@@ -18,6 +18,7 @@ class SettingsOverrideTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             settings = Settings.build()
         self.assertEqual(settings.llm_model, "Qwen/Qwen3-14B")
+        self.assertIsNone(settings.llm_enable_thinking)
         self.assertEqual(settings.vector_dimensions, 1024)
         self.assertEqual(settings.vector_top_k, 8)
         self.assertIsNone(settings.llm_cache_prompt)
@@ -28,6 +29,10 @@ class SettingsOverrideTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"LLM_MODEL": "env/model"}, clear=True):
             settings = Settings.build()
         self.assertEqual(settings.llm_model, "env/model")
+
+    def test_llm_thinking_flag_is_configurable(self):
+        with mock.patch.dict(os.environ, {"LLM_ENABLE_THINKING": "false"}, clear=True):
+            self.assertFalse(Settings.build().llm_enable_thinking)
 
     def test_blank_environment_reverts_to_default(self):
         with mock.patch.dict(os.environ, {"LLM_MODEL": "  "}, clear=True):

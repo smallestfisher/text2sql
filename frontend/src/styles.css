@@ -64,6 +64,60 @@ button {
   cursor: pointer;
 }
 
+/* Keep text and icons centered in every action control, including the
+ * compact buttons used by the admin tables and Semantic Studio. */
+button:not(:disabled) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.primary-button,
+.secondary-button,
+.toolbar-button,
+.send-button,
+.tab-button,
+.view-switch-button,
+.studio-tab,
+.studio-mini-add,
+.studio-mini-remove,
+.admin-row-actions button,
+.admin-pagination button,
+.icon-button,
+.session-delete-button,
+.logout-button,
+.modal-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.primary-button,
+.secondary-button,
+.toolbar-button,
+.send-button,
+.tab-button,
+.studio-mini-add,
+.studio-mini-remove,
+.admin-pagination button,
+.modal-button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
+.primary-button svg,
+.secondary-button svg,
+.toolbar-button svg,
+.send-button svg,
+.tab-button svg,
+.studio-mini-add svg,
+.studio-mini-remove svg,
+.admin-pagination button svg,
+.modal-button svg {
+  flex: 0 0 auto;
+}
+
 .app-shell,
 .screen {
   position: relative;
@@ -144,6 +198,12 @@ button {
   padding: 10px 14px;
 }
 
+.secondary-button,
+.toolbar-button,
+.tab-button {
+  min-height: 40px;
+}
+
 .toolbar-button:hover,
 .secondary-button:hover,
 .tab-button:hover,
@@ -160,14 +220,12 @@ button {
   background: #465259;
   box-shadow: 0 8px 18px rgba(48, 57, 62, 0.22);
   transition:
-    transform 160ms ease,
     box-shadow 160ms ease,
     opacity 160ms ease;
 }
 
 .primary-button:hover,
 .send-button:hover {
-  transform: translateY(-1px);
   box-shadow: 0 12px 24px rgba(48, 57, 62, 0.28);
 }
 
@@ -176,6 +234,17 @@ button {
   opacity: 0.72;
   cursor: default;
   transform: none;
+}
+
+.secondary-button:disabled,
+.toolbar-button:disabled,
+.tab-button:disabled,
+.view-switch-button:disabled,
+.studio-mini-add:disabled,
+.studio-mini-remove:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .primary-button {
@@ -189,6 +258,23 @@ button {
   padding: 12px 18px;
   font-weight: 600;
   min-width: 88px;
+}
+
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.toolbar-button:focus-visible,
+.send-button:focus-visible,
+.tab-button:focus-visible,
+.view-switch-button:focus-visible,
+.studio-tab:focus-visible,
+.studio-mini-add:focus-visible,
+.studio-mini-remove:focus-visible,
+.admin-pagination button:focus-visible,
+.admin-row-actions button:focus-visible,
+.icon-button:focus-visible,
+.modal-button:focus-visible {
+  outline: 2px solid rgba(50, 104, 255, 0.42);
+  outline-offset: 2px;
 }
 
 .workspace-shell {
@@ -450,7 +536,8 @@ button {
 
 .session-delete-button {
   margin-left: auto;
-  padding: 0;
+  min-height: 28px;
+  padding: 0 4px;
   border: 0;
   background: transparent;
   color: var(--text-soft);
@@ -3384,12 +3471,14 @@ input:focus {
 }
 
 .admin-row-actions button {
+  min-height: 28px;
   min-width: 0;
-  padding: 0;
+  padding: 0 2px;
   border: 0;
   background: transparent;
   color: #637089;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .admin-row-actions button:disabled {
@@ -3450,6 +3539,16 @@ input:focus {
   color: #34415c;
   font-size: 12px;
   font-weight: 800;
+}
+
+.admin-user-create-row .primary-button,
+.admin-index-panel .secondary-button,
+.admin-index-panel .primary-button,
+.studio-control .primary-button,
+.studio-create,
+.studio-mini-add,
+.studio-mini-remove {
+  justify-content: center;
 }
 
 .admin-pagination button:disabled {
@@ -3863,6 +3962,9 @@ input:focus {
 .studio-tab {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 74px;
   gap: 3px;
   padding: 12px 14px;
   border: 1px solid var(--border);
@@ -4472,7 +4574,145 @@ input:focus {
 
 .studio-status-actions {
   display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+/* Deployment configuration is intentionally read-only. These styles make the
+ * effective value, its source, and the operator-facing name easy to scan. */
+.config-root {
+  display: grid;
+  gap: 18px;
+}
+
+.config-page-head h2 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.config-page-head p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.config-readonly-notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.config-readonly-notice strong {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.config-readonly-notice code,
+.config-env-name {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+}
+
+.config-section {
+  gap: 16px;
+}
+
+.config-section-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.config-section-count {
+  flex: 0 0 auto;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.config-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.config-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.config-field-title {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.config-field-badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.config-field .studio-badge {
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.config-env-name {
+  color: var(--text-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.config-value {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.config-value.is-empty {
+  color: var(--text-soft);
+  font-family: inherit;
+}
+
+.config-field-help {
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 @media (max-width: 1100px) {
@@ -4488,11 +4728,65 @@ input:focus {
 }
 
 @media (max-width: 720px) {
+  .admin-main {
+    padding: 20px 16px 28px;
+  }
+
+  .admin-page-head h1 {
+    font-size: 26px;
+  }
+
+  .admin-table-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-pagination {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .primary-button,
+  .secondary-button,
+  .toolbar-button,
+  .send-button,
+  .tab-button {
+    max-width: 100%;
+  }
+
   .studio-control-head,
   .studio-control-actions {
     align-items: stretch;
     flex-direction: column;
   }
+
+  .studio-head,
+  .studio-statusbar,
+  .config-field-head,
+  .config-readonly-notice {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .studio-status-actions,
+  .studio-status-actions .secondary-button,
+  .studio-status-actions .primary-button {
+    width: 100%;
+  }
+
+  .studio-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .config-field-badges {
+    justify-content: flex-start;
+  }
+
+  .config-section-head {
+    align-items: flex-start;
+  }
+
   .studio-definition-grid {
     grid-template-columns: 1fr;
   }
@@ -4506,5 +4800,14 @@ input:focus {
   .studio-timefield-row,
   .studio-rel-row {
     grid-template-columns: 1fr;
+  }
+
+  .composer-submit-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .composer-submit-row .send-button {
+    margin-left: auto;
   }
 }

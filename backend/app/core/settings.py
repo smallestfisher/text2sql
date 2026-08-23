@@ -106,6 +106,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("openai_api_key", "OPENAI_API_KEY", "str", "llm", None, secret=True),
     FieldSpec("openai_api_base", "OPENAI_API_BASE", "str", "llm", None),
     FieldSpec("llm_model", "LLM_MODEL", "str", "llm", "Qwen/Qwen3-14B"),
+    FieldSpec("llm_enable_thinking", "LLM_ENABLE_THINKING", "optional_bool", "llm", None),
     FieldSpec("llm_timeout_seconds", "LLM_TIMEOUT_SECONDS", "int", "llm", 20),
     FieldSpec("llm_max_retries", "LLM_MAX_RETRIES", "int", "llm", 2),
     FieldSpec("sql_repair_max_retries", "SQL_REPAIR_MAX_RETRIES", "int", "llm", 1),
@@ -149,6 +150,7 @@ class Settings(BaseModel):
     openai_api_key: str | None = None
     openai_api_base: str | None = None
     llm_model: str = "Qwen/Qwen3-14B"
+    llm_enable_thinking: bool | None = None
     llm_timeout_seconds: int = 20
     llm_max_retries: int = 2
     sql_repair_max_retries: int = 1

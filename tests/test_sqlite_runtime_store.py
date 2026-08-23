@@ -97,6 +97,16 @@ class SqliteRuntimeStoreTests(unittest.TestCase):
             self.assertEqual(loaded[0]["vector"], [0.1, 0.2])
             self.assertEqual(loaded[0]["metadata"], {"domain": "sales"})
             self.assertIsInstance(loaded[0]["created_at"], datetime)
+            reusable = repository.find_by_content_hashes(
+                ["hash_1"],
+                {
+                    "embedding_provider": "openai",
+                    "embedding_backend": "api",
+                    "embedding_model": "embedding-model",
+                    "embedding_dimensions": 2,
+                },
+            )
+            self.assertEqual(reusable[0]["document_id"], "doc_1")
             self.assertEqual(repository.delete_missing("release_1", []), 1)
             self.assertEqual(list(Path(temporary_directory).iterdir()), [])
 

@@ -519,6 +519,18 @@ class ConfigDrivenRuntimeRulesTests(unittest.TestCase):
         self.assertEqual(content, "SELECT 1")
         self.assertEqual(fake_client.calls[0]["extra_body"], {"cache_prompt": False})
 
+    def test_llm_thinking_option_is_passed_to_openai_compatible_client(self) -> None:
+        client = LLMClient(enable_thinking=False)
+        fake_client = FakeOpenAIClient()
+        client.client = fake_client
+
+        client._complete_once(
+            [{"role": "user", "content": "SELECT 1"}],
+            stream=False,
+        )
+
+        self.assertEqual(fake_client.calls[0]["extra_body"], {"enable_thinking": False})
+
     def test_llm_cache_prompt_option_is_omitted_when_unset(self) -> None:
         client = LLMClient()
         fake_client = FakeOpenAIClient()

@@ -91,8 +91,6 @@ class ReleaseRuntimeManager:
         if release.snapshot != snapshot:
             raise RuntimeError("semantic release snapshot changed while preparing")
         runtime = self._build(release)
-        if self.settings.enable_vector_retrieval and self.settings.prewarm_vector_retrieval:
-            runtime.retrieval_service.prewarm_vector_index()
         with self._lock:
             self._cache[release_id] = runtime
 
@@ -143,7 +141,13 @@ class ReleaseRuntimeManager:
             vector_retriever=vector_retriever,
             vector_corpus_store_service=vector_store,
             vector_top_k=self.settings.vector_top_k,
-            prewarm_vector_index=False,
+            # Restore the active release's persisted vector cache as soon as
+            # its runtime is loaded. Existing documents are reused without a
+            # remote embedding call; only changed or missing documents rebuild.
+            prewarm_vector_index=(
+                self.settings.enable_vector_retrieval
+                and self.settings.prewarm_vector_retrieval
+            ),
         )
         sql_validator = SqlValidator(
             ast_validator=SqlAstValidator(),
@@ -167,6 +171,7 @@ class ReleaseRuntimeManager:
     def _llm_client(self) -> LLMClient:
         return LLMClient(
             model_name=self.settings.llm_model,
+            enable_thinking=self.settings.llm_enable_thinking,
             api_key=self.settings.openai_api_key,
             api_base=self.settings.openai_api_base,
             timeout_seconds=self.settings.llm_timeout_seconds,

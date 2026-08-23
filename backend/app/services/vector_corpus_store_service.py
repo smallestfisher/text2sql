@@ -75,9 +75,22 @@ class VectorCorpusStoreService:
         configured_signature = self.vector_retriever.embedding_signature()
         if configured_signature is None:
             raise RuntimeError("vector embedding signature is unavailable")
+        candidates = [
+            self._build_candidate(document=document, signature=configured_signature, now=now)
+            for document in corpus_documents
+        ]
+        reusable_rows = {
+            item["content_hash"]: item
+            for item in self.repository.find_by_content_hashes(
+                [candidate["content_hash"] for candidate in candidates],
+                configured_signature,
+            )
+        }
         sync_result = self._sync_with_signature(
             corpus_documents=corpus_documents,
+            candidates=candidates,
             existing_rows=existing_rows,
+            reusable_rows=reusable_rows,
             active_signature=configured_signature,
             now=now,
         )
@@ -96,7 +109,9 @@ class VectorCorpusStoreService:
     def _sync_with_signature(
         self,
         corpus_documents: list[dict],
+        candidates: list[dict],
         existing_rows: dict[str, dict],
+        reusable_rows: dict[str, dict],
         active_signature: dict,
         now: datetime,
     ) -> dict:
@@ -106,21 +121,25 @@ class VectorCorpusStoreService:
         rebuilt_count = 0
         document_ids: list[str] = []
 
-        for document in corpus_documents:
-            candidate = self._build_candidate(document=document, signature=active_signature, now=now)
+        for document, candidate in zip(corpus_documents, candidates, strict=True):
             document_ids.append(candidate["document_id"])
             existing = existing_rows.get(candidate["document_id"])
             needs_rebuild = self._needs_rebuild(candidate, existing)
             row_changed = needs_rebuild or self._row_changed(candidate, existing)
 
             if needs_rebuild:
-                if candidate["text_content"].strip():
+                reusable = reusable_rows.get(candidate["content_hash"])
+                if reusable is not None and self._can_reuse_vector(candidate, reusable):
+                    vector = list(reusable["vector"])
+                    reused_count += 1
+                elif candidate["text_content"].strip():
                     vector, actual_signature = self.vector_retriever.embed_text_with_signature(candidate["text_content"])
                     if not self._same_signature(active_signature, actual_signature):
                         raise RuntimeError("embedding signature changed during vector corpus sync")
+                    rebuilt_count += 1
                 else:
                     vector = [0.0] * int(active_signature["embedding_dimensions"])
-                rebuilt_count += 1
+                    rebuilt_count += 1
             else:
                 vector = list(existing.get("vector", []) if existing else [])
                 reused_count += 1
@@ -209,6 +228,15 @@ class VectorCorpusStoreService:
             or existing.get("metadata", {}) != candidate.get("metadata", {})
             or existing.get("content_hash") != candidate.get("content_hash")
             or not self._same_signature(candidate, existing)
+        )
+
+    def _can_reuse_vector(self, candidate: dict, reusable: dict) -> bool:
+        vector = reusable.get("vector")
+        return (
+            reusable.get("content_hash") == candidate.get("content_hash")
+            and self._same_signature(candidate, reusable)
+            and isinstance(vector, list)
+            and len(vector) == int(candidate["embedding_dimensions"])
         )
 
     def _content_hash(self, text_content: str, metadata: dict, signature: dict) -> str:

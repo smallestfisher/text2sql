@@ -129,6 +129,7 @@ class AppContainer:
 
         self.llm_client = LLMClient(
             model_name=self.settings.llm_model,
+            enable_thinking=self.settings.llm_enable_thinking,
             api_key=self.settings.openai_api_key,
             api_base=self.settings.openai_api_base,
             timeout_seconds=self.settings.llm_timeout_seconds,
